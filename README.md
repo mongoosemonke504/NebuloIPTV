@@ -1,2 +1,82 @@
-# NebuloIPTV
-Constant releases of my clean IPTV app with a built in sports score center
+# 📺 IPTV Player - SwiftUI & AVKit
+
+A modern, high-performance IPTV player built for iOS using **SwiftUI**, **AVKit**, and **Combine**.
+
+<p align="center">
+  <img src="https://via.placeholder.com/250x540?text=Login+Screen" alt="Login Screen" width="250">
+  <img src="https://via.placeholder.com/250x540?text=Sports+Hub" alt="Sports Hub" width="250">
+  <img src="https://via.placeholder.com/250x540?text=Player+View" alt="Video Player" width="250">
+</p>
+
+## ✨ Features
+
+* **Universal Login Support:**
+    * **Xtream Codes API:** Standard login for most providers.
+    * **M3U / M3U8 Playlists:** Powerful parser for local or remote playlist files.
+    * **Stalker Portal:** Support for MAG-style portal links.
+* **🏀 Intelligent Sports Center:**
+    * **Real-Time Scores:** Integration with ESPN API for live scores.
+    * **Smart Search:** Fuzzy matching logic automatically finds the best stream for a specific game (prioritizing 60fps/FHD streams).
+    * **Multi-League Support:** NBA, NFL, MLB, NHL, Premier League, UCL, Europa League, Ligue 1, and more.
+* **🎨 Nebula UI Engine:**
+    * Custom, interactive animated background using SwiftUI `Canvas`.
+    * Glassmorphic design with adaptable layouts (Sidebar for iPad/Landscape, Standard for iPhone).
+    * Fully customizable colors and animation speeds.
+* **⚡️ Advanced Player:**
+    * **Picture-in-Picture (PiP):** Multitask while watching.
+    * **AirPlay 2:** Cast directly to Apple TV or compatible smart TVs.
+    * **Quality Detection:** Auto-tags streams as SD, HD, or 4K based on resolution.
+
+## 🛠️ Tech Stack
+
+* **Language:** Swift 5.10+
+* **Frameworks:** SwiftUI, Combine, AVKit, AVFoundation
+* **Architecture:** MVVM (Model-View-ViewModel)
+* **Concurrency:** Swift Async/Await (`Task`, `Actor`)
+* **Persistence:** `UserDefaults` (Settings, Favorites, Recents)
+
+## 🚀 Getting Started
+
+### Prerequisites
+* Xcode 15.0 or later
+* iOS 16.0 or later
+
+### Installation
+1.  Clone the repo:
+    ```bash
+    git clone [https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git](https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git)
+    ```
+2.  Open `IPTVPlayer.xcodeproj` in Xcode.
+3.  Select your Development Team in the **Signing & Capabilities** tab.
+4.  Build and Run (`Cmd + R`).
+
+## 🧩 Usage
+
+1.  **Login:** Choose your method (Xtream, M3U, or Stalker) and enter your credentials/URL.
+2.  **Browse:** Use the sidebar (iPad) or standard view (iPhone) to browse categories.
+3.  **Sports:** Navigate to the "Sports Center" tab to see live games. Tapping a game automatically searches your playlist for that specific match using the Smart Search engine.
+4.  **Settings:** Customize the "Nebula" background colors, toggle category visibility, or manage account settings.
+
+## 🤝 Contributing
+
+Contributions are welcome! Please follow these steps:
+1.  Fork the project.
+2.  Create your feature branch (`git checkout -b feature/AmazingFeature`).
+3.  Commit your changes (`git commit -m 'Add some AmazingFeature'`).
+4.  Push to the branch (`git push origin feature/AmazingFeature`).
+5.  Open a Pull Request.
+
+## ⚠️ Disclaimer
+
+This application is a **video player**. It does **not** provide any content. Users must provide their own playlists or subscription details from a legal provider. The developers of this app do not condone piracy.
+
+## 📄 License
+
+Distributed under the MIT License. See `LICENSE` for more information.
+
+---
+
+### 💬 Community & Support
+
+Join our Discord for updates, bug reports, and beta testing!
+[**Join the Discord Server**](https://discord.gg/YOUR_INVITE_CODE_HERE)
