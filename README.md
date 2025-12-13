@@ -3,8 +3,8 @@
 A modern, high-performance IPTV player built for iOS using **SwiftUI**, **AVKit**, and **Combine**.
 
 <p align="center">
-  <img src="https://via.placeholder.com/250x540?text=Login+Screen" alt="Login Screen" width="250">
-  <img src="https://via.placeholder.com/250x540?text=Sports+Hub" alt="Sports Hub" width="250">
+  <img src="https://github.com/mongoosemonke504/NebuloIPTV/blob/main/Nebulo_3885.PNG" alt="Settings" width="250">
+  <img src="https://github.com/mongoosemonke504/NebuloIPTV/blob/main/Nebulo_3884.PNG" alt="Sports Hub" width="250">
   <img src="https://github.com/mongoosemonke504/NebuloIPTV/blob/main/Nebulo_3883.PNG" alt="Home Page" width="250">
 </p>
 
@@ -79,4 +79,4 @@ Distributed under the MIT License. See `LICENSE` for more information.
 ### 💬 Community & Support
 
 Join our Discord for updates, bug reports, and beta testing!
-[**Join the Discord Server**](https://discord.gg/YOUR_INVITE_CODE_HERE)
+[**Join the Discord Server**](https://discord.gg/PHc8AGV6)
