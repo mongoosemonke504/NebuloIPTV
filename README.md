@@ -5,7 +5,7 @@ A modern, high-performance IPTV player built for iOS using **SwiftUI**, **AVKit*
 <p align="center">
   <img src="https://via.placeholder.com/250x540?text=Login+Screen" alt="Login Screen" width="250">
   <img src="https://via.placeholder.com/250x540?text=Sports+Hub" alt="Sports Hub" width="250">
-  <img src="https://ibb.co/21SjX0mr" alt="Home Page" width="250">
+  <img src="https://github.com/mongoosemonke504/NebuloIPTV/blob/main/Nebulo_3883.PNG" alt="Home Page" width="250">
 </p>
 
 ## ✨ Features
