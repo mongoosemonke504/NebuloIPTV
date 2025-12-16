@@ -1,0 +1,43 @@
+import SwiftUI
+import Combine
+
+class UpdateManager: ObservableObject {
+    @Published var showUpdateAlert = false
+    @Published var updateURL = ""
+    @Published var latestVersion = ""
+    let versionCheckURL = "https://gist.githubusercontent.com/mongoosemonke504/9361c08e3c59e3cbae0dfeb4ed2e6215/raw/e11f111432e905102d3cc5125750c62ff816f5fa/version.json"
+    func checkForUpdates() {
+        guard let url = URL(string: versionCheckURL) else { return }
+        Task {
+            do {
+                let (data, _) = try await URLSession.shared.data(from: url)
+                let updateInfo = try JSONDecoder().decode(UpdateInfo.self, from: data)
+                let currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+                let ignoredVersion = UserDefaults.standard.string(forKey: "ignoredUpdateVersion")
+                if ignoredVersion == updateInfo.version {
+                    print("Update v\(updateInfo.version) is ignored by user.")
+                    return
+                }
+                if updateInfo.version.compare(currentVersion, options: .numeric) == .orderedDescending {
+                    await MainActor.run {
+                        self.updateURL = updateInfo.url
+                        self.latestVersion = updateInfo.version
+                        self.showUpdateAlert = true
+                    }
+                }
+            } catch {
+                print("Update check failed: \(error)")
+            }
+        }
+    }
+    
+    func ignoreCurrentUpdate() {
+        UserDefaults.standard.set(latestVersion, forKey: "ignoredUpdateVersion")
+        showUpdateAlert = false
+    }
+}
+
+struct UpdateInfo: Decodable {
+    let version: String
+    let url: String
+}
