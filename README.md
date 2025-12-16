@@ -3,9 +3,10 @@
 A modern, high-performance IPTV player built for iOS using **SwiftUI**, **AVKit**, and **Combine**.
 
 <p align="center">
-  <img src="https://github.com/mongoosemonke504/NebuloIPTV/blob/main/Nebulo_3885.PNG" alt="Settings" width="250">
-  <img src="https://github.com/mongoosemonke504/NebuloIPTV/blob/main/Nebulo_3884.PNG" alt="Sports Hub" width="250">
-  <img src="https://github.com/mongoosemonke504/NebuloIPTV/blob/main/Nebulo_3883.PNG" alt="Home Page" width="250">
+  <img src="https://github.com/mongoosemonke504/NebuloIPTV/blob/main/images/Settings.PNG" alt="Settings" width="200">
+  <img src="https://github.com/mongoosemonke504/NebuloIPTV/blob/main/images/Sports%20Center.PNG" alt="Sports Hub" width="200">
+  <img src="https://github.com/mongoosemonke504/NebuloIPTV/blob/main/images/Homescreen.PNG" alt="Home Page" width="200">
+  <img src="[https://github.com/mongoosemonke504/NebuloIPTV/blob/main/images/Homescreen.PNG](https://github.com/mongoosemonke504/NebuloIPTV/blob/main/images/Multi-view.PNG)" alt="Multi-view" width="200">
 </p>
 
 ## ✨ Features
