@@ -1,0 +1,2037 @@
+import SwiftUI
+import AVKit
+import AVFoundation
+import Combine
+
+// MARK: - 1. UTILITIES & CACHING
+final class ImageCache: @unchecked Sendable {
+    static let shared: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 500
+        cache.totalCostLimit = 1024 * 1024 * 200
+        return cache
+    }()
+    static func get(forKey key: String) -> UIImage? {
+        shared.object(forKey: key as NSString)
+    }
+    static func set(_ image: UIImage, forKey key: String) {
+        shared.setObject(image, forKey: key as NSString)
+    }
+}
+struct CachedAsyncImage: View {
+    let urlString: String
+    let size: CGSize?
+    @State private var image: UIImage?
+    @State private var currentTask: Task<Void, Never>?
+    var body: some View {
+        Group {
+            if let image = image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: size != nil ? .fill : .fit)
+            } else {
+                Color.gray.opacity(0.1)
+            }
+        }
+        .onAppear {
+            currentTask?.cancel()
+            currentTask = Task(priority: .userInitiated) { await load() }
+        }
+        .onDisappear {
+            currentTask?.cancel()
+            currentTask = nil
+        }
+    }
+    
+    private func load() async {
+        guard let url = URL(string: urlString) else { return }
+        let cacheKey = size != nil ? "\(urlString)-\(Int(size!.width))x\(Int(size!.height))" : urlString
+        if let cached = ImageCache.get(forKey: cacheKey) {
+            self.image = cached
+            return
+        }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            guard !Task.isCancelled else { return }
+            let finalImage: UIImage?
+            if let targetSize = size {
+                finalImage = downsample(imageData: data, to: targetSize)
+            } else {
+                finalImage = UIImage(data: data)
+            }
+            if let img = finalImage {
+                ImageCache.set(img, forKey: cacheKey)
+                Task { @MainActor in
+                    withTransaction(Transaction(animation: .easeOut(duration: 0.2))) {
+                        self.image = img
+                    }
+                }
+            }
+        } catch { }
+    }
+    private func downsample(imageData: Data, to pointSize: CGSize) -> UIImage? {
+        let imageSourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let imageSource = CGImageSourceCreateWithData(imageData as CFData, imageSourceOptions) else { return nil }
+        
+        let maxDimensionInPixels = max(pointSize.width, pointSize.height) * UIScreen.main.scale
+        let downsampleOptions = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxDimensionInPixels
+        ] as CFDictionary
+        
+        guard let downsampledImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, downsampleOptions) else { return nil }
+        return UIImage(cgImage: downsampledImage)
+    }
+}
+
+
+struct GlassEffect: ViewModifier {
+    let cornerRadius: CGFloat
+    let isSelected: Bool
+    let accentColor: Color?
+    
+    func body(content: Content) -> some View {
+        content
+            .background(isSelected ? AnyShapeStyle(Material.ultraThinMaterial) : AnyShapeStyle(Material.thinMaterial.opacity(0.2)))
+            .cornerRadius(cornerRadius)
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .stroke(isSelected && accentColor != nil ? accentColor!.opacity(0.8) : Color.white.opacity(0.1), lineWidth: isSelected ? 1.5 : 0.5)
+            )
+            .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
+            .compositingGroup()
+    }
+}
+
+struct EmptyStateView: View {
+    let title: String
+    let systemImage: String
+    let description: String
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            Image(systemName: systemImage)
+                .font(.system(size: 60))
+                .foregroundColor(.gray)
+            Text(title)
+                .font(.title2.bold())
+                .foregroundColor(.white)
+            Text(description)
+                .font(.body)
+                .foregroundColor(.white.opacity(0.7))
+                .multilineTextAlignment(.center)
+        }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black.opacity(0.001))
+    }
+}
+
+// CONFIGURATION ENUMS
+enum ViewMode: String, CaseIterable, Sendable { case automatic = "Automatic", sidebar = "Sidebar", standard = "Standard" }
+enum AppTheme: String, CaseIterable, Identifiable, Sendable {
+    case system = "System", light = "Light", dark = "Dark"
+    var id: String { rawValue }
+}
+enum LoginType: String, CaseIterable, Identifiable, Sendable {
+    case xtream = "Xtream Codes API"
+    case m3u = "M3U Playlist / Stalker"
+    case mac = "Mac Address / Portal"
+    var id: String { rawValue }
+}
+
+enum SportType: String, CaseIterable, Identifiable, Sendable {
+    case soccer = "Soccer", ucl = "Champions League", europa = "Europa League", cbb = "NCAAB", cfb = "NCAAF", nfl = "NFL", nba = "NBA", wnba = "WNBA", nhl = "NHL", mlb = "MLB"
+    var id: String { rawValue }
+    var endpoint: String {
+        switch self {
+        case .nfl: return "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard"
+        case .mlb: return "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard"
+        case .nhl: return "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/scoreboard"
+        case .nba: return "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
+        case .wnba: return "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/scoreboard"
+        case .cbb: return "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard"
+        case .cfb: return "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard"
+        case .ucl: return "https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions/scoreboard"
+        case .europa: return "https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.europa/scoreboard"
+        case .soccer: return ""
+        }
+    }
+}
+
+// EXTENSIONS & LOGIC
+extension Date {
+    private static let headerFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "E, MMM d"
+        return f
+    }()
+    var formattedHeader: String { Self.headerFormatter.string(from: self) }
+}
+extension Color {
+    init?(hex: String) {
+        let hex = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard hex.count == 6 else { return nil }
+        var rgb: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&rgb)
+        self.init(red: Double((rgb & 0xFF0000) >> 16)/255.0, green: Double((rgb & 0x00FF00) >> 8)/255.0, blue: Double(rgb & 0x0000FF)/255.0)
+    }
+    func toHex() -> String? {
+        guard let c = UIColor(self).cgColor.components, c.count >= 3 else { return nil }
+        return String(format: "#%02lX%02lX%02lX", lroundf(Float(c[0])*255), lroundf(Float(c[1])*255), lroundf(Float(c[2])*255))
+    }
+}
+extension KeyedDecodingContainer {
+    func decodeFlexibleID(forKey key: K) throws -> Int {
+        if let intValue = try? decode(Int.self, forKey: key) { return intValue }
+        if let stringValue = try? decode(String.self, forKey: key) {
+            if let intFromString = Int(stringValue) { return intFromString }
+            return 0
+        }
+        return 0
+    }
+}
+
+struct NameCleaner {
+    nonisolated static let globalGarbage = try? NSRegularExpression(pattern: "^[A-Z]{2,3}\\s?[|]\\s?|^\\d+\\s?[:|]\\s?|(LIVE\\s?\\d*\\s?[:|-]?\\s?)|(HD\\s?:)|(FHD\\s?:)", options: .caseInsensitive)
+    nonisolated static let suffixGarbage = try? NSRegularExpression(pattern: "\\s?-\\s?ET\\s?/\\s?UK.*|\\s?\\[.*?\\]|\\s?\\(.*?\\)", options: .caseInsensitive)
+    nonisolated static func clean(_ name: String, isSports: Bool = false) -> String {
+        var clean = name
+        let range = NSRange(location: 0, length: clean.utf16.count)
+        if let regex = globalGarbage { clean = regex.stringByReplacingMatches(in: clean, options: [], range: range, withTemplate: "") }
+        let currentRange = NSRange(location: 0, length: clean.utf16.count)
+        if let regex = suffixGarbage { clean = regex.stringByReplacingMatches(in: clean, options: [], range: currentRange, withTemplate: "") }
+        return clean.trimmingCharacters(in: CharacterSet(charactersIn: ":- |"))
+    }
+    nonisolated static func isLiveGameOrPPV(_ name: String) -> Bool {
+        return name.localizedCaseInsensitiveContains(" vs ") || name.localizedCaseInsensitiveContains(" @ ") || name.localizedCaseInsensitiveContains(" v ") || name.localizedCaseInsensitiveContains("-vs-") || name.localizedCaseInsensitiveContains("ppv") || name.localizedCaseInsensitiveContains("ufc")
+    }
+}
+
+struct SmartSearchLogic {
+    nonisolated static func tokenize(_ input: String) -> [String] {
+        let cleaned = input.replacingOccurrences(of: "\\(.*?\\)", with: "", options: .regularExpression).replacingOccurrences(of: "fc", with: "", options: .caseInsensitive).replacingOccurrences(of: "university", with: "", options: .caseInsensitive)
+        return cleaned.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { $0.count > 2 }
+    }
+    nonisolated static func containsToken(name: String, tokens: [String]) -> Bool {
+        guard !tokens.isEmpty else { return false }
+        if let longest = tokens.max(by: { $0.count < $1.count }) { return name.localizedCaseInsensitiveContains(longest) }
+        return false
+    }
+    nonisolated static func getBroadcasters(for sport: SportType) -> [String] {
+        switch sport {
+        case .soccer, .ucl, .europa: return ["peacock", "nbc", "usa", "sky sports", "tnt", "bein", "supersport", "dazn", "optus", "astro"]
+        case .nfl: return ["redzone", "nfl", "cbs", "fox", "nbc", "espn", "sky sports nfl", "dazn"]
+        case .nba: return ["nba", "tnt", "espn", "abc", "bally", "sportsnet", "tsn"]
+        case .nhl: return ["nhl", "sportsnet", "tnt", "espn", "viaplay"]
+        case .mlb: return ["mlb", "bally", "espn", "fox", "tbs"]
+        case .cfb: return ["sec", "acc", "big ten", "espn", "fox", "fs1", "abc", "cbs", "longhorn", "cw"]
+        case .cbb: return ["espn", "fs1", "cbs", "acc", "sec", "big ten", "fox"]
+        default: return ["espn", "fox", "sky"]
+        }
+    }
+    nonisolated static func getKeywords(for sport: SportType) -> [String] {
+        switch sport {
+        case .soccer, .ucl, .europa: return ["premier", "liga", "serie a", "bundesliga", "ligue 1"]
+        case .nfl: return ["nfl"]; case .nba: return ["nba"]; case .nhl: return ["nhl"]; case .mlb: return ["mlb", "baseball"]; default: return []
+        }
+    }
+    nonisolated static func calculateStreamScore(name: String) -> Int {
+        var score = 0
+        if name.localizedCaseInsensitiveContains("fhd") { score += 10 }
+        if name.localizedCaseInsensitiveContains("60fps") { score += 5 }
+        if name.localizedCaseInsensitiveContains("us") { score += 5 }
+        return score
+    }
+}
+
+struct XtreamAuthError: Codable, Sendable { let user_info: [String: String]? }
+struct StreamChannel: Identifiable, Codable, Hashable, Equatable, Sendable {
+    let id: Int; var name: String; var streamURL: String; let icon: String?; let categoryID: Int; var originalName: String? = nil
+    enum CodingKeys: String, CodingKey { case id = "stream_id", name = "name", displayName = "stream_display_name", streamURL = "stream_url", icon = "stream_icon", categoryID = "category_id" }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decodeFlexibleID(forKey: .id)
+        self.categoryID = try c.decodeFlexibleID(forKey: .categoryID)
+        if let n = try? c.decode(String.self, forKey: .name) { self.name = n } else if let dn = try? c.decode(String.self, forKey: .displayName) { self.name = dn } else { self.name = "Unknown Channel" }
+        self.streamURL = (try? c.decode(String.self, forKey: .streamURL)) ?? ""
+        self.icon = try? c.decode(String?.self, forKey: .icon)
+    }
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(streamURL, forKey: .streamURL)
+        try container.encode(icon, forKey: .icon)
+        try container.encode(categoryID, forKey: .categoryID)
+    }
+    nonisolated init(id: Int, name: String, streamURL: String, icon: String?, categoryID: Int, originalName: String?) { self.id = id; self.name = name; self.streamURL = streamURL; self.icon = icon; self.categoryID = categoryID; self.originalName = originalName }
+}
+
+struct StreamCategory: Identifiable, Codable, Hashable, Equatable, Sendable {
+    let id: Int; var name: String; var isHidden: Bool; var order: Int
+    enum CodingKeys: String, CodingKey { case id = "category_id", name = "category_name" }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decodeFlexibleID(forKey: .id)
+        self.name = try c.decode(String.self, forKey: .name)
+        self.isHidden = false
+        self.order = Int.max
+    }
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+    }
+    nonisolated init(id: Int, name: String, isHidden: Bool = false, order: Int = 0) { self.id = id; self.name = name; self.isHidden = isHidden; self.order = order }
+}
+
+struct SportConfig: Identifiable, Codable, Hashable, Sendable { var id: String; var name: String; var keywords: [String]; var order: Int }
+
+// ESPN MODELS
+struct ESPNResponse: Codable, Sendable { let events: [ESPNEvent]? }
+struct ESPNEvent: Codable, Identifiable, Hashable, Sendable {
+    let id: String; let shortName: String; let status: ESPNStatus; let competitions: [ESPNCompetition]; let date: String; var leagueLabel: String? = nil
+    var homeCompetitor: ESPNCompetitor? { competitions.first?.competitors.first(where: { $0.homeAway == "home" }) }
+    var awayCompetitor: ESPNCompetitor? { competitions.first?.competitors.first(where: { $0.homeAway == "away" }) }
+    var broadcastName: String? { competitions.first?.broadcasts?.first?.names.first }
+    private static let isoFormatter: ISO8601DateFormatter = { let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withDashSeparatorInDate, .withColonSeparatorInTime, .withTimeZone]; return f }()
+    var gameDate: Date { return Self.isoFormatter.date(from: date) ?? Date() }
+    static func == (lhs: ESPNEvent, rhs: ESPNEvent) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
+struct ESPNStatus: Codable, Hashable, Sendable { let type: ESPNStatusType }
+struct ESPNStatusType: Codable, Hashable, Sendable { let detail: String; let state: String }
+struct ESPNCompetition: Codable, Hashable, Sendable { let competitors: [ESPNCompetitor]; let broadcasts: [ESPNBroadcast]? }
+struct ESPNBroadcast: Codable, Hashable, Sendable { let names: [String] }
+struct ESPNCompetitor: Codable, Identifiable, Hashable, Sendable { var id: String { team.id }; let homeAway: String; let score: String?; let team: ESPNTeam }
+struct ESPNTeam: Codable, Hashable, Sendable { let id: String; let abbreviation: String?; let displayName: String?; let shortDisplayName: String?; let logo: String?; let color: String?; var safeName: String { shortDisplayName ?? abbreviation ?? "Team" } }
+
+// VIEW MODELS
+@MainActor
+class ChannelViewModel: ObservableObject {
+    @Published var categories: [StreamCategory] = []; @Published var channels: [StreamChannel] = []
+    @Published var isLoading = false; @Published var errorMessage: String? = nil
+    @Published var filteredChannels: [StreamChannel] = []; @Published var searchText: String = ""
+    @Published var sportsConfigs: [SportConfig] = []; @Published var sportsChannels: [String: [StreamChannel]] = [:]
+    @Published var favoriteIDs: Set<Int> = []; @Published var hiddenIDs: Set<Int> = []
+    @Published var excludedSportsIDs: Set<Int> = []; @Published var recentIDs: [Int] = []
+    @Published var showRenameAlert = false; @Published var renameInput = ""
+    @Published var isSmartSearchActive = false
+    @Published var channelToAutoPlay: StreamChannel? = nil
+    @Published var multiViewSlots: [StreamChannel?] = [nil, nil, nil, nil]
+    @Published var triggerMultiView = false
+    @Published var multiViewModeActive = false
+    @Published var showNoStreamsAlert = false
+    
+    private var onRenameConfirm: ((String) -> Void)?
+    private var renamedChannels: [Int: String] = [:]; private var renamedCategories: [Int: String] = [:]
+    private var cancellables = Set<AnyCancellable>()
+    nonisolated private static let decoder = JSONDecoder()
+    
+    var activeMultiViewCount: Int { multiViewSlots.compactMap { $0 }.count }
+    
+    init() { loadSettings(); setupSearchPipeline() }
+    
+    func reset() {
+        self.channels = []; self.categories = []; self.filteredChannels = []; self.sportsChannels = [:]
+        self.searchText = ""; self.errorMessage = nil; self.isLoading = false; self.multiViewSlots = [nil, nil, nil, nil]; self.multiViewModeActive = false
+    }
+    
+    func updateMultiViewSlot(index: Int, channel: StreamChannel?) {
+        guard index >= 0 && index < 4 else { return }
+        multiViewSlots[index] = channel
+    }
+    
+    func addToMultiView(_ channel: StreamChannel) {
+        if let firstEmpty = multiViewSlots.firstIndex(where: { $0 == nil }) {
+            multiViewSlots[firstEmpty] = channel
+        } else {
+            multiViewSlots[3] = channel
+        }
+    }
+    
+    func triggerMultiViewFromPlayer(with channel: StreamChannel) {
+        if let firstEmpty = multiViewSlots.firstIndex(where: { $0 == nil }) { multiViewSlots[firstEmpty] = channel } else { multiViewSlots[0] = channel }
+        triggerMultiView = true
+    }
+    
+    func promptRename(name: String, onConfirm: @escaping (String) -> Void) { self.renameInput = name; self.onRenameConfirm = onConfirm; self.showRenameAlert = true }
+    func confirmRename() { onRenameConfirm?(renameInput); showRenameAlert = false; renameInput = "" }
+    func triggerRenameChannel(_ c: StreamChannel) { promptRename(name: c.name) { [weak self] n in self?.renameChannel(id: c.id, newName: n) } }
+    func triggerRenameCategory(_ c: StreamCategory) { promptRename(name: c.name) { [weak self] n in self?.renameCategory(id: c.id, newName: n) } }
+    
+    func runSmartSearch(home: String, away: String, sport: SportType, network: String? = nil) {
+        let searchQuery = "\(home) vs \(away)"
+        let inputChannels = self.channels; let inputHidden = self.hiddenIDs; let inputCategories = self.categories
+        
+        Task.detached(priority: .userInitiated) {
+            let allChannels = inputChannels; let hidden = inputHidden
+            let homeTokens = SmartSearchLogic.tokenize(home); let awayTokens = SmartSearchLogic.tokenize(away)
+            var specificCategoryName: String? = nil
+            switch sport {
+            case .nhl: specificCategoryName = "AM | USA NHL"
+            case .nba: specificCategoryName = "AM | USA NBA"
+            case .nfl: specificCategoryName = "AM | USA NFL"
+            case .soccer: if network?.localizedCaseInsensitiveContains("MLS") == true { specificCategoryName = "AM | USA MLS" }
+            default: break
+            }
+            if let catName = specificCategoryName, let targetCategory = inputCategories.first(where: { $0.name == catName }) {
+                let leagueMatches = allChannels.filter { $0.categoryID == targetCategory.id && !hidden.contains($0.id) && SmartSearchLogic.containsToken(name: $0.name, tokens: homeTokens) && SmartSearchLogic.containsToken(name: $0.name, tokens: awayTokens) }
+                if let bestMatch = leagueMatches.max(by: { SmartSearchLogic.calculateStreamScore(name: $0.name) < SmartSearchLogic.calculateStreamScore(name: $1.name) }) { await MainActor.run { self.channelToAutoPlay = bestMatch }; return }
+            }
+            if let networkName = network, !networkName.isEmpty {
+                var specificMatches: [StreamChannel] = []
+                let netLower = networkName.lowercased()
+                if (sport == .cfb || sport == .cbb), let ncaaCategory = inputCategories.first(where: { $0.name == "AM | USA NCAA" }) { specificMatches = allChannels.filter { $0.categoryID == ncaaCategory.id && $0.name.localizedCaseInsensitiveContains(netLower) && !hidden.contains($0.id) } }
+                if specificMatches.isEmpty { specificMatches = allChannels.filter { $0.name.localizedCaseInsensitiveContains(netLower) && !hidden.contains($0.id) && !$0.name.localizedCaseInsensitiveContains("4k") && !$0.name.localizedCaseInsensitiveContains("uhd") } }
+                if let winner = specificMatches.max(by: { SmartSearchLogic.calculateStreamScore(name: $0.name) < SmartSearchLogic.calculateStreamScore(name: $1.name) }) { await MainActor.run { self.channelToAutoPlay = winner }; return }
+            }
+            let perfectMatches = allChannels.filter { channel in !hidden.contains(channel.id) && SmartSearchLogic.containsToken(name: channel.name, tokens: homeTokens) && SmartSearchLogic.containsToken(name: channel.name, tokens: awayTokens) }
+            if let bestPerfect = perfectMatches.max(by: { SmartSearchLogic.calculateStreamScore(name: $0.name) < SmartSearchLogic.calculateStreamScore(name: $1.name) }) { await MainActor.run { self.channelToAutoPlay = bestPerfect }; return }
+            let broadcasters = SmartSearchLogic.getBroadcasters(for: sport)
+            let keywords = SmartSearchLogic.getKeywords(for: sport)
+            let scoredChannels: [(channel: StreamChannel, score: Int)] = allChannels.compactMap { channel in
+                if hidden.contains(channel.id) { return nil }
+                if channel.name.localizedCaseInsensitiveContains("4k") || channel.name.localizedCaseInsensitiveContains("uhd") { return nil }
+                if channel.name.localizedCaseInsensitiveContains("bein") && channel.name.localizedCaseInsensitiveContains("max") { return nil }
+                var score = 0
+                let hasHome = SmartSearchLogic.containsToken(name: channel.name, tokens: homeTokens); let hasAway = SmartSearchLogic.containsToken(name: channel.name, tokens: awayTokens)
+                if hasHome && hasAway { score += 1000 }
+                else if hasHome || hasAway { score += 50; if keywords.contains(where: { channel.name.localizedCaseInsensitiveContains($0) }) { score += 25 } }
+                if score < 1000 { for broadcaster in broadcasters { if channel.name.localizedCaseInsensitiveContains(broadcaster) { score += 15; if channel.name.localizedCaseInsensitiveContains(" 1") || channel.name.localizedCaseInsensitiveContains(" 2") || channel.name.localizedCaseInsensitiveContains("event") { score += 5 }; break } } }
+                if score > 0 { score += SmartSearchLogic.calculateStreamScore(name: channel.name) }
+                if sport == .nfl && channel.name.localizedCaseInsensitiveContains("nfl network") && score < 100 { score -= 10 }
+                return score > 0 ? (channel, score) : nil
+            }
+            let sorted = scoredChannels.sorted { $0.score > $1.score }
+            var uniqueNames = Set<String>(); var localSelection: [StreamChannel] = []
+            for item in sorted { if localSelection.count >= 20 { break }; if !uniqueNames.contains(item.channel.name) { uniqueNames.insert(item.channel.name); localSelection.append(item.channel) } }
+            let finalResult = localSelection
+            await MainActor.run {
+                if finalResult.isEmpty {
+                    self.showNoStreamsAlert = true
+                } else if finalResult.count == 1 {
+                    self.channelToAutoPlay = finalResult.first
+                } else {
+                    self.isSmartSearchActive = true; self.searchText = searchQuery; self.filteredChannels = finalResult
+                }
+            }
+        }
+    }
+    
+    private func setupSearchPipeline() {
+        $searchText.debounce(for: .milliseconds(300), scheduler: DispatchQueue.global(qos: .userInteractive)).combineLatest($channels, $hiddenIDs).receive(on: DispatchQueue.global(qos: .userInitiated)).map { (text, all, hidden) -> [StreamChannel] in
+            if text.isEmpty { return all.filter { !hidden.contains($0.id) } }
+            let tokens = text.lowercased().components(separatedBy: " ").filter { !$0.isEmpty }
+            return all.filter { channel in guard !hidden.contains(channel.id) else { return false }; return tokens.allSatisfy { channel.name.localizedCaseInsensitiveContains($0) } }
+        }.receive(on: DispatchQueue.main).sink { [weak self] filtered in guard let self = self else { return }; if self.isSmartSearchActive && self.searchText.isEmpty { self.isSmartSearchActive = false }; self.filteredChannels = filtered }.store(in: &cancellables)
+    }
+    func clearSearch() { self.searchText = ""; self.isSmartSearchActive = false }
+    
+    func loadSettings() {
+        func load<T: Decodable>(_ key: String, type: T.Type) -> T? { guard let data = UserDefaults.standard.data(forKey: key) else { return nil }; return try? Self.decoder.decode(type, from: data) }
+        self.renamedChannels = load("renamedChannels", type: [Int: String].self) ?? [:]; self.renamedCategories = load("renamedCategories", type: [Int: String].self) ?? [:]; self.excludedSportsIDs = Set(load("excludedSportsIDs", type: [Int].self) ?? []); self.favoriteIDs = Set(load("favoriteChannelIDs", type: [Int].self) ?? []); self.hiddenIDs = Set(load("hiddenChannelIDs", type: [Int].self) ?? []); self.recentIDs = load("recentChannelIDs", type: [Int].self) ?? []
+        if let savedSports = load("sportsConfigs", type: [SportConfig].self) {
+            self.sportsConfigs = savedSports.sorted { $0.order < $1.order }
+            if !self.sportsConfigs.contains(where: { $0.id == "beIN" }) { self.sportsConfigs.insert(SportConfig(id: "beIN", name: "beIN Sports", keywords: ["beIN"], order: 7), at: min(7, self.sportsConfigs.count)); self.sportsConfigs.sort { $0.order < $1.order } }
+        } else {
+            self.sportsConfigs = [SportConfig(id: "NFL", name: "NFL", keywords: ["NFL"], order: 0), SportConfig(id: "NBA", name: "NBA", keywords: ["NBA"], order: 1), SportConfig(id: "MLB", name: "MLB", keywords: ["MLB"], order: 2), SportConfig(id: "NHL", name: "NHL", keywords: ["NHL"], order: 3), SportConfig(id: "CFB", name: "College Football", keywords: ["NCAAF", "CFB", "College Football"], order: 4), SportConfig(id: "CBB", name: "College Basketball", keywords: ["NCAAB", "CBB", "College Basketball"], order: 5), SportConfig(id: "Soccer", name: "Soccer", keywords: ["Soccer", "Premier League", "La Liga", "UEFA", "FIFA"], order: 6), SportConfig(id: "beIN", name: "beIN Sports", keywords: ["beIN"], order: 7), SportConfig(id: "F1", name: "Formula 1", keywords: ["F1"], order: 8), SportConfig(id: "UFC", name: "UFC / MMA", keywords: ["UFC", "MMA"], order: 9), SportConfig(id: "Other", name: "Other Sports", keywords: [], order: 10)]
+        }
+    }
+    func saveCategorySettings() { struct Wrapper: Codable { let id: Int; var name: String; var isHidden: Bool; var order: Int }; let wrappers = categories.map { Wrapper(id: $0.id, name: $0.name, isHidden: $0.isHidden, order: $0.order) }; if let encoded = try? JSONEncoder().encode(wrappers) { UserDefaults.standard.set(encoded, forKey: "savedCategories") } }
+    func renameChannel(id: Int, newName: String) { renamedChannels[id] = newName; if let encoded = try? JSONEncoder().encode(renamedChannels) { UserDefaults.standard.set(encoded, forKey: "renamedChannels") }; if let index = channels.firstIndex(where: { $0.id == id }) { channels[index].name = newName; categorizeSports(); objectWillChange.send() } }
+    func renameCategory(id: Int, newName: String) { renamedCategories[id] = newName; if let encoded = try? JSONEncoder().encode(renamedCategories) { UserDefaults.standard.set(encoded, forKey: "renamedCategories") }; if let index = categories.firstIndex(where: { $0.id == id }) { categories[index].name = newName }; objectWillChange.send() }
+    func toggleFavorite(_ id: Int) { if favoriteIDs.contains(id) { favoriteIDs.remove(id) } else { favoriteIDs.insert(id) }; if let data = try? JSONEncoder().encode(Array(favoriteIDs)) { UserDefaults.standard.set(data, forKey: "favoriteChannelIDs") } }
+    func hideChannel(_ id: Int) { hiddenIDs.insert(id); if let data = try? JSONEncoder().encode(Array(hiddenIDs)) { UserDefaults.standard.set(data, forKey: "hiddenChannelIDs") } }
+    func unhideChannel(_ id: Int) { hiddenIDs.remove(id); if let data = try? JSONEncoder().encode(Array(hiddenIDs)) { UserDefaults.standard.set(data, forKey: "hiddenChannelIDs") } }
+    func hideCategory(_ id: Int) { if let index = categories.firstIndex(where: { $0.id == id }) { categories[index].isHidden = true; saveCategorySettings() } }
+    func addToRecent(_ id: Int) { if let idx = recentIDs.firstIndex(of: id) { recentIDs.remove(at: idx) }; recentIDs.insert(id, at: 0); if recentIDs.count > 20 { recentIDs = Array(recentIDs.prefix(20)) }; if let data = try? JSONEncoder().encode(recentIDs) { UserDefaults.standard.set(data, forKey: "recentChannelIDs") } }
+    func removeFromRecent(_ id: Int) { if let idx = recentIDs.firstIndex(of: id) { recentIDs.remove(at: idx); if let data = try? JSONEncoder().encode(recentIDs) { UserDefaults.standard.set(data, forKey: "recentChannelIDs") } } }
+    func removeChannelFromSports(id: Int) { excludedSportsIDs.insert(id); if let data = try? JSONEncoder().encode(Array(excludedSportsIDs)) { UserDefaults.standard.set(data, forKey: "excludedSportsIDs") }; categorizeSports() }
+    func resetSportsExclusions() { excludedSportsIDs.removeAll(); UserDefaults.standard.removeObject(forKey: "excludedSportsIDs"); categorizeSports() }
+    
+    func categorizeSports() {
+        let currentChannels = self.channels; let currentConfigs = self.sportsConfigs; let currentExclusions = self.excludedSportsIDs
+        Task.detached(priority: .utility) {
+            var groups: [String: [StreamChannel]] = [:]
+            for channel in currentChannels {
+                if currentExclusions.contains(channel.id) { continue }
+                let searchName = (channel.originalName ?? channel.name)
+                for config in currentConfigs where config.id != "Other" {
+                    if config.keywords.contains(where: { searchName.localizedCaseInsensitiveContains($0) }) {
+                        if config.id == "beIN" { if !searchName.localizedCaseInsensitiveContains("FHD") && !searchName.localizedCaseInsensitiveContains("1080") { continue }; let existingList = groups[config.id] ?? []; if existingList.contains(where: { $0.name == channel.name }) { continue } }
+                        groups[config.id, default: []].append(channel); break
+                    }
+                }
+            }
+            for (key, list) in groups { groups[key] = list.sorted { a, b in let aLive = NameCleaner.isLiveGameOrPPV(a.name); let bLive = NameCleaner.isLiveGameOrPPV(b.name); if aLive && !bLive { return true }; if !aLive && bLive { return false }; return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending } }
+            await MainActor.run { self.sportsChannels = groups }
+        }
+    }
+    
+    func loadData(url: String, user: String, pass: String, type: LoginType) async {
+        guard !url.isEmpty else { return }
+        if channels.isEmpty { isLoading = true; errorMessage = nil }
+        
+        var safeURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !safeURL.lowercased().hasPrefix("http") { safeURL = "http://\(safeURL)" }
+        var finalFetchURL = URL(string: safeURL)
+        
+        if type == .mac {
+            let mac = UserDefaults.standard.string(forKey: "macAddress") ?? ""
+            let stringURL = "\(safeURL)/get.php?type=m3u_plus&stb_mac=\(mac)"
+            finalFetchURL = URL(string: stringURL)
+        }
+        
+        guard let baseURL = finalFetchURL else { isLoading = false; return }
+        
+        do {
+            if type == .xtream {
+                try await withThrowingTaskGroup(of: Void.self) { group in
+                    group.addTask {
+                        let catUrl = try self.buildApiUrl(base: baseURL, user: user, pass: pass, action: "get_live_categories")
+                        let (data, _) = try await URLSession.shared.data(from: catUrl)
+                        if let _ = try? JSONDecoder().decode(XtreamAuthError.self, from: data) { throw NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Login Failed"]) }
+                        let cats = try Self.decoder.decode([StreamCategory].self, from: data)
+                        let processed = await self.processCategories(cats)
+                        await MainActor.run { self.categories = processed }
+                    }
+                    group.addTask {
+                        let streamUrl = try self.buildApiUrl(base: baseURL, user: user, pass: pass, action: "get_live_streams")
+                        let (data, _) = try await URLSession.shared.data(from: streamUrl)
+                        let raw = try Self.decoder.decode([StreamChannel].self, from: data)
+                        let processed = await self.processChannels(raw, safeURL: safeURL, user: user, pass: pass)
+                        await MainActor.run { self.channels = processed; self.searchText = ""; self.categorizeSports() }
+                    }
+                    try await group.waitForAll()
+                }
+            } else {
+                let (data, _) = try await URLSession.shared.data(from: baseURL)
+                
+                let content = String(data: data, encoding: .utf8)
+                           ?? String(data: data, encoding: .isoLatin1)
+                           ?? String(data: data, encoding: .ascii)
+                
+                if let validContent = content {
+                    if validContent.contains("#EXTM3U") {
+                        let (parsedChannels, parsedCategories) = await parseM3U(content: validContent)
+                        await MainActor.run {
+                            self.categories = parsedCategories
+                            self.channels = parsedChannels
+                            self.searchText = ""
+                            self.categorizeSports()
+                        }
+                    } else {
+                        throw NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Could not retrieve playlist. Ensure MAC Address is active and Portal URL is correct."])
+                    }
+                } else {
+                    throw URLError(.cannotDecodeContentData)
+                }
+            }
+        } catch {
+            if channels.isEmpty { await MainActor.run { self.errorMessage = "Error: \(error.localizedDescription)" } }
+        }
+        await MainActor.run { self.isLoading = false }
+    }
+    
+    nonisolated func parseM3U(content: String) async -> ([StreamChannel], [StreamCategory]) {
+        var channels: [StreamChannel] = []; var categories: [StreamCategory] = []; var categoryNames = Set<String>()
+        let lines = content.components(separatedBy: .newlines); var currentChannel: StreamChannel? = nil
+        for i in 0..<lines.count {
+            let line = lines[i].trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("#EXTINF") {
+                var name = "Unknown Channel"; var logo: String? = nil; var group = "Uncategorized"
+                if let commaIndex = line.lastIndex(of: ",") { name = String(line[commaIndex...].dropFirst()).trimmingCharacters(in: .whitespaces) }
+                if let groupRange = line.range(of: "group-title=\"(.*?)\"", options: .regularExpression) { group = String(line[groupRange]).replacingOccurrences(of: "group-title=\"", with: "").replacingOccurrences(of: "\"", with: "") }
+                if let logoRange = line.range(of: "tvg-logo=\"(.*?)\"", options: .regularExpression) { logo = String(line[logoRange]).replacingOccurrences(of: "tvg-logo=\"", with: "").replacingOccurrences(of: "\"", with: "") }
+                let catID = abs(group.hashValue)
+                if !categoryNames.contains(group) { categories.append(StreamCategory(id: catID, name: group)); categoryNames.insert(group) }
+                currentChannel = StreamChannel(id: i, name: name, streamURL: "", icon: logo, categoryID: catID, originalName: name)
+            } else if !line.hasPrefix("#") && !line.isEmpty && currentChannel != nil {
+                var finishedChannel = currentChannel!; finishedChannel.streamURL = line; finishedChannel.name = NameCleaner.clean(finishedChannel.name); channels.append(finishedChannel); currentChannel = nil
+            }
+        }
+        return (channels, categories.sorted { $0.name < $1.name })
+    }
+    
+    nonisolated private func buildApiUrl(base: URL, user: String, pass: String, action: String) throws -> URL {
+        var c = URLComponents(url: base.appendingPathComponent("player_api.php"), resolvingAgainstBaseURL: false); c?.queryItems = [URLQueryItem(name: "username", value: user), URLQueryItem(name: "password", value: pass), URLQueryItem(name: "action", value: action)]; guard let url = c?.url else { throw URLError(.badURL) }; return url
+    }
+    
+    nonisolated func processCategories(_ loadedCats: [StreamCategory]) async -> [StreamCategory] {
+        var mutableCats = loadedCats; let savedData = UserDefaults.standard.data(forKey: "savedCategories"); struct Wrapper: Decodable { let id: Int; let name: String; let isHidden: Bool; let order: Int }; let saved = savedData != nil ? try? Self.decoder.decode([Wrapper].self, from: savedData!) : nil; let renames = (try? Self.decoder.decode([Int: String].self, from: UserDefaults.standard.data(forKey: "renamedCategories") ?? Data())) ?? [:]
+        for i in 0..<mutableCats.count {
+            let id = mutableCats[i].id; if let custom = renames[id] { mutableCats[i].name = custom }; if let match = saved?.first(where: { $0.id == id }) { if renames[id] == nil { mutableCats[i].name = match.name }; mutableCats[i].isHidden = match.isHidden; mutableCats[i].order = match.order } else { mutableCats[i].order = i }
+        }
+        mutableCats.sort { $0.order < $1.order }; return mutableCats
+    }
+    
+    nonisolated func processChannels(_ rawChannels: [StreamChannel], safeURL: String, user: String, pass: String) async -> [StreamChannel] {
+        let renames = (try? Self.decoder.decode([Int: String].self, from: UserDefaults.standard.data(forKey: "renamedChannels") ?? Data())) ?? [:]
+        return rawChannels.map { var c = $0; c.streamURL = "\(safeURL)/live/\(user)/\(pass)/\($0.id).m3u8"; c.originalName = c.name; if let custom = renames[c.id] { c.name = custom } else { c.name = NameCleaner.clean(c.name, isSports: false) }; return c }
+    }
+}
+
+@MainActor class ScoreViewModel: ObservableObject {
+    @Published var games: [ESPNEvent] = []; @Published var gamesData: [SportType: [ESPNEvent]] = [:]; @Published var isLoading = false; @Published var selectedSport: SportType = .soccer; @Published var soccerSections: [(league: String, games: [ESPNEvent])] = []
+    
+    func fetchScores() async {
+        if let cached = gamesData[selectedSport] { Task.detached(priority: .userInitiated) { await self.processGames(cached, for: self.selectedSport) } } else { isLoading = true }
+        var newGames: [ESPNEvent] = []
+        if selectedSport == .soccer { newGames = await fetchMultiLeagueSoccer() } else { newGames = await fetchSingleSport(url: selectedSport.endpoint) }
+        gamesData[selectedSport] = newGames
+        Task.detached(priority: .userInitiated) { await self.processGames(newGames, for: self.selectedSport); await MainActor.run { self.isLoading = false } }
+    }
+    
+    private func fetchSingleSport(url: String) async -> [ESPNEvent] {
+        guard let url = URL(string: url) else { return [] }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            let decoder = JSONDecoder()
+            let decoded = try decoder.decode(ESPNResponse.self, from: data)
+            return decoded.events ?? []
+        } catch { return [] }
+    }
+    
+    private func fetchMultiLeagueSoccer() async -> [ESPNEvent] {
+        let leagues: [(code: String, name: String)] = [("eng.1", "Premier League"), ("esp.1", "La Liga"), ("ger.1", "Bundesliga"), ("ita.1", "Serie A"), ("fra.1", "Ligue 1"), ("usa.1", "MLS"), ("ned.1", "Eredivisie"), ("por.1", "Liga Portugal"), ("mex.1", "Liga MX")]
+        var combinedGames: [ESPNEvent] = []
+        await withTaskGroup(of: [ESPNEvent].self) { group in
+            for league in leagues {
+                group.addTask {
+                    let urlString = "https://site.api.espn.com/apis/site/v2/sports/soccer/\(league.code)/scoreboard"
+                    guard let url = URL(string: urlString) else { return [] }
+                    do {
+                        let (data, _) = try await URLSession.shared.data(from: url)
+                        let decoder = JSONDecoder()
+                        let decoded = try decoder.decode(ESPNResponse.self, from: data)
+                        return (decoded.events ?? []).map { var modified = $0; modified.leagueLabel = league.name; return modified }
+                    } catch { return [] }
+                }
+            }
+            for await events in group { combinedGames.append(contentsOf: events) }
+        }
+        return combinedGames
+    }
+    
+    private func processGames(_ allGames: [ESPNEvent], for sport: SportType) async {
+        let calendar = Calendar.current; let todayStart = calendar.startOfDay(for: Date())
+        guard let endWindow = calendar.date(byAdding: .day, value: 2, to: todayStart) else { return }
+        let filtered = allGames.filter { game in let gameDate = game.gameDate; if game.status.type.state == "in" { return true }; return gameDate >= todayStart && gameDate < endWindow }
+        let stateOrder: [String: Int] = ["in": 0, "post": 1, "pre": 2]
+        let sorted = filtered.sorted { a, b in let stateA = stateOrder[a.status.type.state] ?? 3; let stateB = stateOrder[b.status.type.state] ?? 3; if stateA != stateB { return stateA < stateB }; return a.gameDate < b.gameDate }
+        await MainActor.run { self.gamesData[sport] = sorted; if sport == selectedSport { self.games = sorted; if sport == .soccer { let sections = self.getSoccerSections(from: sorted); self.soccerSections = sections } } }
+    }
+    
+    func getSoccerSections(from games: [ESPNEvent]) -> [(league: String, games: [ESPNEvent])] {
+        let leagueOrder = ["Premier League", "UCL", "La Liga", "Bundesliga", "Serie A", "Ligue 1", "Europa", "MLS", "Liga MX", "Eredivisie", "Liga Portugal"]
+        let grouped = Dictionary(grouping: games) { $0.leagueLabel ?? "Other" }
+        return grouped.keys.sorted { let indexA = leagueOrder.firstIndex(of: $0) ?? 999; let indexB = leagueOrder.firstIndex(of: $1) ?? 999; return indexA < indexB }.map { (league: $0, games: grouped[$0]!) }
+    }
+}
+
+struct NebulaBackgroundView: View {
+    let color1: Color; let color2: Color; let color3: Color
+    let point1: UnitPoint; let point2: UnitPoint; let point3: UnitPoint
+    
+    func adjustedPoint(_ p: UnitPoint, isLandscape: Bool) -> UnitPoint {
+        guard isLandscape else { return p }
+        return UnitPoint(x: p.y, y: 1.0 - p.x)
+    }
+    
+    func drawNebula(context: GraphicsContext, size: CGSize, time: Double, isLandscape: Bool) {
+        let phase = sin(time * 0.5)
+        context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(.black))
+        let blur = min(size.width, size.height) * 0.45
+        var ctx = context
+        ctx.blendMode = .screen
+        let p1 = adjustedPoint(point1, isLandscape: isLandscape)
+        let c1 = CGPoint(x: p1.x * size.width, y: p1.y * size.height)
+        var ctx1 = ctx
+        ctx1.addFilter(.blur(radius: blur))
+        let r1 = size.width + (CGFloat(phase) * 20)
+        ctx1.fill(Path(ellipseIn: CGRect(x: c1.x - size.width/2, y: c1.y - size.width/2, width: r1, height: r1)), with: .color(color1))
+        let p2 = adjustedPoint(point2, isLandscape: isLandscape)
+        let c2 = CGPoint(x: p2.x * size.width, y: p2.y * size.height)
+        var ctx2 = ctx
+        ctx2.addFilter(.blur(radius: blur))
+        let r2 = size.width * 1.2
+        ctx2.fill(Path(ellipseIn: CGRect(x: c2.x - size.width/2, y: c2.y - size.width/2, width: r2, height: r2)), with: .color(color2))
+        let p3 = adjustedPoint(point3, isLandscape: isLandscape)
+        let c3 = CGPoint(x: p3.x * size.width, y: p3.y * size.height)
+        var ctx3 = ctx
+        ctx3.addFilter(.blur(radius: blur))
+        let r3 = size.width * 0.9
+        ctx3.fill(Path(ellipseIn: CGRect(x: c3.x - size.width/2, y: c3.y - size.width/2, width: r3, height: r3)), with: .color(color3))
+    }
+    
+    var body: some View {
+        GeometryReader { geo in
+            let isLandscape = geo.size.width > geo.size.height
+            TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { timeline in
+                Canvas { context, size in
+                    drawNebula(context: context, size: size, time: timeline.date.timeIntervalSinceReferenceDate, isLandscape: isLandscape)
+                }
+            }
+        }.ignoresSafeArea()
+    }
+}
+
+@main
+struct IPTVPlayerApp: App {
+    @AppStorage("appTheme") private var appTheme = AppTheme.system.rawValue
+    @StateObject private var updateManager = UpdateManager()
+    
+    var selectedScheme: ColorScheme? {
+        switch AppTheme(rawValue: appTheme) ?? .system {
+        case .light: return .light; case .dark: return .dark; case .system: return nil
+        }
+    }
+    
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .preferredColorScheme(selectedScheme)
+                .onAppear {
+                    updateManager.checkForUpdates()
+                }
+                .alert("Update Available", isPresented: $updateManager.showUpdateAlert) {
+                    Button("Update Now") {
+                        if let url = URL(string: updateManager.updateURL) {
+                            UIApplication.shared.open(url)
+                        }
+                    }
+                    Button("Don't Ask Again") {
+                        updateManager.ignoreCurrentUpdate()
+                    }
+                    
+                    Button("Later", role: .cancel) { }
+                } message: {
+                    Text("Version \(updateManager.latestVersion) is available. Please update for the best experience.")
+                }
+        }
+    }
+}
+
+struct ContentView: View { @AppStorage("isLoggedIn") private var isLoggedIn = false; @StateObject private var viewModel = ChannelViewModel(); var body: some View { if isLoggedIn { MainView(viewModel: viewModel) } else { LoginView() } } }
+
+struct LoginView: View {
+    @AppStorage("isLoggedIn") private var isLoggedIn = false
+    @AppStorage("xstreamURL") private var xstreamURL = ""
+    @AppStorage("username") private var username = ""
+    @AppStorage("password") private var password = ""
+    @AppStorage("macAddress") private var macAddress = ""
+    @AppStorage("loginTypeRaw") private var loginTypeRaw = LoginType.xtream.rawValue
+    
+    @State private var urlInput = ""
+    @State private var usernameInput = ""
+    @State private var passwordInput = ""
+    @State private var macInput = ""
+    @State private var showError = false
+    @State private var errorMessage = ""
+    @State private var selectedLoginType: LoginType = .xtream
+    
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.black.ignoresSafeArea()
+                NebulaBackgroundView(color1: .blue, color2: .purple, color3: .pink, point1: .init(x: 0.2, y: 0.2), point2: .init(x: 0.8, y: 0.8), point3: .init(x: 0.5, y: 0.5))
+                
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 24) {
+                        VStack(spacing: 10) {
+                            Image(systemName: "play.tv.fill")
+                                .font(.system(size: 80))
+                                .foregroundStyle(.white)
+                            
+                            Text("Nebulo")
+                                .font(.largeTitle.bold())
+                                .foregroundStyle(.white)
+                                .minimumScaleFactor(0.5)
+                                .lineLimit(1)
+                        }
+                        .padding(.top, 60)
+                        HStack(spacing: 0) {
+                            ForEach(LoginType.allCases) { type in
+                                Button(action: {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        selectedLoginType = type
+                                        loginTypeRaw = type.rawValue
+                                    }
+                                }) {
+                                    Text(type.rawValue)
+                                        .font(.caption.bold())
+                                        .multilineTextAlignment(.center)
+                                        .lineLimit(2)
+                                        .minimumScaleFactor(0.65)
+                                        .padding(.vertical, 6)
+                                        .padding(.horizontal, 2)
+                                        .frame(maxWidth: .infinity)
+                                        .frame(height: 50)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .fill(selectedLoginType == type ? Color.white : Color.clear)
+                                                .shadow(color: Color.black.opacity(selectedLoginType == type ? 0.2 : 0), radius: 2, x: 0, y: 1)
+                                        )
+                                        .foregroundColor(selectedLoginType == type ? .black : .white)
+                                }
+                            }
+                        }
+                        .padding(4)
+                        .background(Color.white.opacity(0.15))
+                        .cornerRadius(12)
+                        .padding(.horizontal)
+                        VStack(spacing: 16) {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(selectedLoginType == .m3u ? "M3U Playlist URL" : "Portal URL (http://...)")
+                                    .font(.caption)
+                                    .foregroundStyle(.white.opacity(0.8))
+                                    .fixedSize(horizontal: false, vertical: true)
+                                
+                                TextField("Paste URL here...", text: $urlInput)
+                                    .textFieldStyle(.roundedBorder)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                    .keyboardType(.URL)
+                                    .submitLabel(.next)
+                            }
+                            
+                            if selectedLoginType == .xtream {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text("Username")
+                                        .font(.caption).foregroundStyle(.white.opacity(0.8))
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    TextField("Username", text: $usernameInput)
+                                        .textFieldStyle(.roundedBorder)
+                                        .textInputAutocapitalization(.never)
+                                        .autocorrectionDisabled()
+                                }
+                                
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text("Password")
+                                        .font(.caption).foregroundStyle(.white.opacity(0.8))
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    SecureField("Password", text: $passwordInput)
+                                        .textFieldStyle(.roundedBorder)
+                                }
+                                
+                            } else if selectedLoginType == .mac {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text("MAC Address")
+                                        .font(.caption).foregroundStyle(.white.opacity(0.8))
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    
+                                    TextField("00:1A:79...", text: $macInput)
+                                        .textFieldStyle(.roundedBorder)
+                                        .textInputAutocapitalization(.never)
+                                        .autocorrectionDisabled()
+                                        .onChange(of: macInput) { newValue in
+                                            formatMAC(newValue)
+                                        }
+                                }
+                                
+                                Text("We will attempt to fetch the playlist using this MAC.")
+                                    .font(.caption)
+                                    .foregroundStyle(.white.opacity(0.7))
+                                    .multilineTextAlignment(.center)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                
+                            } else {
+                                Text("Enter the full URL to your .m3u file or Stalker portal playlist link.")
+                                    .font(.caption)
+                                    .foregroundStyle(.white.opacity(0.7))
+                                    .multilineTextAlignment(.center)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .padding()
+                        .background(Color.white.opacity(0.1))
+                        .cornerRadius(16)
+                        .padding(.horizontal)
+                        
+                        Button("Login", action: login)
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.large)
+                            .padding()
+                    }
+                    .padding(.bottom, 50)
+                }
+            }
+            .alert("Error", isPresented: $showError) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(errorMessage)
+            }
+            .onChange(of: urlInput) { newValue in
+                if selectedLoginType == .xtream { parseM3ULink(newValue) }
+            }
+            .onAppear {
+                if let saved = LoginType(rawValue: loginTypeRaw) { selectedLoginType = saved }
+                macInput = macAddress
+            }
+        }
+    }
+    
+    func formatMAC(_ input: String) {
+        let clean = input.uppercased().replacingOccurrences(of: "[^0-9A-F]", with: "", options: .regularExpression)
+        var result = ""
+        for (index, char) in clean.enumerated() {
+            if index > 0 && index % 2 == 0 && index < 12 {
+                result.append(":")
+            }
+            if index < 12 { result.append(char) }
+        }
+        macInput = result
+    }
+    
+    func parseM3ULink(_ input: String) {
+        guard input.contains("username=") && input.contains("password="),
+              let components = URLComponents(string: input) else { return }
+        
+        if let user = components.queryItems?.first(where: { $0.name == "username" })?.value { usernameInput = user }
+        if let pass = components.queryItems?.first(where: { $0.name == "password" })?.value { passwordInput = pass }
+        if let scheme = components.scheme, let host = components.host {
+            var base = "\(scheme)://\(host)"
+            if let port = components.port { base += ":\(port)" }
+            urlInput = base
+        }
+    }
+    
+    func login() {
+        var cleanURL = urlInput.trimmingCharacters(in: .whitespaces)
+        if cleanURL.hasSuffix("/") { cleanURL = String(cleanURL.dropLast()) }
+        
+        if selectedLoginType == .xtream {
+            guard !usernameInput.isEmpty, !passwordInput.isEmpty, !cleanURL.isEmpty else {
+                errorMessage = "Fill all fields."; showError = true; return
+            }
+        } else if selectedLoginType == .mac {
+            guard !macInput.isEmpty, macInput.count >= 17, !cleanURL.isEmpty else {
+                errorMessage = "Enter a valid Portal URL and MAC Address."; showError = true; return
+            }
+        } else {
+            guard !cleanURL.isEmpty else {
+                errorMessage = "Enter a valid Playlist URL."; showError = true; return
+            }
+        }
+        
+        xstreamURL = cleanURL
+        username = usernameInput
+        password = passwordInput
+        macAddress = macInput
+        loginTypeRaw = selectedLoginType.rawValue
+        isLoggedIn = true
+    }
+}
+
+struct ClockView: View { @State private var currentTime = Date(); let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect(); var body: some View { Text(currentTime, style: .time).font(.system(size: 32, weight: .bold)).frame(maxWidth: .infinity, alignment: .leading).onReceive(timer) { input in currentTime = input }.foregroundStyle(.white) } }
+
+// MAIN VIEW
+struct MainView: View {
+    @ObservedObject var viewModel: ChannelViewModel
+    @AppStorage("xstreamURL") private var xstreamURL = ""; @AppStorage("username") private var username = ""; @AppStorage("password") private var password = ""; @AppStorage("loginTypeRaw") private var loginTypeRaw = LoginType.xtream.rawValue; @AppStorage("viewMode") private var viewMode = ViewMode.automatic.rawValue; @AppStorage("customAccentHex") private var customAccentHex = "#007AFF"; @AppStorage("nebColor1") private var nebColor1 = "#AF52DE"; @AppStorage("nebColor2") private var nebColor2 = "#007AFF"; @AppStorage("nebColor3") private var nebColor3 = "#FF2D55"; @AppStorage("nebX1") private var nebX1 = 0.2; @AppStorage("nebY1") private var nebY1 = 0.2; @AppStorage("nebX2") private var nebX2 = 0.8; @AppStorage("nebY2") private var nebY2 = 0.3; @AppStorage("nebX3") private var nebX3 = 0.5; @AppStorage("nebY3") private var nebY3 = 0.8
+    @State private var selectedCategory: StreamCategory?
+    @State private var selectedChannel: StreamChannel?
+    @State private var showSettings = false
+    @State private var showMultiView = false
+    
+    let refreshTimer = Timer.publish(every: 300, on: .main, in: .common).autoconnect()
+    var accentColor: Color { Color(hex: customAccentHex) ?? .blue }
+    
+    var body: some View {
+        GeometryReader { geo in
+            let isLandscape = geo.size.width > geo.size.height
+            NavigationStack {
+                ZStack {
+                    NebulaBackgroundView(color1: Color(hex: nebColor1) ?? .purple, color2: Color(hex: nebColor2) ?? .blue, color3: Color(hex: nebColor3) ?? .pink, point1: UnitPoint(x: nebX1, y: nebY1), point2: UnitPoint(x: nebX2, y: nebY2), point3: UnitPoint(x: nebX3, y: nebY3))
+                    VStack(spacing: 0) {
+                        if viewModel.isLoading { ProgressView("Loading Channels...").controlSize(.large).tint(.white) }
+                        else if let error = viewModel.errorMessage { EmptyStateView(title: "Connection Failed", systemImage: "exclamationmark.triangle", description: error); Button("Retry") { Task { let type = LoginType(rawValue: loginTypeRaw) ?? .xtream; await viewModel.loadData(url: xstreamURL, user: username, pass: password, type: type) } } }
+                        else {
+                            if shouldUseSidebar(isLandscape: isLandscape) { SidebarLayout(viewModel: viewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $viewModel.searchText, isLandscape: isLandscape, accentColor: accentColor, playAction: playChannel, showMultiView: $showMultiView, showSettings: $showSettings) }
+                            else { StandardLayout(viewModel: viewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $viewModel.searchText, accentColor: accentColor, playAction: playChannel, showMultiView: $showMultiView, showSettings: $showSettings) }
+                        }
+                    }
+                    if viewModel.activeMultiViewCount > 0 {
+                        MultiViewIndicator(count: viewModel.activeMultiViewCount, accentColor: nil, action: { showMultiView = true })
+                    }
+                }
+                .searchable(text: $viewModel.searchText, prompt: "Search channels")
+                .onChange(of: viewModel.searchText) { newValue in if !newValue.isEmpty && selectedCategory?.id != -3 { selectedCategory = nil } }
+                .sheet(isPresented: $showSettings) { SettingsView(categories: $viewModel.categories, accentColor: accentColor, viewModel: viewModel, onSave: { viewModel.saveCategorySettings() }) }
+                .fullScreenCover(item: $selectedChannel) { channel in CustomVideoPlayerView(channel: channel, viewModel: viewModel) }
+                .fullScreenCover(isPresented: $showMultiView) { MultiViewScreen(viewModel: viewModel, showMultiView: $showMultiView) }
+                .alert("Rename", isPresented: $viewModel.showRenameAlert) { TextField("Name", text: $viewModel.renameInput); Button("Save", action: viewModel.confirmRename); Button("Cancel", role: .cancel) {} }
+                .alert("No Streams Found", isPresented: $viewModel.showNoStreamsAlert) { Button("OK", role: .cancel) { } } message: { Text("No streams were found. Please search for the channel manually.") }
+                .toolbar { ToolbarItem(placement: .topBarTrailing) { HStack { Button(action: { showMultiView = true }) { Image(systemName: "square.grid.2x2.fill").foregroundStyle(.white.opacity(0.8)) }; Button(action: { showSettings = true }) { Image(systemName: "gearshape.fill").foregroundStyle(.white.opacity(0.8)) } } } }
+            }
+        }
+        .task { if viewModel.channels.isEmpty { let type = LoginType(rawValue: loginTypeRaw) ?? .xtream; await viewModel.loadData(url: xstreamURL, user: username, pass: password, type: type) } }
+        .onReceive(refreshTimer) { _ in Task { let type = LoginType(rawValue: loginTypeRaw) ?? .xtream; await viewModel.loadData(url: xstreamURL, user: username, pass: password, type: type) } }
+        .onChange(of: viewModel.channelToAutoPlay) { newChannel in if let channel = newChannel { selectedChannel = channel; viewModel.channelToAutoPlay = nil } }
+        .onChange(of: viewModel.triggerMultiView) { newValue in
+            if newValue {
+                selectedChannel = nil
+                showMultiView = true
+                viewModel.triggerMultiView = false
+            }
+        }
+    }
+    
+    func shouldUseSidebar(isLandscape: Bool) -> Bool { if selectedCategory?.id == -3 { return false }; let mode = ViewMode(rawValue: viewMode) ?? .automatic; switch mode { case .automatic: return isLandscape; case .sidebar: return true; case .standard: return false } }
+    func playChannel(_ channel: StreamChannel) {
+        if viewModel.multiViewModeActive {
+            viewModel.addToMultiView(channel)
+            viewModel.multiViewModeActive = false
+            showMultiView = true
+        } else {
+            viewModel.addToRecent(channel.id)
+            selectedChannel = channel
+        }
+    }
+}
+
+struct MultiViewIndicator: View {
+    let count: Int
+    let accentColor: Color?
+    let action: () -> Void
+    var body: some View {
+        VStack {
+            Spacer()
+            Button(action: action) {
+                HStack {
+                    Image(systemName: "square.grid.2x2.fill")
+                    Text("Multi-View Active: \(count)/4")
+                }
+                .font(.caption.bold())
+                .foregroundColor(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .modifier(GlassEffect(cornerRadius: 20, isSelected: true, accentColor: accentColor))
+            }
+            .padding(.bottom, 20)
+        }
+    }
+}
+
+struct GlassSidebarRow: View {
+    let title: String;
+    var icon: String? = nil
+    let isSelected: Bool;
+    let accentColor: Color
+    var body: some View {
+        HStack {
+            if let icon = icon { Image(systemName: icon) }
+            Text(title)
+        }
+        .font(.callout).fontWeight(isSelected ? .semibold : .regular).foregroundStyle(.white).padding(.horizontal, 12).padding(.vertical, 10).frame(maxWidth: .infinity, alignment: .leading).modifier(GlassEffect(cornerRadius: 10, isSelected: isSelected, accentColor: accentColor)).animation(.easeInOut(duration: 0.2), value: isSelected)
+    }
+}
+
+struct SidebarLayout: View {
+    @ObservedObject var viewModel: ChannelViewModel
+    @Binding var selectedCategory: StreamCategory?
+    @Binding var selectedChannel: StreamChannel?
+    @Binding var searchText: String
+    let isLandscape: Bool
+    let accentColor: Color
+    let playAction: (StreamChannel) -> Void
+    @Binding var showMultiView: Bool
+    @Binding var showSettings: Bool
+    
+    var body: some View {
+        HStack(spacing: 0) {
+            VStack(spacing: 8) {
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 8) {
+                        ClockView()
+                            .padding(.vertical, 20)
+                        
+                        if !searchText.isEmpty {
+                            GlassSidebarRow(title: "Search Results", isSelected: true, accentColor: accentColor)
+                        } else {
+                            Button(action: { selectedCategory = StreamCategory(id: -2, name: "Recently Watched") }) {
+                                GlassSidebarRow(title: "Recently Watched", isSelected: selectedCategory?.id == -2, accentColor: accentColor)
+                            }.buttonStyle(.plain)
+                            Button(action: { selectedCategory = StreamCategory(id: -4, name: "Favorites") }) {
+                                GlassSidebarRow(title: "Favorites", isSelected: selectedCategory?.id == -4, accentColor: accentColor)
+                            }.buttonStyle(.plain)
+                            Button(action: { selectedCategory = StreamCategory(id: -3, name: "Sports Center") }) {
+                                GlassSidebarRow(title: "Sports Center", isSelected: selectedCategory?.id == -3, accentColor: accentColor)
+                            }.buttonStyle(.plain)
+                            Button(action: { showMultiView = true }) {
+                                GlassSidebarRow(title: "Multi-View", isSelected: false, accentColor: accentColor)
+                            }.buttonStyle(.plain)
+                            Button(action: { selectedCategory = StreamCategory(id: -1, name: "All Channels") }) {
+                                GlassSidebarRow(title: "All Channels", isSelected: selectedCategory?.id == -1, accentColor: accentColor)
+                            }.buttonStyle(.plain)
+                            
+                            Divider().background(Color.white.opacity(0.3)).padding(.vertical, 8)
+                            ForEach(viewModel.categories.filter { !$0.isHidden }) { category in
+                                Button(action: { selectedCategory = category }) {
+                                    GlassSidebarRow(title: category.name, isSelected: selectedCategory?.id == category.id, accentColor: accentColor)
+                                }
+                                .buttonStyle(.plain)
+                                .contextMenu {
+                                    Button { viewModel.triggerRenameCategory(category) } label: { Label("Rename Category", systemImage: "pencil") }
+                                    Button { viewModel.hideCategory(category.id) } label: { Label("Hide Category", systemImage: "eye.slash") }
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                }
+            }
+            .frame(width: isLandscape ? 260 : 170)
+            .background(Color.clear)
+            
+            Divider()
+                .overlay(Color.white.opacity(0.2))
+            ScrollView(showsIndicators: false) {
+                LazyVStack(spacing: 0) {
+                    if selectedCategory?.id == -3 {
+                        SportsHubView(viewModel: viewModel, accentColor: accentColor, playAction: playAction)
+                    } else {
+                        let channels = getChannelsToShow()
+                        if channels.isEmpty {
+                            EmptyStateView(title: "No Channels", systemImage: "tv.slash", description: "Select a category.")
+                        } else {
+                            ForEach(channels) { channel in
+                                ChannelRow(
+                                    channel: channel,
+                                    isFavorite: viewModel.favoriteIDs.contains(channel.id),
+                                    accentColor: accentColor,
+                                    isCompact: !isLandscape,
+                                    playAction: { playAction(channel) },
+                                    toggleFav: { viewModel.toggleFavorite(channel.id) }
+                                )
+                                .equatable()
+                                .contextMenu {
+                                    Button { viewModel.triggerRenameChannel(channel) } label: { Label("Rename", systemImage: "pencil") }
+                                    Button { viewModel.hideChannel(channel.id) } label: { Label("Hide Channel", systemImage: "eye.slash") }
+                                    if selectedCategory?.id == -2 || viewModel.recentIDs.contains(channel.id) {
+                                        Button(role: .destructive) { viewModel.removeFromRecent(channel.id) } label: { Label("Remove from Recents", systemImage: "clock.badge.xmark") }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    func getChannelsToShow() -> [StreamChannel] {
+        if !searchText.isEmpty { return viewModel.filteredChannels }
+        guard let cat = selectedCategory else { return [] }
+        if cat.id == -2 {
+            return viewModel.recentIDs.compactMap { id in viewModel.channels.first(where: { $0.id == id }) }
+        }
+        if cat.id == -4 {
+            return viewModel.channels.filter { viewModel.favoriteIDs.contains($0.id) }
+        }
+        if cat.id == -1 {
+            return viewModel.channels.filter { !viewModel.hiddenIDs.contains($0.id) }
+        }
+        return viewModel.channels.filter { $0.categoryID == cat.id && !viewModel.hiddenIDs.contains($0.id) }
+    }
+}
+
+struct StandardLayout: View {
+    @ObservedObject var viewModel: ChannelViewModel
+    @Binding var selectedCategory: StreamCategory?
+    @Binding var selectedChannel: StreamChannel?
+    @Binding var searchText: String
+    let accentColor: Color
+    let playAction: (StreamChannel) -> Void
+    @Binding var showMultiView: Bool
+    @Binding var showSettings: Bool
+    
+    var body: some View {
+        if selectedCategory?.id == -3 {
+            SportsHubView(viewModel: viewModel, accentColor: accentColor, playAction: playAction, onBack: { selectedCategory = nil })
+                .transition(.move(edge: .trailing))
+        } else {
+            ScrollView(showsIndicators: false) {
+                LazyVStack(spacing: 16) {
+                    if !searchText.isEmpty {
+                        ForEach(viewModel.filteredChannels) { channel in
+                            ChannelRow(
+                                channel: channel,
+                                isFavorite: viewModel.favoriteIDs.contains(channel.id),
+                                accentColor: accentColor,
+                                playAction: { playAction(channel) },
+                                toggleFav: { viewModel.toggleFavorite(channel.id) }
+                            )
+                            .equatable()
+                            .contextMenu {
+                                Button { viewModel.triggerRenameChannel(channel) } label: { Label("Rename", systemImage: "pencil") }
+                                Button { viewModel.hideChannel(channel.id) } label: { Label("Hide", systemImage: "eye.slash") }
+                            }
+                        }
+                    } else {
+                        if !viewModel.recentIDs.isEmpty {
+                            let recentChannels = viewModel.recentIDs.compactMap { id in viewModel.channels.first(where: { $0.id == id }) }
+                            if !recentChannels.isEmpty {
+                                sectionHeader(title: "Recently Watched", channels: recentChannels)
+                                HorizontalPreviewList(
+                                    channels: recentChannels,
+                                    isRecent: true,
+                                    accentColor: accentColor,
+                                    playAction: playAction,
+                                    promptRenameChannel: viewModel.triggerRenameChannel,
+                                    hideChannel: viewModel.hideChannel,
+                                    removeFromRecent: viewModel.removeFromRecent
+                                )
+                            }
+                        }
+                        
+                        HStack(spacing: 16) {
+                            Button(action: { selectedCategory = StreamCategory(id: -3, name: "Sports Center") }) {
+                                SquareCategoryCard(title: "Sports Center", icon: "sportscourt.fill", color: .green, accentColor: accentColor)
+                            }
+                            .buttonStyle(.plain)
+                            
+                            let favs = viewModel.channels.filter { viewModel.favoriteIDs.contains($0.id) }
+                            NavigationLink(destination: CategoryDetailView(title: "Favorites", channels: favs, accentColor: accentColor, playAction: playAction, toggleFav: viewModel.toggleFavorite, promptRename: viewModel.triggerRenameChannel, hideChannel: viewModel.hideChannel, favoriteIDs: viewModel.favoriteIDs, viewModel: viewModel, showMultiView: $showMultiView, showSettings: $showSettings)) {
+                                SquareCategoryCard(title: "Favorites", icon: "star.fill", color: .yellow, accentColor: accentColor)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(favs.isEmpty)
+                            .opacity(favs.isEmpty ? 0.6 : 1.0)
+                        }
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+                        
+                        Button(action: { showMultiView = true }) {
+                            CategoryCard(title: "Multi View", icon: "square.grid.2x2.fill", color: .purple)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal)
+                        
+                        NavigationLink(destination: CategoryDetailView(title: "All Channels", channels: viewModel.channels.filter { !viewModel.hiddenIDs.contains($0.id) }, accentColor: accentColor, playAction: playAction, toggleFav: viewModel.toggleFavorite, promptRename: viewModel.triggerRenameChannel, hideChannel: viewModel.hideChannel, favoriteIDs: viewModel.favoriteIDs, viewModel: viewModel, showMultiView: $showMultiView, showSettings: $showSettings)) {
+                            CategoryCard(title: "All Channels", icon: "tv", color: .blue)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal)
+                        
+                        ForEach(viewModel.categories.filter { !$0.isHidden }) { category in
+                            CategoryRowItem(category: category, viewModel: viewModel, accentColor: accentColor, playAction: playAction, showMultiView: $showMultiView, showSettings: $showSettings)
+                        }
+                    }
+                }
+                .padding(.vertical)
+            }
+            .background(Color.clear)
+        }
+    }
+    
+    func sectionHeader(title: String, channels: [StreamChannel]) -> some View {
+        NavigationLink(destination: CategoryDetailView(title: title, channels: channels, accentColor: accentColor, playAction: playAction, toggleFav: viewModel.toggleFavorite, promptRename: viewModel.triggerRenameChannel, hideChannel: viewModel.hideChannel, favoriteIDs: viewModel.favoriteIDs, viewModel: viewModel, showMultiView: $showMultiView, showSettings: $showSettings)) {
+            HStack {
+                Text(title).font(.title2.bold()).foregroundStyle(.white)
+                Spacer()
+                Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.white.opacity(0.7))
+            }
+            .padding(.horizontal)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct CategoryRowItem: View {
+    let category: StreamCategory
+    @ObservedObject var viewModel: ChannelViewModel
+    let accentColor: Color
+    let playAction: (StreamChannel) -> Void
+    @Binding var showMultiView: Bool
+    @Binding var showSettings: Bool
+    
+    var body: some View {
+        NavigationLink(destination: CategoryDetailView(title: category.name, channels: viewModel.channels.filter { $0.categoryID == category.id && !viewModel.hiddenIDs.contains($0.id) }, accentColor: accentColor, playAction: playAction, toggleFav: viewModel.toggleFavorite, promptRename: viewModel.triggerRenameChannel, hideChannel: viewModel.hideChannel, favoriteIDs: viewModel.favoriteIDs, viewModel: viewModel, showMultiView: $showMultiView, showSettings: $showSettings)) {
+            CategoryCard(title: category.name, color: .secondary)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal)
+        .contextMenu {
+            Button { viewModel.triggerRenameCategory(category) } label: { Label("Rename Category", systemImage: "pencil") }
+            Button { viewModel.hideCategory(category.id) } label: { Label("Hide Category", systemImage: "eye.slash") }
+        }
+    }
+}
+
+struct HorizontalPreviewList: View {
+    let channels: [StreamChannel]; let isRecent: Bool; let accentColor: Color; let playAction: (StreamChannel) -> Void; let promptRenameChannel: (StreamChannel) -> Void; let hideChannel: (Int) -> Void; let removeFromRecent: (Int) -> Void
+    var body: some View { ScrollView(.horizontal, showsIndicators: false) { LazyHStack(spacing: 16) { ForEach(channels) { channel in Button(action: { playAction(channel) }) { ZStack { CachedAsyncImage(urlString: channel.icon ?? "", size: CGSize(width: 200, height: 112)).blur(radius: 20); CachedAsyncImage(urlString: channel.icon ?? "", size: nil).frame(height: 60) }.frame(width: 200, height: 112).modifier(GlassEffect(cornerRadius: 12, isSelected: false, accentColor: nil)) }.buttonStyle(.plain).contextMenu { Button { promptRenameChannel(channel) } label: { Label("Rename", systemImage: "pencil") }; Button { hideChannel(channel.id) } label: { Label("Hide Channel", systemImage: "eye.slash") }; if isRecent { Button(role: .destructive) { removeFromRecent(channel.id) } label: { Label("Remove from Recents", systemImage: "clock.badge.xmark") } } } } }.padding(.horizontal) }.frame(height: 130) }
+}
+
+struct SquareCategoryCard: View { let title: String; let icon: String; let color: Color; let accentColor: Color; var body: some View { VStack(alignment: .center, spacing: 12) { Image(systemName: icon).font(.system(size: 40)).foregroundColor(color); Text(title).font(.headline).fontWeight(.bold).foregroundStyle(.white).multilineTextAlignment(.center) }.frame(maxWidth: .infinity).frame(height: 140).modifier(GlassEffect(cornerRadius: 16, isSelected: false, accentColor: accentColor)).overlay(RoundedRectangle(cornerRadius: 16).stroke(LinearGradient(colors: [.white.opacity(0.3), .clear], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)) } }
+struct CategoryCard: View, Equatable { let title: String; var icon: String? = nil; var color: Color; static func == (lhs: CategoryCard, rhs: CategoryCard) -> Bool { return lhs.title == rhs.title && lhs.icon == rhs.icon && lhs.color == rhs.color }; var body: some View { HStack { if let icon = icon { Image(systemName: icon).foregroundColor(color).frame(width: 30) }; Text(title).font(.headline).lineLimit(1).foregroundStyle(.white); Spacer(); Image(systemName: "chevron.right").font(.caption).foregroundStyle(.white.opacity(0.6)) }.padding().modifier(GlassEffect(cornerRadius: 12, isSelected: true, accentColor: nil)) } }
+struct ChannelRow: View, Equatable { let channel: StreamChannel; let isFavorite: Bool; let accentColor: Color; var isCompact: Bool = false; let playAction: () -> Void; let toggleFav: () -> Void; static func == (lhs: ChannelRow, rhs: ChannelRow) -> Bool { return lhs.channel == rhs.channel && lhs.isFavorite == rhs.isFavorite && lhs.accentColor == rhs.accentColor && lhs.isCompact == rhs.isCompact }; var body: some View { Button(action: playAction) { HStack(spacing: 12) { CachedAsyncImage(urlString: channel.icon ?? "", size: CGSize(width: isCompact ? 40 : 50, height: isCompact ? 40 : 50)).frame(width: isCompact ? 40 : 50, height: isCompact ? 40 : 50).cornerRadius(8); Text(channel.name).font(isCompact ? .caption : .body).lineLimit(isCompact ? 2 : 1).minimumScaleFactor(0.9).foregroundStyle(.white); Spacer(); Button(action: toggleFav) { Image(systemName: isFavorite ? "star.fill" : "star").foregroundStyle(isFavorite ? accentColor : .gray) }.buttonStyle(.plain) }.padding(.horizontal).padding(.vertical, isCompact ? 8 : 8).contentShape(Rectangle()) }.buttonStyle(.plain).overlay(Divider().padding(.leading, isCompact ? 60 : 70).opacity(0.2), alignment: .bottom) } }
+struct ScoreRow: View, Equatable { let game: ESPNEvent; static func == (lhs: ScoreRow, rhs: ScoreRow) -> Bool { lhs.game == rhs.game }; var body: some View { HStack(alignment: .center, spacing: 0) { if let away = game.awayCompetitor { TeamColumn(team: away.team, score: away.score ?? "0", align: .trailing).frame(maxWidth: .infinity) }; VStack(spacing: 6) { Text(game.status.type.detail.uppercased()).font(.caption2).fontWeight(.bold).foregroundStyle(.gray).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true); Capsule().fill(Color.white.opacity(0.1)).frame(width: 2, height: 30) }.frame(width: 90); if let home = game.homeCompetitor { TeamColumn(team: home.team, score: home.score ?? "0", align: .leading).frame(maxWidth: .infinity) } }.padding(.vertical, 30).padding(.horizontal, 16).background(Color.black.opacity(0.4)).clipShape(RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.1), lineWidth: 1)) } }
+struct TeamColumn: View { let team: ESPNTeam; let score: String; let align: HorizontalAlignment; var body: some View { HStack(spacing: 12) { if align == .trailing { VStack(spacing: 6) { CachedAsyncImage(urlString: team.logo ?? "", size: CGSize(width: 40, height: 40)).frame(width: 40, height: 40); Text(team.shortDisplayName ?? team.abbreviation ?? "Team").font(.caption).fontWeight(.bold).foregroundStyle(.white).multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.8).fixedSize(horizontal: false, vertical: true) }.frame(maxWidth: .infinity, alignment: .center); Text(score).font(.system(size: 32, weight: .bold, design: .rounded)).foregroundStyle(.white).frame(width: 65, alignment: .trailing).minimumScaleFactor(0.5).layoutPriority(1) } else { Text(score).font(.system(size: 32, weight: .bold, design: .rounded)).foregroundStyle(.white).frame(width: 65, alignment: .leading).minimumScaleFactor(0.5).layoutPriority(1); VStack(spacing: 6) { CachedAsyncImage(urlString: team.logo ?? "", size: CGSize(width: 40, height: 40)).frame(width: 40, height: 40); Text(team.shortDisplayName ?? team.abbreviation ?? "Team").font(.caption).fontWeight(.bold).foregroundStyle(.white).multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.8).fixedSize(horizontal: false, vertical: true) }.frame(maxWidth: .infinity, alignment: .center) } } } }
+struct SportSelectorView: View { @Binding var selectedSport: SportType; let action: () -> Void; var body: some View { ScrollViewReader { proxy in ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 12) { ForEach(SportType.allCases) { sport in Button(action: { withAnimation { selectedSport = sport }; action() }) { Text(sport.rawValue).font(.caption.bold()).padding(.vertical, 8).padding(.horizontal, 16).background(selectedSport == sport ? Color.white : Color.white.opacity(0.1)).foregroundColor(selectedSport == sport ? .black : .white).clipShape(Capsule()) }.id(sport) } }.padding(.horizontal).padding(.vertical, 10) }.onChange(of: selectedSport) { newSport in withAnimation { proxy.scrollTo(newSport, anchor: .center) } } } } }
+
+struct SportsHubView: View { @ObservedObject var viewModel: ChannelViewModel; let accentColor: Color; let playAction: (StreamChannel) -> Void; var onBack: (() -> Void)? = nil; @StateObject private var scoreViewModel = ScoreViewModel(); @AppStorage("nebColor1") private var nebColor1 = "#AF52DE"; @AppStorage("nebColor2") private var nebColor2 = "#007AFF"; @AppStorage("nebColor3") private var nebColor3 = "#FF2D55"; @AppStorage("nebX1") private var nebX1 = 0.2; @AppStorage("nebY1") private var nebY1 = 0.2; @AppStorage("nebX2") private var nebX2 = 0.8; @AppStorage("nebY2") private var nebY2 = 0.3; @AppStorage("nebX3") private var nebX3 = 0.5; @AppStorage("nebY3") private var nebY3 = 0.8; var body: some View { ZStack { NebulaBackgroundView(color1: Color(hex: nebColor1) ?? .purple, color2: Color(hex: nebColor2) ?? .blue, color3: Color(hex: nebColor3) ?? .pink, point1: UnitPoint(x: nebX1, y: nebY1), point2: UnitPoint(x: nebX2, y: nebY2), point3: UnitPoint(x: nebX3, y: nebY3)); VStack(spacing: 0) { HStack { if let onBack = onBack { Button(action: onBack) { HStack(spacing: 4) { Image(systemName: "chevron.left"); Text("Back") }.foregroundStyle(.white) } }; Spacer(); Button(action: { Task { await scoreViewModel.fetchScores() } }) { Image(systemName: "arrow.clockwise").foregroundStyle(.white.opacity(0.7)) } }.padding(); SportSelectorView(selectedSport: $scoreViewModel.selectedSport) {}; TabView(selection: $scoreViewModel.selectedSport) { ForEach(SportType.allCases) { sport in let games = scoreViewModel.gamesData[sport] ?? []; ScrollView(showsIndicators: false) { if !viewModel.searchText.isEmpty { LazyVStack(spacing: 0) { ForEach(viewModel.filteredChannels) { channel in ChannelRow(channel: channel, isFavorite: viewModel.favoriteIDs.contains(channel.id), accentColor: accentColor, playAction: { playAction(channel) }, toggleFav: { viewModel.toggleFavorite(channel.id) }) } } } else { VStack(spacing: 20) { if games.isEmpty && !scoreViewModel.isLoading { EmptyStateView(title: "No Games", systemImage: "sportscourt", description: "No games found for today.").frame(height: 300) } else { LazyVStack(spacing: 12) { if sport == .soccer { let sections = scoreViewModel.getSoccerSections(from: games); ForEach(sections, id: \.league) { section in Section(header: HStack { Text(section.league.uppercased()).font(.caption.bold()).foregroundStyle(.white.opacity(0.7)); Spacer() }.padding(.top)) { ForEach(section.games) { game in Button(action: { viewModel.runSmartSearch(home: game.homeCompetitor?.team.shortDisplayName ?? "", away: game.awayCompetitor?.team.shortDisplayName ?? "", sport: sport, network: game.broadcastName) }) { ScoreRow(game: game).equatable() }.buttonStyle(.plain) } } } } else { ForEach(games) { game in Button(action: { viewModel.runSmartSearch(home: game.homeCompetitor?.team.shortDisplayName ?? "", away: game.awayCompetitor?.team.shortDisplayName ?? "", sport: sport, network: game.broadcastName) }) { ScoreRow(game: game).equatable() }.buttonStyle(.plain) } } }.padding(.horizontal).padding(.bottom, 40) } } } }.tag(sport) } }.tabViewStyle(.page(indexDisplayMode: .never)).onChange(of: scoreViewModel.selectedSport) { _ in Task { await scoreViewModel.fetchScores() } } } }.navigationTitle("Sports Center").navigationBarTitleDisplayMode(.inline).task { await scoreViewModel.fetchScores() }.searchable(text: $viewModel.searchText, placement: .navigationBarDrawer(displayMode: .always)).onChange(of: viewModel.searchText) { newValue in if newValue.isEmpty { viewModel.clearSearch() } } } }
+
+struct CategoryDetailView: View { let title: String; let channels: [StreamChannel]; let accentColor: Color; let playAction: (StreamChannel) -> Void; let toggleFav: (Int) -> Void; let promptRename: (StreamChannel) -> Void; let hideChannel: (Int) -> Void; let favoriteIDs: Set<Int>; @ObservedObject var viewModel: ChannelViewModel; @Binding var showMultiView: Bool; @Binding var showSettings: Bool; @AppStorage("nebColor1") private var nebColor1 = "#AF52DE"; @AppStorage("nebColor2") private var nebColor2 = "#007AFF"; @AppStorage("nebColor3") private var nebColor3 = "#FF2D55"; @AppStorage("nebX1") private var nebX1 = 0.2; @AppStorage("nebY1") private var nebY1 = 0.2; @AppStorage("nebX2") private var nebX2 = 0.8; @AppStorage("nebY2") private var nebY2 = 0.3; @AppStorage("nebX3") private var nebX3 = 0.5; @AppStorage("nebY3") private var nebY3 = 0.8; var body: some View { ZStack { NebulaBackgroundView(color1: Color(hex: nebColor1) ?? .purple, color2: Color(hex: nebColor2) ?? .blue, color3: Color(hex: nebColor3) ?? .pink, point1: UnitPoint(x: nebX1, y: nebY1), point2: UnitPoint(x: nebX2, y: nebY2), point3: UnitPoint(x: nebX3, y: nebY3)); ScrollView(showsIndicators: false) { LazyVStack(spacing: 0) { if !viewModel.searchText.isEmpty { ForEach(viewModel.filteredChannels) { channel in ChannelRow(channel: channel, isFavorite: favoriteIDs.contains(channel.id), accentColor: accentColor, playAction: { playAction(channel) }, toggleFav: { toggleFav(channel.id) }).equatable().contextMenu { Button { promptRename(channel) } label: { Label("Rename", systemImage: "pencil") }; Button { hideChannel(channel.id) } label: { Label("Hide", systemImage: "eye.slash") } } } } else { ForEach(channels) { channel in ChannelRow(channel: channel, isFavorite: favoriteIDs.contains(channel.id), accentColor: accentColor, playAction: { playAction(channel) }, toggleFav: { toggleFav(channel.id) }).equatable().contextMenu { Button { promptRename(channel) } label: { Label("Rename", systemImage: "pencil") }; Button { hideChannel(channel.id) } label: { Label("Hide", systemImage: "eye.slash") } } } } } }; if viewModel.activeMultiViewCount > 0 { MultiViewIndicator(count: viewModel.activeMultiViewCount, accentColor: nil, action: { showMultiView = true }) } }.navigationTitle(title).navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement: .topBarTrailing) { HStack { Button(action: { showMultiView = true }) { Image(systemName: "square.grid.2x2.fill").foregroundStyle(.white.opacity(0.8)) }; Button(action: { showSettings = true }) { Image(systemName: "gearshape.fill").foregroundStyle(.white.opacity(0.8)) } } } }.searchable(text: $viewModel.searchText, placement: .navigationBarDrawer(displayMode: .always)).alert("Rename", isPresented: $viewModel.showRenameAlert) { TextField("Name", text: $viewModel.renameInput); Button("Save", action: viewModel.confirmRename); Button("Cancel", role: .cancel) {} } } }
+
+// REFACTORED SETTINGS VIEW
+struct SettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("isLoggedIn") private var isLoggedIn = false
+    @AppStorage("viewMode") private var viewMode = ViewMode.automatic.rawValue
+    @AppStorage("customAccentHex") private var customAccentHex = "#007AFF"
+    @AppStorage("appTheme") private var appTheme = AppTheme.system.rawValue
+    
+    @Binding var categories: [StreamCategory]
+    let accentColor: Color
+    @ObservedObject var viewModel: ChannelViewModel
+    let onSave: () -> Void
+    
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(header: Text("Appearance")) {
+                    Picker("Appearance", selection: $appTheme) {
+                        ForEach(AppTheme.allCases) { theme in Text(theme.rawValue).tag(theme.rawValue) }
+                    }.pickerStyle(.segmented)
+                    
+                    ColorPicker("App Accent Color", selection: Binding(get: { Color(hex: customAccentHex) ?? .blue }, set: { if let h = $0.toHex() { customAccentHex = h } }))
+                    
+                    Picker("View Mode", selection: $viewMode) {
+                        ForEach(ViewMode.allCases, id: \.rawValue) { Text($0.rawValue).tag($0.rawValue) }
+                    }.pickerStyle(.segmented)
+                }
+                Section(header: Text("Content Management")) {
+                    NavigationLink(destination: CategoriesManagerView(categories: $categories, accentColor: accentColor, viewModel: viewModel)) {
+                        HStack {
+                            Image(systemName: "list.bullet.rectangle.portrait.fill")
+                                .foregroundColor(accentColor)
+                            Text("Manage Categories")
+                        }
+                    }
+                    
+                    NavigationLink(destination: HiddenChannelsSettingsView(viewModel: viewModel)) {
+                        HStack {
+                            Image(systemName: "eye.slash.fill")
+                                .foregroundColor(.red)
+                            Text("Hidden Channels")
+                            Spacer()
+                            if !viewModel.hiddenIDs.isEmpty {
+                                Text("\(viewModel.hiddenIDs.count)")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+                
+                NebulaSettingsSection()
+                
+                Section(header: Text("Support & Community")) {
+                    Link(destination: URL(string: "https://discord.gg/6mNmXvdwh3")!) {
+                        HStack {
+                            Image(systemName: "bubble.left.and.bubble.right.fill").foregroundColor(Color(hex: "#5865F2") ?? .blue)
+                            Text("Join our Discord").foregroundColor(.primary)
+                            Spacer()
+                            Image(systemName: "arrow.up.right").font(.caption).foregroundColor(.gray)
+                        }
+                    }
+                }
+                
+                Section {
+                    Button("Logout", role: .destructive) {
+                        viewModel.reset()
+                        isLoggedIn = false
+                    }
+                }
+            }
+            .scrollIndicators(.hidden)
+            .navigationTitle("Settings")
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { onSave(); dismiss() } } }
+        }
+    }
+}
+struct CategoriesManagerView: View {
+    @Binding var categories: [StreamCategory]
+    let accentColor: Color
+    @ObservedObject var viewModel: ChannelViewModel
+    @State private var categoryToRename: StreamCategory?
+    @State private var localRenameName = ""
+    @State private var showLocalRenameAlert = false
+    
+    var body: some View {
+        List {
+            Section {
+                Button(action: { categories.indices.forEach { categories[$0].isHidden = false } }) {
+                    Label("Show All Categories", systemImage: "eye")
+                }
+                Button(action: { categories.indices.forEach { categories[$0].isHidden = true } }) {
+                    Label("Hide All Categories", systemImage: "eye.slash")
+                }
+            }
+            
+            Section(header: Text("Drag to Reorder"), footer: Text("Tap the eye icon to toggle visibility. Long press to rename.")) {
+                ForEach($categories) { $category in
+                    HStack {
+                        Button(action: { withAnimation { category.isHidden.toggle() } }) {
+                            Image(systemName: category.isHidden ? "eye.slash" : "eye")
+                                .foregroundColor(category.isHidden ? .gray : accentColor)
+                                .frame(width: 30)
+                        }
+                        .buttonStyle(.plain)
+                        Text(category.name)
+                            .foregroundStyle(category.isHidden ? .secondary : .primary)
+                            .strikethrough(category.isHidden)
+                        
+                        Spacer()
+                    }
+                    .contextMenu {
+                        Button {
+                            categoryToRename = category
+                            localRenameName = category.name
+                            showLocalRenameAlert = true
+                        } label: { Label("Rename", systemImage: "pencil") }
+                    }
+                }
+                .onMove { source, dest in
+                    categories.move(fromOffsets: source, toOffset: dest)
+                    for i in 0..<categories.count { categories[i].order = i }
+                }
+            }
+        }
+        .environment(\.editMode, .constant(.active))
+        .navigationTitle("Categories")
+        .alert("Rename Category", isPresented: $showLocalRenameAlert) {
+            TextField("Name", text: $localRenameName)
+            Button("Save") { if let cat = categoryToRename { viewModel.renameCategory(id: cat.id, newName: localRenameName) } }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+}
+struct HiddenChannelsSettingsView: View {
+    @ObservedObject var viewModel: ChannelViewModel
+    @State private var searchText = ""
+    var hiddenChannels: [StreamChannel] {
+        let hidden = viewModel.channels.filter { viewModel.hiddenIDs.contains($0.id) }
+        if searchText.isEmpty { return hidden }
+        return hidden.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+    }
+    
+    var body: some View {
+        List {
+            if viewModel.hiddenIDs.isEmpty {
+                Section {
+                    Text("No hidden channels")
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding()
+                }
+            } else {
+                Section(header: Text("Hidden Channels (\(hiddenChannels.count))")) {
+                    ForEach(hiddenChannels) { channel in
+                        HStack {
+                            CachedAsyncImage(urlString: channel.icon ?? "", size: CGSize(width: 30, height: 30))
+                                .frame(width: 30, height: 30)
+                                .cornerRadius(4)
+                            
+                            Text(channel.name)
+                                .lineLimit(1)
+                            
+                            Spacer()
+                            
+                            Button("Unhide") {
+                                withAnimation {
+                                    viewModel.unhideChannel(channel.id)
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.blue)
+                            .controlSize(.small)
+                        }
+                    }
+                }
+            }
+        }
+        .searchable(text: $searchText, prompt: "Search hidden channels")
+        .navigationTitle("Hidden Channels")
+        .toolbar {
+            if !viewModel.hiddenIDs.isEmpty {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Unhide All") {
+                        withAnimation {
+                            viewModel.hiddenIDs.forEach { viewModel.unhideChannel($0) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct NebulaSettingsSection: View {
+    @AppStorage("nebColor1") private var nebColor1 = "#AF52DE"; @AppStorage("nebColor2") private var nebColor2 = "#007AFF"; @AppStorage("nebColor3") private var nebColor3 = "#FF2D55"; @AppStorage("nebX1") private var nebX1 = 0.2; @AppStorage("nebY1") private var nebY1 = 0.2; @AppStorage("nebX2") private var nebX2 = 0.8; @AppStorage("nebY2") private var nebY2 = 0.3; @AppStorage("nebX3") private var nebX3 = 0.5; @AppStorage("nebY3") private var nebY3 = 0.8;
+    
+    var body: some View {
+        Section(header: Text("Interactive Nebula Editor")) {
+            HStack {
+                Spacer()
+                ZStack {
+                    NebulaBackgroundView(color1: Color(hex: nebColor1) ?? .purple, color2: Color(hex: nebColor2) ?? .blue, color3: Color(hex: nebColor3) ?? .pink, point1: UnitPoint(x: nebX1, y: nebY1), point2: UnitPoint(x: nebX2, y: nebY2), point3: UnitPoint(x: nebX3, y: nebY3))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.2), lineWidth: 1))
+                    GeometryReader { geo in
+                        DragHandle(x: $nebX1, y: $nebY1, color: Color(hex: nebColor1) ?? .purple, size: geo.size)
+                        DragHandle(x: $nebX2, y: $nebY2, color: Color(hex: nebColor2) ?? .blue, size: geo.size)
+                        DragHandle(x: $nebX3, y: $nebY3, color: Color(hex: nebColor3) ?? .pink, size: geo.size)
+                    }
+                }.frame(width: 200, height: 200 * (16/9)).padding(.vertical, 10)
+                Spacer()
+            }.listRowBackground(Color.clear)
+            
+            ColorPicker("Aura 1 Color", selection: Binding(get: { Color(hex: nebColor1) ?? .blue }, set: { if let h = $0.toHex() { nebColor1 = h } }))
+            ColorPicker("Aura 2 Color", selection: Binding(get: { Color(hex: nebColor2) ?? .blue }, set: { if let h = $0.toHex() { nebColor2 = h } }))
+            ColorPicker("Aura 3 Color", selection: Binding(get: { Color(hex: nebColor3) ?? .blue }, set: { if let h = $0.toHex() { nebColor3 = h } }))
+            
+            Button("Reset to Defaults") {
+                nebColor1 = "#AF52DE"; nebColor2 = "#007AFF"; nebColor3 = "#FF2D55"
+                nebX1 = 0.2; nebY1 = 0.2; nebX2 = 0.8; nebY2 = 0.3; nebX3 = 0.5; nebY3 = 0.8
+            }.foregroundStyle(.red)
+        }
+    }
+}
+
+struct DragHandle: View { @Binding var x: Double; @Binding var y: Double; let color: Color; let size: CGSize; var body: some View { Circle().fill(color).frame(width: 30, height: 30).overlay(Circle().stroke(Color.white, lineWidth: 2)).shadow(radius: 4).position(x: x * size.width, y: y * size.height).gesture(DragGesture().onChanged { value in x = min(max(value.location.x / size.width, 0), 1); y = min(max(value.location.y / size.height, 0), 1) }) } }
+
+// VIDEO PLAYER (WITH PIP, SEEK & LIVE)
+struct CustomVideoPlayerView: View {
+    let channel: StreamChannel
+    var viewModel: ChannelViewModel? = nil
+    @Environment(\.dismiss) var dismiss
+    
+    @State private var player = AVPlayer()
+    @State private var isPlaying = true
+    @State private var showControls = true
+    @State private var offset: CGSize = .zero
+    @State private var timer: AnyCancellable?
+    @State private var pipAdapter: PipAdapter?
+    @State private var resolutionLabel: String = ""
+    @State private var sizeObserver: NSKeyValueObservation?
+    @State private var isAtLiveEdge = true
+    @State private var liveChecker: Timer?
+    
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            PlayerViewRepresentable(player: player, pipAdapter: $pipAdapter)
+                .ignoresSafeArea()
+            Color.black.opacity(0.001)
+                .ignoresSafeArea()
+                .onTapGesture { toggleControls() }
+            if showControls {
+                ZStack {
+                    Color.black.opacity(0.4)
+                        .ignoresSafeArea()
+                        .onTapGesture { toggleControls() }
+                    HStack(spacing: 50) {
+                        Button(action: { seek(by: -10) }) {
+                            Image(systemName: "gobackward.10")
+                                .font(.system(size: 35))
+                                .foregroundColor(.white)
+                        }
+                        Button(action: { togglePlay() }) {
+                            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                                .font(.system(size: 60))
+                                .foregroundColor(.white)
+                                .shadow(radius: 10)
+                        }
+                        Button(action: { seek(by: 10) }) {
+                            Image(systemName: "goforward.10")
+                                .font(.system(size: 35))
+                                .foregroundColor(isAtLiveEdge ? .white.opacity(0.3) : .white)
+                        }
+                        .disabled(isAtLiveEdge)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                    .allowsHitTesting(true)
+                    VStack {
+                        HStack(alignment: .center) {
+                            Button(action: { dismiss() }) {
+                                Image(systemName: "xmark")
+                                    .font(.title3.bold())
+                                    .foregroundColor(.white)
+                                    .padding(12)
+                                    .background(Material.ultraThinMaterial)
+                                    .clipShape(Circle())
+                            }
+                            
+                            Spacer()
+                            if let vm = viewModel {
+                                Button(action: { vm.triggerMultiViewFromPlayer(with: channel) }) {
+                                    Image(systemName: "square.grid.2x2.fill")
+                                        .font(.title3)
+                                        .foregroundColor(.white)
+                                        .padding(12)
+                                        .background(Material.ultraThinMaterial)
+                                        .clipShape(Circle())
+                                }
+                            }
+                            AirPlayButton().frame(width: 44, height: 44)
+                            if pipAdapter?.isPipPossible == true {
+                                Button(action: {
+                                    if pipAdapter?.isPipActive == true { pipAdapter?.stopPip() }
+                                    else { pipAdapter?.startPip() }
+                                }) {
+                                    Image(systemName: pipAdapter?.isPipActive == true ? "pip.exit" : "pip.enter")
+                                        .font(.title3)
+                                        .foregroundColor(.white)
+                                        .padding(12)
+                                        .background(Material.ultraThinMaterial)
+                                        .clipShape(Circle())
+                                }
+                            }
+                        }
+                        .padding(.top, 50)
+                        .padding(.horizontal, 20)
+                        Spacer()
+                    }
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Button(action: { jumpToLive() }) {
+                                HStack(spacing: 6) {
+                                    Circle()
+                                        .fill(isAtLiveEdge ? Color.red : Color.gray)
+                                        .frame(width: 8, height: 8)
+                                    
+                                    Text("LIVE")
+                                        .font(.caption.bold())
+                                        .foregroundColor(isAtLiveEdge ? .white : .white.opacity(0.7))
+                                }
+                                .padding(8)
+                                .background(isAtLiveEdge ? Color.clear : Color.white.opacity(0.1))
+                                .cornerRadius(8)
+                            }
+                            .disabled(isAtLiveEdge)
+                            
+                            Spacer()
+                            
+                            if !resolutionLabel.isEmpty {
+                                Text(resolutionLabel)
+                                    .font(.caption2.bold())
+                                    .foregroundColor(.white)
+                                    .padding(6)
+                                    .background(Color.black.opacity(0.5))
+                                    .cornerRadius(4)
+                            }
+                        }
+                        .padding(.bottom, 40)
+                        .padding(.horizontal, 20)
+                    }
+                }
+                .transition(.opacity.animation(.easeInOut(duration: 0.15)))
+            }
+        }
+        .offset(y: offset.height)
+        .gesture(
+            DragGesture()
+                .onChanged { if $0.translation.height > 0 { offset = $0.translation } }
+                .onEnded {
+                    if $0.translation.height > 100 { dismiss() }
+                    else { withAnimation { offset = .zero } }
+                }
+        )
+        .onAppear {
+            setupPlayer()
+            resetTimer()
+            startLiveChecker()
+        }
+        .onDisappear {
+            player.pause()
+            timer?.cancel()
+            liveChecker?.invalidate()
+            pipAdapter = nil
+        }
+    }
+    
+    func seek(by seconds: Double) {
+        guard let current = player.currentItem else { return }
+        let currentTime = current.currentTime().seconds
+        let newTime = currentTime + seconds
+        
+        if let range = current.seekableTimeRanges.last?.timeRangeValue {
+            let end = range.end.seconds
+            if newTime >= end {
+                jumpToLive()
+                return
+            }
+        }
+        
+        player.seek(to: CMTime(seconds: newTime, preferredTimescale: 600))
+        resetTimer()
+    }
+    
+    func jumpToLive() {
+        guard let current = player.currentItem,
+              let range = current.seekableTimeRanges.last?.timeRangeValue else { return }
+        
+        player.seek(to: range.end)
+        player.play()
+        isPlaying = true
+        isAtLiveEdge = true
+        resetTimer()
+    }
+    
+    func startLiveChecker() {
+        liveChecker = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            guard let current = player.currentItem,
+                  let range = current.seekableTimeRanges.last?.timeRangeValue else { return }
+            
+            let end = range.end.seconds
+            let currentSec = current.currentTime().seconds
+            let isLive = (end - currentSec) < 4.0
+            
+            if isLive != self.isAtLiveEdge {
+                withAnimation { self.isAtLiveEdge = isLive }
+            }
+        }
+    }
+    
+    func togglePlay() {
+        if isPlaying { player.pause() } else { player.play() }
+        isPlaying.toggle()
+        resetTimer()
+    }
+    
+    func toggleControls() {
+        withAnimation(.easeInOut(duration: 0.15)) {
+            if showControls {
+                showControls = false
+                timer?.cancel()
+            } else {
+                showControls = true
+                resetTimer()
+            }
+        }
+    }
+    
+    func setupPlayer() {
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch { print("Audio Session Error: \(error)") }
+        
+        guard let url = URL(string: channel.streamURL) else { return }
+        
+        let headers: [String: Any] = [
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
+        ]
+        let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
+        let item = AVPlayerItem(asset: asset)
+        
+        item.preferredForwardBufferDuration = 0
+        item.automaticallyPreservesTimeOffsetFromLive = true
+        item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+        
+        player.replaceCurrentItem(with: item)
+        player.allowsExternalPlayback = true
+        player.automaticallyWaitsToMinimizeStalling = true
+        player.play()
+        
+        NotificationCenter.default.addObserver(forName: .AVPlayerItemPlaybackStalled, object: item, queue: .main) { [weak player] _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { player?.play() }
+        }
+        
+        sizeObserver = item.observe(\.presentationSize, options: [.new]) { _, change in
+            guard let size = change.newValue, size != .zero else { return }
+            DispatchQueue.main.async {
+                if size.height >= 2160 { resolutionLabel = "4K" }
+                else if size.height >= 1080 { resolutionLabel = "1080p" }
+                else if size.height >= 720 { resolutionLabel = "720p" }
+                else if size.height > 0 { resolutionLabel = "SD" }
+            }
+        }
+    }
+    
+    func resetTimer() {
+        timer?.cancel()
+        timer = Just(())
+            .delay(for: 3.5, scheduler: RunLoop.main)
+            .sink { _ in
+                withAnimation { showControls = false }
+            }
+    }
+}
+
+class PipAdapter: NSObject, AVPictureInPictureControllerDelegate, ObservableObject { private var pipController: AVPictureInPictureController?; @Published var isPipPossible = false; @Published var isPipActive = false; func setup(layer: AVPlayerLayer) { if AVPictureInPictureController.isPictureInPictureSupported() { pipController = AVPictureInPictureController(playerLayer: layer); pipController?.delegate = self; if #available(iOS 14.2, *) { pipController?.canStartPictureInPictureAutomaticallyFromInline = true }; pipController?.addObserver(self, forKeyPath: "isPictureInPicturePossible", options: [.new, .initial], context: nil) } }; func startPip() { pipController?.startPictureInPicture() }; func stopPip() { pipController?.stopPictureInPicture() }; override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) { if keyPath == "isPictureInPicturePossible" { DispatchQueue.main.async { self.isPipPossible = self.pipController?.isPictureInPicturePossible ?? false } } }; func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) { DispatchQueue.main.async { self.isPipActive = true } }; func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) { DispatchQueue.main.async { self.isPipActive = false } } }
+
+struct PlayerViewRepresentable: UIViewRepresentable { let player: AVPlayer; @Binding var pipAdapter: PipAdapter?; func makeUIView(context: Context) -> PlayerUIView { let view = PlayerUIView(); view.playerLayer.player = player; view.playerLayer.videoGravity = .resizeAspect; let adapter = PipAdapter(); adapter.setup(layer: view.playerLayer); DispatchQueue.main.async { self.pipAdapter = adapter }; return view }; func updateUIView(_ uiView: PlayerUIView, context: Context) {} }
+
+class PlayerUIView: UIView { override class var layerClass: AnyClass { AVPlayerLayer.self }; var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer } }
+
+struct AirPlayButton: UIViewRepresentable { func makeUIView(context: Context) -> AVRoutePickerView { let view = AVRoutePickerView(); view.activeTintColor = .white; view.tintColor = .white; view.backgroundColor = .clear; view.prioritizesVideoDevices = true; return view }; func updateUIView(_ uiView: AVRoutePickerView, context: Context) {} }
+
+// MULTI-VIEW SCREENS (UPDATED)
+struct MultiViewScreen: View {
+    @ObservedObject var viewModel: ChannelViewModel
+    @Binding var showMultiView: Bool
+    @Environment(\.dismiss) var dismiss
+    
+    @State private var focusedIndex: Int = 0
+    @State private var showControls = true
+    @State private var controlTimer: Timer?
+    
+    var activeIndices: [Int] {
+        var indices: [Int] = []
+        for (i, channel) in viewModel.multiViewSlots.enumerated() {
+            if channel != nil { indices.append(i) }
+        }
+        return indices
+    }
+    
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            Color.black.opacity(0.001)
+                .onTapGesture { toggleControls() }
+            if activeIndices.count <= 1 {
+                let targetIndex = activeIndices.first ?? 0
+                MultiViewSlot(
+                    channel: viewModel.multiViewSlots[targetIndex],
+                    isFocused: true,
+                    showControls: showControls,
+                    onTap: { toggleControls() },
+                    onAdd: { goToAddMode() },
+                    onRemove: { viewModel.updateMultiViewSlot(index: targetIndex, channel: nil) }
+                )
+                .edgesIgnoringSafeArea(.all)
+            }
+            else if activeIndices.count == 2 {
+                VStack(spacing: 0) {
+                    ForEach(activeIndices, id: \.self) { index in
+                        MultiViewSlot(
+                            channel: viewModel.multiViewSlots[index],
+                            isFocused: focusedIndex == index,
+                            showControls: showControls,
+                            onTap: {
+                                focusedIndex = index
+                                toggleControls()
+                            },
+                            onAdd: { goToAddMode() },
+                            onRemove: { viewModel.updateMultiViewSlot(index: index, channel: nil) }
+                        )
+                    }
+                }
+                .edgesIgnoringSafeArea(.all)
+            }
+            else {
+                VStack(spacing: 2) {
+                    HStack(spacing: 2) { slotView(0); slotView(1) }
+                    HStack(spacing: 2) { slotView(2); slotView(3) }
+                }
+                .edgesIgnoringSafeArea(.all)
+            }
+            VStack {
+                ZStack {
+                    HStack {
+                        Button(action: { showMultiView = false }) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 20, weight: .bold))
+                                .foregroundColor(.white)
+                                .padding(12)
+                                .background(.ultraThinMaterial)
+                                .clipShape(Circle())
+                        }
+                        
+                        Spacer()
+                        
+                        Button(action: { viewModel.multiViewSlots = [nil, nil, nil, nil] }) {
+                            Image(systemName: "trash")
+                                .font(.system(size: 20, weight: .bold))
+                                .foregroundColor(.red)
+                                .padding(12)
+                                .background(.ultraThinMaterial)
+                                .clipShape(Circle())
+                        }
+                    }
+                    
+                    if activeIndices.count < 4 {
+                        Button(action: { goToAddMode() }) {
+                            HStack {
+                                Image(systemName: "plus")
+                                Text("Add Stream")
+                            }
+                            .font(.caption.bold())
+                            .foregroundColor(.white)
+                            .padding(10)
+                            .background(.ultraThinMaterial)
+                            .cornerRadius(20)
+                        }
+                    }
+                }
+                .padding(.top, 60)
+                .padding(.horizontal, 40)
+                .opacity(showControls ? 1 : 0)
+                .animation(.easeInOut(duration: 0.2), value: showControls)
+                
+                Spacer()
+            }
+        }
+        .onAppear { resetTimer() }
+    }
+    
+    func slotView(_ index: Int) -> some View {
+        MultiViewSlot(
+            channel: viewModel.multiViewSlots[index],
+            isFocused: focusedIndex == index,
+            showControls: showControls,
+            onTap: {
+                focusedIndex = index
+                toggleControls()
+            },
+            onAdd: { goToAddMode() },
+            onRemove: { viewModel.updateMultiViewSlot(index: index, channel: nil) }
+        )
+    }
+    
+    func goToAddMode() {
+        viewModel.multiViewModeActive = true
+        showMultiView = false
+    }
+    
+    func toggleControls() {
+        withAnimation {
+            if showControls {
+                showControls = false
+                controlTimer?.invalidate()
+            } else {
+                showControls = true
+                resetTimer()
+            }
+        }
+    }
+    
+    func resetTimer() {
+        showControls = true
+        controlTimer?.invalidate()
+        controlTimer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: false) { _ in
+            withAnimation { showControls = false }
+        }
+    }
+}
+
+struct MultiViewSlot: View {
+    let channel: StreamChannel?
+    let isFocused: Bool
+    let showControls: Bool
+    let onTap: () -> Void
+    let onAdd: () -> Void
+    let onRemove: () -> Void
+    
+    var body: some View {
+        ZStack {
+            Color.gray.opacity(0.15)
+            
+            if let channel = channel {
+                GridVideoPlayer(url: URL(string: channel.streamURL)!, isMuted: !isFocused)
+                    .allowsHitTesting(false)
+                VStack {
+                    Spacer()
+                    HStack {
+                        Button(action: onRemove) {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 30))
+                                .foregroundStyle(.white.opacity(0.8))
+                        }
+                        .padding(30)
+                        Spacer()
+                        if isFocused {
+                            Image(systemName: "speaker.wave.2.fill")
+                                .foregroundStyle(.white)
+                                .font(.system(size: 26))
+                                .padding(30)
+                        } else {
+                            Image(systemName: "speaker.slash.fill")
+                                .foregroundStyle(.white.opacity(0.5))
+                                .font(.system(size: 26))
+                                .padding(30)
+                        }
+                    }
+                }
+                .opacity(showControls ? 1 : 0)
+                .animation(.easeInOut(duration: 0.2), value: showControls)
+            } else {
+                Button(action: onAdd) {
+                    VStack {
+                        Image(systemName: "plus.circle")
+                            .font(.largeTitle)
+                        Text("Add Channel")
+                            .font(.caption)
+                    }
+                    .foregroundStyle(.white.opacity(0.5))
+                }
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { onTap() }
+        .clipShape(RoundedRectangle(cornerRadius: 24))
+    }
+}
+
+struct GridVideoPlayer: UIViewControllerRepresentable {
+    let url: URL
+    let isMuted: Bool
+    
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        
+        let headers: [String: Any] = [
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
+        ]
+        let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
+        let item = AVPlayerItem(asset: asset)
+        item.preferredForwardBufferDuration = 0
+        item.automaticallyPreservesTimeOffsetFromLive = true
+        item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+        
+        let player = AVPlayer(playerItem: item)
+        player.automaticallyWaitsToMinimizeStalling = true
+        player.isMuted = isMuted
+        
+        controller.player = player
+        controller.showsPlaybackControls = false
+        controller.videoGravity = .resizeAspect
+        
+        player.play()
+        
+        return controller
+    }
+    
+    func updateUIViewController(_ ui: AVPlayerViewController, context: Context) {
+        ui.player?.isMuted = isMuted
+        
+        if let currentAsset = ui.player?.currentItem?.asset as? AVURLAsset, currentAsset.url != url {
+            let headers: [String: Any] = [
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
+            ]
+            let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
+            let item = AVPlayerItem(asset: asset)
+            item.preferredForwardBufferDuration = 0
+            item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+
+            let newPlayer = AVPlayer(playerItem: item)
+            newPlayer.isMuted = isMuted
+            newPlayer.automaticallyWaitsToMinimizeStalling = true
+            
+            ui.player = newPlayer
+            newPlayer.play()
+        }
+    }
+}
+
+struct MultiViewChannelPicker: View {
+    @ObservedObject var viewModel: ChannelViewModel; let onSelect: (StreamChannel) -> Void; @Environment(\.dismiss) var dismiss; var body: some View { NavigationView { List(viewModel.filteredChannels) { channel in Button(action: { onSelect(channel) }) { HStack { CachedAsyncImage(urlString: channel.icon ?? "", size: CGSize(width: 30, height: 30)); Text(channel.name) } } }.searchable(text: $viewModel.searchText).navigationTitle("Select Channel").toolbar { Button("Cancel") { dismiss() } } } }
+}
