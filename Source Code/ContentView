@@ -1280,6 +1280,7 @@ struct SportsHubView: View { @ObservedObject var viewModel: ChannelViewModel; le
 struct CategoryDetailView: View { let title: String; let channels: [StreamChannel]; let accentColor: Color; let playAction: (StreamChannel) -> Void; let toggleFav: (Int) -> Void; let promptRename: (StreamChannel) -> Void; let hideChannel: (Int) -> Void; let favoriteIDs: Set<Int>; @ObservedObject var viewModel: ChannelViewModel; @Binding var showMultiView: Bool; @Binding var showSettings: Bool; @AppStorage("nebColor1") private var nebColor1 = "#AF52DE"; @AppStorage("nebColor2") private var nebColor2 = "#007AFF"; @AppStorage("nebColor3") private var nebColor3 = "#FF2D55"; @AppStorage("nebX1") private var nebX1 = 0.2; @AppStorage("nebY1") private var nebY1 = 0.2; @AppStorage("nebX2") private var nebX2 = 0.8; @AppStorage("nebY2") private var nebY2 = 0.3; @AppStorage("nebX3") private var nebX3 = 0.5; @AppStorage("nebY3") private var nebY3 = 0.8; var body: some View { ZStack { NebulaBackgroundView(color1: Color(hex: nebColor1) ?? .purple, color2: Color(hex: nebColor2) ?? .blue, color3: Color(hex: nebColor3) ?? .pink, point1: UnitPoint(x: nebX1, y: nebY1), point2: UnitPoint(x: nebX2, y: nebY2), point3: UnitPoint(x: nebX3, y: nebY3)); ScrollView(showsIndicators: false) { LazyVStack(spacing: 0) { if !viewModel.searchText.isEmpty { ForEach(viewModel.filteredChannels) { channel in ChannelRow(channel: channel, isFavorite: favoriteIDs.contains(channel.id), accentColor: accentColor, playAction: { playAction(channel) }, toggleFav: { toggleFav(channel.id) }).equatable().contextMenu { Button { promptRename(channel) } label: { Label("Rename", systemImage: "pencil") }; Button { hideChannel(channel.id) } label: { Label("Hide", systemImage: "eye.slash") } } } } else { ForEach(channels) { channel in ChannelRow(channel: channel, isFavorite: favoriteIDs.contains(channel.id), accentColor: accentColor, playAction: { playAction(channel) }, toggleFav: { toggleFav(channel.id) }).equatable().contextMenu { Button { promptRename(channel) } label: { Label("Rename", systemImage: "pencil") }; Button { hideChannel(channel.id) } label: { Label("Hide", systemImage: "eye.slash") } } } } } }; if viewModel.activeMultiViewCount > 0 { MultiViewIndicator(count: viewModel.activeMultiViewCount, accentColor: nil, action: { showMultiView = true }) } }.navigationTitle(title).navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement: .topBarTrailing) { HStack { Button(action: { showMultiView = true }) { Image(systemName: "square.grid.2x2.fill").foregroundStyle(.white.opacity(0.8)) }; Button(action: { showSettings = true }) { Image(systemName: "gearshape.fill").foregroundStyle(.white.opacity(0.8)) } } } }.searchable(text: $viewModel.searchText, placement: .navigationBarDrawer(displayMode: .always)).alert("Rename", isPresented: $viewModel.showRenameAlert) { TextField("Name", text: $viewModel.renameInput); Button("Save", action: viewModel.confirmRename); Button("Cancel", role: .cancel) {} } } }
 
 // REFACTORED SETTINGS VIEW
+// MARK: - REFACTORED SETTINGS VIEW
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("isLoggedIn") private var isLoggedIn = false
@@ -1306,6 +1307,8 @@ struct SettingsView: View {
                         ForEach(ViewMode.allCases, id: \.rawValue) { Text($0.rawValue).tag($0.rawValue) }
                     }.pickerStyle(.segmented)
                 }
+                
+                // Content Management Section
                 Section(header: Text("Content Management")) {
                     NavigationLink(destination: CategoriesManagerView(categories: $categories, accentColor: accentColor, viewModel: viewModel)) {
                         HStack {
@@ -1332,10 +1335,21 @@ struct SettingsView: View {
                 NebulaSettingsSection()
                 
                 Section(header: Text("Support & Community")) {
-                    Link(destination: URL(string: "https://discord.gg/6mNmXvdwh3")!) {
+                    // Discord Link
+                    Link(destination: URL(string: "https://discord.gg/YOUR_PERMANENT_CODE")!) {
                         HStack {
                             Image(systemName: "bubble.left.and.bubble.right.fill").foregroundColor(Color(hex: "#5865F2") ?? .blue)
                             Text("Join our Discord").foregroundColor(.primary)
+                            Spacer()
+                            Image(systemName: "arrow.up.right").font(.caption).foregroundColor(.gray)
+                        }
+                    }
+                    
+                    // Buy Me a Coffee Link
+                    Link(destination: URL(string: "https://buymeacoffee.com/mongoosemonke")!) {
+                        HStack {
+                            Image(systemName: "cup.and.saucer.fill").foregroundColor(.orange)
+                            Text("Buy me a Coffee").foregroundColor(.primary)
                             Spacer()
                             Image(systemName: "arrow.up.right").font(.caption).foregroundColor(.gray)
                         }
@@ -1355,6 +1369,7 @@ struct SettingsView: View {
         }
     }
 }
+
 struct CategoriesManagerView: View {
     @Binding var categories: [StreamCategory]
     let accentColor: Color
