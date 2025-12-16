@@ -42,13 +42,8 @@ A modern, high-performance IPTV player built for iOS using **SwiftUI**, **AVKit*
 * iOS 16.0 or later
 
 ### Installation
-1.  Clone the repo:
-    ```bash
-    git clone [https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git](https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git)
-    ```
-2.  Open `IPTVPlayer.xcodeproj` in Xcode.
-3.  Select your Development Team in the **Signing & Capabilities** tab.
-4.  Build and Run (`Cmd + R`).
+1. Download latest version from releases page
+2. Sideload
 
 ## 🧩 Usage
 
