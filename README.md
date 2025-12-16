@@ -75,4 +75,4 @@ Distributed under the MIT License. See `LICENSE` for more information.
 ### 💬 Community & Support
 
 Join our Discord for updates, bug reports, and beta testing!
-[**Join the Discord Server**](https://discord.gg/PHc8AGV6](https://discord.gg/qf7rcFfE)
+[**Join the Discord Server**](https://discord.gg/qf7rcFfE)
