@@ -12,6 +12,7 @@ class ChannelViewModel: ObservableObject {
     // Split Search Results
     @Published var filteredEPGChannels: [StreamChannel] = []
     @Published var filteredNameChannels: [StreamChannel] = []
+    @Published var filteredCategories: [StreamCategory] = []
     @Published var recentQueries: [String] = []
     
     @Published var searchText: String = "" {
@@ -63,7 +64,7 @@ class ChannelViewModel: ObservableObject {
     }
     
     func reset() {
-        self.channels = []; self.categories = []; self.filteredEPGChannels = []; self.filteredNameChannels = []; self.sportsChannels = [:]
+        self.channels = []; self.categories = []; self.filteredEPGChannels = []; self.filteredNameChannels = []; self.filteredCategories = []; self.sportsChannels = [:]
         self.searchText = ""; self.errorMessage = nil; self.isLoading = false; self.isSearchingGame = false
         self.multiViewSlots = [nil, nil, nil, nil]; self.multiViewModeActive = false; self.suggestedChannels = []
         self.showSelectionSheet = false; self.epgData = [:]
@@ -88,6 +89,7 @@ class ChannelViewModel: ObservableObject {
         if query.isEmpty {
             self.filteredEPGChannels = []
             self.filteredNameChannels = []
+            self.filteredCategories = []
             self.isSearching = false
             return
         }
@@ -102,6 +104,7 @@ class ChannelViewModel: ObservableObject {
             guard !Task.isCancelled else { return }
             
             let allChannels = await self.channels
+            let allCategories = await self.categories
             let hidden = await self.hiddenIDs
             let epg = await self.epgData
             let now = await self.currentTime
@@ -109,6 +112,7 @@ class ChannelViewModel: ObservableObject {
             
             var epgMatches: [StreamChannel] = []
             var nameMatches: [StreamChannel] = []
+            var catMatches: [StreamCategory] = []
             
             for channel in allChannels {
                 if hidden.contains(channel.id) { continue }
@@ -130,6 +134,15 @@ class ChannelViewModel: ObservableObject {
                 else if nameMatch { nameMatches.append(channel) }
             }
             
+            for cat in allCategories {
+                if !cat.isHidden {
+                    let lowerCat = cat.name.lowercased()
+                    if tokens.allSatisfy({ lowerCat.contains($0) }) {
+                        catMatches.append(cat)
+                    }
+                }
+            }
+            
             let sortedEPG = ChannelViewModel.prioritySort(epgMatches)
             let sortedName = ChannelViewModel.prioritySort(nameMatches)
             
@@ -138,10 +151,11 @@ class ChannelViewModel: ObservableObject {
             await MainActor.run {
                 self.filteredEPGChannels = sortedEPG
                 self.filteredNameChannels = sortedName
+                self.filteredCategories = catMatches
                 self.isSearching = false
                 
                 // Add to recent queries if it actually returned results and is long enough
-                if (!sortedEPG.isEmpty || !sortedName.isEmpty) && query.count > 2 {
+                if (!sortedEPG.isEmpty || !sortedName.isEmpty || !catMatches.isEmpty) && query.count > 2 {
                     self.addRecentQuery(query)
                 }
             }

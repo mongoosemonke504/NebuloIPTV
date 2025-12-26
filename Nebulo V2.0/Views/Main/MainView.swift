@@ -188,10 +188,30 @@ struct SidebarLayout: View {
                         }
                     }
                     
+                    if !viewModel.filteredCategories.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("EXPLORE CATEGORIES")
+                                .font(.system(size: 11, weight: .black))
+                                .kerning(1.2)
+                                .foregroundColor(.white.opacity(0.5))
+                                .padding(.horizontal)
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 12) {
+                                    ForEach(viewModel.filteredCategories) { cat in
+                                        Button(action: { withAnimation { selectedCategory = cat; searchText = "" } }) {
+                                            CategoryCard(title: cat.name, color: .secondary)
+                                                .frame(width: 200)
+                                        }.buttonStyle(.plain)
+                                    }
+                                }.padding(.horizontal)
+                            }
+                        }
+                    }
+                    
                     RecentSearchesView(viewModel: viewModel, accentColor: accentColor)
                         .padding(.top, 10)
                     
-                    if viewModel.filteredEPGChannels.isEmpty && viewModel.filteredNameChannels.isEmpty {
+                    if viewModel.filteredEPGChannels.isEmpty && viewModel.filteredNameChannels.isEmpty && viewModel.filteredCategories.isEmpty {
                         EmptyStateView(title: "No Results", systemImage: "magnifyingglass", description: "Try searching for a show or channel.")
                             .padding(.top, 100)
                     }
@@ -215,7 +235,7 @@ struct StandardLayout: View {
                 searchView
             } else if let cat = selectedCategory {
                 if cat.id == -3 { SportsHubView(viewModel: viewModel, accentColor: accentColor, playAction: playAction, onBack: { withAnimation { selectedCategory = nil } }).transition(.blurFade) }
-                else { CategoryDetailView(title: cat.name, channels: getChannelsToShow(for: cat), accentColor: accentColor, playAction: playAction, toggleFav: viewModel.toggleFavorite, promptRename: viewModel.triggerRenameChannel, hideChannel: viewModel.hideChannel, favoriteIDs: viewModel.favoriteIDs, viewModel: viewModel, showMultiView: $showMultiView, onBack: { withAnimation { selectedCategory = nil } }).transition(.blurFade) }
+                else { CategoryDetailView(title: cat.name, channels: getChannelsToShow(for: cat), accentColor: accentColor, playAction: playAction, toggleFav: viewModel.toggleFavorite, promptRename: viewModel.triggerRenameChannel, hideChannel: viewModel.hideChannel, favoriteIDs: viewModel.favoriteIDs, viewModel: viewModel, showMultiView: $showMultiView, onBack: { withAnimation { selectedCategory = nil } }, onCategorySelect: { cat in withAnimation { selectedCategory = cat; searchText = "" } }).transition(.blurFade) }
             } else if viewModel.isLoading {
                 ScrollView {
                     VStack(spacing: 16) {
@@ -282,10 +302,30 @@ struct StandardLayout: View {
                         }
                     }
                     
+                    if !viewModel.filteredCategories.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("EXPLORE CATEGORIES")
+                                .font(.system(size: 11, weight: .black))
+                                .kerning(1.2)
+                                .foregroundColor(.white.opacity(0.5))
+                                .padding(.horizontal)
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 12) {
+                                    ForEach(viewModel.filteredCategories) { cat in
+                                        Button(action: { withAnimation { selectedCategory = cat; searchText = "" } }) {
+                                            CategoryCard(title: cat.name, color: .secondary)
+                                                .frame(width: 200)
+                                        }.buttonStyle(.plain)
+                                    }
+                                }.padding(.horizontal)
+                            }
+                        }
+                    }
+                    
                     RecentSearchesView(viewModel: viewModel, accentColor: accentColor)
                         .padding(.top, 10)
                         
-                    if viewModel.filteredEPGChannels.isEmpty && viewModel.filteredNameChannels.isEmpty {
+                    if viewModel.filteredEPGChannels.isEmpty && viewModel.filteredNameChannels.isEmpty && viewModel.filteredCategories.isEmpty {
                         EmptyStateView(title: "No Results", systemImage: "magnifyingglass", description: "Try searching for a show or channel.")
                             .padding(.top, 100)
                     }
@@ -300,7 +340,7 @@ struct StandardLayout: View {
 }
 
 struct CategoryDetailView: View {
-    let title: String; let channels: [StreamChannel]; let accentColor: Color; let playAction: (StreamChannel) -> Void; let toggleFav: (Int) -> Void; let promptRename: (StreamChannel) -> Void; let hideChannel: (Int) -> Void; let favoriteIDs: Set<Int>; @ObservedObject var viewModel: ChannelViewModel; @Binding var showMultiView: Bool; var onBack: (() -> Void)? = nil
+    let title: String; let channels: [StreamChannel]; let accentColor: Color; let playAction: (StreamChannel) -> Void; let toggleFav: (Int) -> Void; let promptRename: (StreamChannel) -> Void; let hideChannel: (Int) -> Void; let favoriteIDs: Set<Int>; @ObservedObject var viewModel: ChannelViewModel; @Binding var showMultiView: Bool; var onBack: (() -> Void)? = nil; var onCategorySelect: ((StreamCategory) -> Void)? = nil
     @AppStorage("nebColor1") private var nebColor1 = "#AF52DE"; @AppStorage("nebColor2") private var nebColor2 = "#007AFF"; @AppStorage("nebColor3") private var nebColor3 = "#FF2D55"; @AppStorage("nebX1") private var nebX1 = 0.2; @AppStorage("nebY1") private var nebY1 = 0.2; @AppStorage("nebX2") private var nebX2 = 0.8; @AppStorage("nebY2") private var nebY2 = 0.3; @AppStorage("nebX3") private var nebX3 = 0.5; @AppStorage("nebY3") private var nebY3 = 0.8
     
     var body: some View {
@@ -328,8 +368,22 @@ struct CategoryDetailView: View {
                                             HorizontalSearchList(channels: viewModel.filteredNameChannels, viewModel: viewModel, accentColor: accentColor, playAction: playAction)
                                         }
                                         
-                                        RecentSearchesView(viewModel: viewModel, accentColor: accentColor)
-                                    }
+                                        if !viewModel.filteredCategories.isEmpty {
+                                            Text("EXPLORE CATEGORIES").font(.caption.bold()).foregroundColor(.white.opacity(0.5)).padding(.horizontal)
+                                            ScrollView(.horizontal, showsIndicators: false) {
+                                                HStack(spacing: 12) {
+                                                    ForEach(viewModel.filteredCategories) { cat in
+                                                        Button(action: { 
+                                                            onCategorySelect?(cat)
+                                                        }) {
+                                                            CategoryCard(title: cat.name, color: .secondary).frame(width: 200)
+                                                        }.buttonStyle(.plain)
+                                                    }
+                                                }.padding(.horizontal)
+                                            }
+                                        }
+                                        
+                                        RecentSearchesView(viewModel: viewModel, accentColor: accentColor)                                    }
                                 }.padding(.top)
                             } else {
                                 ForEach(channels) { c in
