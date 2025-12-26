@@ -66,6 +66,7 @@ struct MainView: View {
                 }
             }
         }
+        .ignoresSafeArea()
         .task {
             if viewModel.channels.isEmpty {
                 await viewModel.loadData(url: xstreamURL, user: username, pass: password, type: LoginType(rawValue: loginTypeRaw) ?? .xtream)
