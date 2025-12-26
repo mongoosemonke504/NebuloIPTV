@@ -224,20 +224,27 @@ struct StandardLayout: View {
                     }.padding(.top, 20)
                 }
             } else {
-                ScrollView(showsIndicators: false) {
-                    LazyVStack(spacing: 16) {
-                        if !viewModel.recentIDs.isEmpty {
-                            let recent = viewModel.recentIDs.compactMap { id in viewModel.channels.first(where: { $0.id == id }) }
-                            if !recent.isEmpty { sectionHeader(title: "Recently Watched", channels: recent, id: -2); HorizontalPreviewList(channels: recent, isRecent: true, accentColor: accentColor, viewModel: viewModel, playAction: playAction, promptRenameChannel: viewModel.triggerRenameChannel, hideChannel: viewModel.hideChannel, removeFromRecent: viewModel.removeFromRecent) }
+                ScrollViewReader { proxy in
+                    ScrollView(showsIndicators: false) {
+                        LazyVStack(spacing: 16) {
+                            if !viewModel.recentIDs.isEmpty {
+                                let recent = viewModel.recentIDs.compactMap { id in viewModel.channels.first(where: { $0.id == id }) }
+                                if !recent.isEmpty { sectionHeader(title: "Recently Watched", channels: recent, id: -2); HorizontalPreviewList(channels: recent, isRecent: true, accentColor: accentColor, viewModel: viewModel, playAction: playAction, promptRenameChannel: viewModel.triggerRenameChannel, hideChannel: viewModel.hideChannel, removeFromRecent: viewModel.removeFromRecent) }
+                            }
+                            HStack(spacing: 16) {
+                                Button(action: { viewModel.lastSelectedHomeID = -3; withAnimation { selectedCategory = StreamCategory(id: -3, name: "Sports Center") } }) { SquareCategoryCard(title: "Sports Center", icon: "sportscourt.fill", color: .green, accentColor: accentColor) }.buttonStyle(.plain).id(-3)
+                                Button(action: { viewModel.lastSelectedHomeID = -4; withAnimation { selectedCategory = StreamCategory(id: -4, name: "Favorites") } }) { SquareCategoryCard(title: "Favorites", icon: "star.fill", color: .yellow, accentColor: accentColor) }.buttonStyle(.plain).id(-4)
+                            }.padding(.horizontal).padding(.vertical, 8)
+                            Button(action: { viewModel.lastSelectedHomeID = -99; withAnimation { showMultiView = true } }) { CategoryCard(title: "Multi View", icon: "square.grid.2x2.fill", color: .purple) }.buttonStyle(.plain).padding(.horizontal).id(-99)
+                            Button(action: { viewModel.lastSelectedHomeID = -1; withAnimation { selectedCategory = StreamCategory(id: -1, name: "All Channels") } }) { CategoryCard(title: "All Channels", icon: "tv", color: .blue) }.buttonStyle(.plain).padding(.horizontal).id(-1)
+                            ForEach(viewModel.categories.filter { !$0.isHidden }) { cat in Button(action: { viewModel.lastSelectedHomeID = cat.id; withAnimation { selectedCategory = cat } }) { CategoryCard(title: cat.name, color: .secondary) }.buttonStyle(.plain).padding(.horizontal).id(cat.id) }
+                        }.padding(.vertical)
+                    }
+                    .onAppear {
+                        if let last = viewModel.lastSelectedHomeID {
+                            DispatchQueue.main.async { withAnimation { proxy.scrollTo(last, anchor: .center) } }
                         }
-                        HStack(spacing: 16) {
-                            Button(action: { withAnimation { selectedCategory = StreamCategory(id: -3, name: "Sports Center") } }) { SquareCategoryCard(title: "Sports Center", icon: "sportscourt.fill", color: .green, accentColor: accentColor) }.buttonStyle(.plain)
-                            Button(action: { withAnimation { selectedCategory = StreamCategory(id: -4, name: "Favorites") } }) { SquareCategoryCard(title: "Favorites", icon: "star.fill", color: .yellow, accentColor: accentColor) }.buttonStyle(.plain)
-                        }.padding(.horizontal).padding(.vertical, 8)
-                        Button(action: { withAnimation { showMultiView = true } }) { CategoryCard(title: "Multi View", icon: "square.grid.2x2.fill", color: .purple) }.buttonStyle(.plain).padding(.horizontal)
-                        Button(action: { withAnimation { selectedCategory = StreamCategory(id: -1, name: "All Channels") } }) { CategoryCard(title: "All Channels", icon: "tv", color: .blue) }.buttonStyle(.plain).padding(.horizontal)
-                        ForEach(viewModel.categories.filter { !$0.isHidden }) { cat in Button(action: { withAnimation { selectedCategory = cat } }) { CategoryCard(title: cat.name, color: .secondary) }.buttonStyle(.plain).padding(.horizontal) }
-                    }.padding(.vertical)
+                    }
                 }.transition(.blurFade)
             }
         }.animation(.easeInOut(duration: 0.4), value: selectedCategory)
