@@ -200,7 +200,7 @@ struct SidebarLayout: View {
                                     ForEach(viewModel.filteredCategories) { cat in
                                         Button(action: { withAnimation { selectedCategory = cat; searchText = "" } }) {
                                             CategoryCard(title: cat.name, color: .secondary)
-                                                .frame(width: 200)
+                                                .frame(width: 200, height: 85)
                                         }.buttonStyle(.plain)
                                     }
                                 }.padding(.horizontal)
@@ -314,7 +314,7 @@ struct StandardLayout: View {
                                     ForEach(viewModel.filteredCategories) { cat in
                                         Button(action: { withAnimation { selectedCategory = cat; searchText = "" } }) {
                                             CategoryCard(title: cat.name, color: .secondary)
-                                                .frame(width: 200)
+                                                .frame(width: 200, height: 85)
                                         }.buttonStyle(.plain)
                                     }
                                 }.padding(.horizontal)
@@ -376,7 +376,7 @@ struct CategoryDetailView: View {
                                                         Button(action: { 
                                                             onCategorySelect?(cat)
                                                         }) {
-                                                            CategoryCard(title: cat.name, color: .secondary).frame(width: 200)
+                                                            CategoryCard(title: cat.name, color: .secondary).frame(width: 200, height: 85)
                                                         }.buttonStyle(.plain)
                                                     }
                                                 }.padding(.horizontal)
