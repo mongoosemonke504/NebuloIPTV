@@ -19,7 +19,6 @@ struct MainView: View {
                         if shouldUseSidebar(isLandscape: isL) { SidebarLayout(viewModel: viewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $viewModel.searchText, isLandscape: isL, accentColor: accentColor, playAction: playChannel, showMultiView: $showMultiView, showSettings: $showSettings) }
                         else { StandardLayout(viewModel: viewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $viewModel.searchText, accentColor: accentColor, playAction: playChannel, showMultiView: $showMultiView, showSettings: $showSettings) }
                     }
-                    .opacity(selectedChannel == nil ? 1 : 0)
                     .zIndex(1)
                     
                     if let channel = selectedChannel {
