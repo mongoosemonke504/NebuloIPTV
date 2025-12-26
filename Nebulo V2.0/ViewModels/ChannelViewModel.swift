@@ -59,6 +59,7 @@ class ChannelViewModel: ObservableObject {
     private var renamedChannels: [Int: String] = [:]
     private var renamedCategories: [Int: String] = [:]
     private var searchTask: Task<Void, Never>?
+    private var settingsPrefix: String = ""
     var activeMultiViewCount: Int { multiViewSlots.compactMap { $0 }.count }
     
     init() {
@@ -170,12 +171,12 @@ class ChannelViewModel: ObservableObject {
         if let idx = recentQueries.firstIndex(of: clean) { recentQueries.remove(at: idx) }
         recentQueries.insert(clean, at: 0)
         if recentQueries.count > 10 { recentQueries = Array(recentQueries.prefix(10)) }
-        UserDefaults.standard.set(recentQueries, forKey: "recentQueries")
+        UserDefaults.standard.set(recentQueries, forKey: settingsPrefix + "recentQueries")
     }
     
     func removeRecentQuery(_ query: String) {
         recentQueries.removeAll { $0 == query }
-        UserDefaults.standard.set(recentQueries, forKey: "recentQueries")
+        UserDefaults.standard.set(recentQueries, forKey: settingsPrefix + "recentQueries")
     }
 
     nonisolated static func qualityScore(for name: String) -> Int {
@@ -291,28 +292,36 @@ class ChannelViewModel: ObservableObject {
     
     func loadData(url: String, user: String, pass: String, type: LoginType) async {
         guard !url.isEmpty else { return }
+        
+        // Update settings prefix based on login to isolate settings per user
+        let prefixKey = "\(url)_\(user)".components(separatedBy: CharacterSet.alphanumerics.inverted).joined()
+        self.settingsPrefix = prefixKey.isEmpty ? "" : prefixKey + "_"
+        self.loadSettings()
+        
         if channels.isEmpty { isLoading = true; errorMessage = nil }
         var safeURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
         if !safeURL.lowercased().hasPrefix("http") { safeURL = "http://" + safeURL }
         guard let baseURL = URL(string: safeURL) else { isLoading = false; return }
         
+        let prefix = self.settingsPrefix
+        
         do {
             if type == .xtream {
                 await withThrowingTaskGroup(of: Void.self) { group in
-                    group.addTask { [weak self, baseURL, user, pass] in
+                    group.addTask { [weak self, baseURL, user, pass, prefix] in
                         guard let self = self else { return }
                         let catUrl = try await self.buildApiUrl(base: baseURL, user: user, pass: pass, action: "get_live_categories")
                         let (data, _) = try await URLSession.shared.data(from: catUrl)
                         let cats = try JSONDecoder().decode([StreamCategory].self, from: data)
-                        let processed = await self.processCategories(cats)
+                        let processed = await self.processCategories(cats, prefix: prefix)
                         await MainActor.run { [weak self] in self?.categories = processed }
                     }
-                    group.addTask { [weak self, baseURL, user, pass, safeURL] in
+                    group.addTask { [weak self, baseURL, user, pass, safeURL, prefix] in
                         guard let self = self else { return }
                         let streamUrl = try await self.buildApiUrl(base: baseURL, user: user, pass: pass, action: "get_live_streams")
                         let (data, _) = try await URLSession.shared.data(from: streamUrl)
                         let raw = try JSONDecoder().decode([StreamChannel].self, from: data)
-                        let processed = await self.processChannels(raw, safeURL: safeURL, user: user, pass: pass)
+                        let processed = await self.processChannels(raw, safeURL: safeURL, user: user, pass: pass, prefix: prefix)
                         await MainActor.run { [weak self] in self?.channels = processed; self?.categorizeSports() }
                         await self.updateEPG(baseURL: baseURL, user: user, pass: pass)
                         // Pre-load scores
@@ -392,7 +401,7 @@ class ChannelViewModel: ObservableObject {
 
     func loadSettings() {
         func load<T: Decodable>(_ key: String, type: T.Type) -> T? {
-            guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
+            guard let data = UserDefaults.standard.data(forKey: settingsPrefix + key) else { return nil }
             return try? JSONDecoder().decode(type, from: data)
         }
         self.renamedChannels = load("renamedChannels", type: [Int: String].self) ?? [:]
@@ -401,7 +410,7 @@ class ChannelViewModel: ObservableObject {
         self.favoriteIDs = Set(load("favoriteChannelIDs", type: [Int].self) ?? [])
         self.hiddenIDs = Set(load("hiddenChannelIDs", type: [Int].self) ?? [])
         self.recentIDs = load("recentChannelIDs", type: [Int].self) ?? []
-        self.recentQueries = UserDefaults.standard.stringArray(forKey: "recentQueries") ?? []
+        self.recentQueries = UserDefaults.standard.stringArray(forKey: settingsPrefix + "recentQueries") ?? []
         
         if let saved = load("sportsConfigs", type: [SportConfig].self) {
             self.sportsConfigs = saved.filter { $0.id != "Other" }.sorted { $0.order < $1.order }
@@ -419,27 +428,27 @@ class ChannelViewModel: ObservableObject {
     func saveCategorySettings() {
         struct Wrapper: Codable { let id: Int; var name: String; var isHidden: Bool; var order: Int }
         let wrappers = categories.map { Wrapper(id: $0.id, name: $0.name, isHidden: $0.isHidden, order: $0.order) }
-        if let encoded = try? JSONEncoder().encode(wrappers) { UserDefaults.standard.set(encoded, forKey: "savedCategories") }
+        if let encoded = try? JSONEncoder().encode(wrappers) { UserDefaults.standard.set(encoded, forKey: settingsPrefix + "savedCategories") }
     }
 
     func renameChannel(id: Int, newName: String) {
         renamedChannels[id] = newName
-        if let encoded = try? JSONEncoder().encode(renamedChannels) { UserDefaults.standard.set(encoded, forKey: "renamedChannels") }
+        if let encoded = try? JSONEncoder().encode(renamedChannels) { UserDefaults.standard.set(encoded, forKey: settingsPrefix + "renamedChannels") }
         if let index = channels.firstIndex(where: { $0.id == id }) { channels[index].name = newName; performSearch(); categorizeSports(); objectWillChange.send() }
     }
     
     func renameCategory(id: Int, newName: String) {
         renamedCategories[id] = newName
-        if let encoded = try? JSONEncoder().encode(renamedCategories) { UserDefaults.standard.set(encoded, forKey: "renamedCategories") }
+        if let encoded = try? JSONEncoder().encode(renamedCategories) { UserDefaults.standard.set(encoded, forKey: settingsPrefix + "renamedCategories") }
         if let index = categories.firstIndex(where: { $0.id == id }) { categories[index].name = newName; objectWillChange.send() }
     }
     
-    func toggleFavorite(_ id: Int) { if favoriteIDs.contains(id) { favoriteIDs.remove(id) } else { favoriteIDs.insert(id) }; if let d = try? JSONEncoder().encode(Array(favoriteIDs)) { UserDefaults.standard.set(d, forKey: "favoriteChannelIDs") } }
-    func hideChannel(_ id: Int) { hiddenIDs.insert(id); if let d = try? JSONEncoder().encode(Array(hiddenIDs)) { UserDefaults.standard.set(d, forKey: "hiddenChannelIDs") } }
-    func unhideChannel(_ id: Int) { hiddenIDs.remove(id); if let d = try? JSONEncoder().encode(Array(hiddenIDs)) { UserDefaults.standard.set(d, forKey: "hiddenChannelIDs") } }
+    func toggleFavorite(_ id: Int) { if favoriteIDs.contains(id) { favoriteIDs.remove(id) } else { favoriteIDs.insert(id) }; if let d = try? JSONEncoder().encode(Array(favoriteIDs)) { UserDefaults.standard.set(d, forKey: settingsPrefix + "favoriteChannelIDs") } }
+    func hideChannel(_ id: Int) { hiddenIDs.insert(id); if let d = try? JSONEncoder().encode(Array(hiddenIDs)) { UserDefaults.standard.set(d, forKey: settingsPrefix + "hiddenChannelIDs") } }
+    func unhideChannel(_ id: Int) { hiddenIDs.remove(id); if let d = try? JSONEncoder().encode(Array(hiddenIDs)) { UserDefaults.standard.set(d, forKey: settingsPrefix + "hiddenChannelIDs") } }
     func hideCategory(_ id: Int) { if let idx = categories.firstIndex(where: { $0.id == id }) { categories[idx].isHidden = true; saveCategorySettings() } }
-    func addToRecent(_ id: Int) { if let idx = recentIDs.firstIndex(of: id) { recentIDs.remove(at: idx) }; recentIDs.insert(id, at: 0); if recentIDs.count > 20 { recentIDs = Array(recentIDs.prefix(20)) }; if let d = try? JSONEncoder().encode(recentIDs) { UserDefaults.standard.set(d, forKey: "recentChannelIDs") } }
-    func removeFromRecent(_ id: Int) { if let idx = recentIDs.firstIndex(of: id) { recentIDs.remove(at: idx); if let d = try? JSONEncoder().encode(recentIDs) { UserDefaults.standard.set(d, forKey: "recentChannelIDs") } } }
+    func addToRecent(_ id: Int) { if let idx = recentIDs.firstIndex(of: id) { recentIDs.remove(at: idx) }; recentIDs.insert(id, at: 0); if recentIDs.count > 20 { recentIDs = Array(recentIDs.prefix(20)) }; if let d = try? JSONEncoder().encode(recentIDs) { UserDefaults.standard.set(d, forKey: settingsPrefix + "recentChannelIDs") } }
+    func removeFromRecent(_ id: Int) { if let idx = recentIDs.firstIndex(of: id) { recentIDs.remove(at: idx); if let d = try? JSONEncoder().encode(recentIDs) { UserDefaults.standard.set(d, forKey: settingsPrefix + "recentChannelIDs") } } }
 
     nonisolated func parseM3U(content: String) async -> ([StreamChannel], [StreamCategory], String?) {
         var channels: [StreamChannel] = []; var categories: [StreamCategory] = []; var catNames = Set<String>()
@@ -474,15 +483,42 @@ class ChannelViewModel: ObservableObject {
         return url
     }
     
-    nonisolated func processCategories(_ loadedCats: [StreamCategory]) async -> [StreamCategory] {
-        var mutable = loadedCats; let data = UserDefaults.standard.data(forKey: "renamedCategories") ?? Data()
+    nonisolated func processCategories(_ loadedCats: [StreamCategory], prefix: String) async -> [StreamCategory] {
+        var mutable = loadedCats; let data = UserDefaults.standard.data(forKey: prefix + "renamedCategories") ?? Data()
         let renames = (try? JSONDecoder().decode([Int: String].self, from: data)) ?? [:]
+        
+        // Also load hidden/saved state using the prefix
+        struct Wrapper: Codable { let id: Int; var name: String; var isHidden: Bool; var order: Int }
+        if let savedData = UserDefaults.standard.data(forKey: prefix + "savedCategories"),
+           let saved = try? JSONDecoder().decode([Wrapper].self, from: savedData) {
+            
+            // Map saved settings to loaded categories
+            var savedMap = Dictionary(uniqueKeysWithValues: saved.map { ($0.id, $0) })
+            
+            for i in 0..<mutable.count {
+                let id = mutable[i].id
+                if let s = savedMap[id] {
+                    mutable[i].isHidden = s.isHidden
+                    mutable[i].order = s.order
+                    // Use saved name if available, or rename override
+                    if let custom = renames[id] { mutable[i].name = custom }
+                    else { mutable[i].name = s.name } // Use saved name (might be same as original)
+                } else {
+                     // Not saved, apply rename if exists
+                    if let custom = renames[id] { mutable[i].name = custom }
+                    mutable[i].order = 9999 + i // Default order for new categories
+                }
+            }
+            // Sort by order
+             return mutable.sorted { $0.order < $1.order }
+        }
+        
         for i in 0..<mutable.count { let id = mutable[i].id; if let custom = renames[id] { mutable[i].name = custom }; mutable[i].order = i }
         return mutable.sorted { $0.order < $1.order }
     }
     
-    nonisolated func processChannels(_ raw: [StreamChannel], safeURL: String, user: String, pass: String) async -> [StreamChannel] {
-        let data = UserDefaults.standard.data(forKey: "renamedChannels") ?? Data()
+    nonisolated func processChannels(_ raw: [StreamChannel], safeURL: String, user: String, pass: String, prefix: String) async -> [StreamChannel] {
+        let data = UserDefaults.standard.data(forKey: prefix + "renamedChannels") ?? Data()
         let renames = (try? JSONDecoder().decode([Int: String].self, from: data)) ?? [:]
         return raw.map { var c = $0; c.streamURL = "\(safeURL)/live/\(user)/\(pass)/\($0.id).m3u8"; c.originalName = c.name; if let custom = renames[c.id] { c.name = custom } else { c.name = NameCleaner.clean(c.name) }; return c }
     }
