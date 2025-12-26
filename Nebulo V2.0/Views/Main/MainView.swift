@@ -199,7 +199,8 @@ struct SidebarLayout: View {
                                 HStack(spacing: 12) {
                                     ForEach(viewModel.filteredCategories) { cat in
                                         Button(action: { withAnimation { selectedCategory = cat; searchText = "" } }) {
-                                            CategoryCard(title: cat.name, color: .secondary)
+                                            CategoryCard(title: cat.name, color: .secondary, lineLimit: 2)
+                                                .multilineTextAlignment(.leading)
                                                 .frame(width: 200, height: 85)
                                         }.buttonStyle(.plain)
                                     }
@@ -255,9 +256,9 @@ struct StandardLayout: View {
                                 Button(action: { viewModel.lastSelectedHomeID = -3; withAnimation { selectedCategory = StreamCategory(id: -3, name: "Sports Center") } }) { SquareCategoryCard(title: "Sports Center", icon: "sportscourt.fill", color: .green, accentColor: accentColor) }.buttonStyle(.plain).id(-3)
                                 Button(action: { viewModel.lastSelectedHomeID = -4; withAnimation { selectedCategory = StreamCategory(id: -4, name: "Favorites") } }) { SquareCategoryCard(title: "Favorites", icon: "star.fill", color: .yellow, accentColor: accentColor) }.buttonStyle(.plain).id(-4)
                             }.padding(.horizontal).padding(.vertical, 8)
-                            Button(action: { viewModel.lastSelectedHomeID = -99; withAnimation { showMultiView = true } }) { CategoryCard(title: "Multi View", icon: "square.grid.2x2.fill", color: .purple).frame(height: 65) }.buttonStyle(.plain).padding(.horizontal).id(-99)
-                            Button(action: { viewModel.lastSelectedHomeID = -1; withAnimation { selectedCategory = StreamCategory(id: -1, name: "All Channels") } }) { CategoryCard(title: "All Channels", icon: "tv", color: .blue).frame(height: 65) }.buttonStyle(.plain).padding(.horizontal).id(-1)
-                            ForEach(viewModel.categories.filter { !$0.isHidden }) { cat in Button(action: { viewModel.lastSelectedHomeID = cat.id; withAnimation { selectedCategory = cat } }) { CategoryCard(title: cat.name, color: .secondary).frame(height: 65) }.buttonStyle(.plain).padding(.horizontal).id(cat.id) }
+                            Button(action: { viewModel.lastSelectedHomeID = -99; withAnimation { showMultiView = true } }) { CategoryCard(title: "Multi View", icon: "square.grid.2x2.fill", color: .purple) }.buttonStyle(.plain).padding(.horizontal).id(-99)
+                            Button(action: { viewModel.lastSelectedHomeID = -1; withAnimation { selectedCategory = StreamCategory(id: -1, name: "All Channels") } }) { CategoryCard(title: "All Channels", icon: "tv", color: .blue) }.buttonStyle(.plain).padding(.horizontal).id(-1)
+                            ForEach(viewModel.categories.filter { !$0.isHidden }) { cat in Button(action: { viewModel.lastSelectedHomeID = cat.id; withAnimation { selectedCategory = cat } }) { CategoryCard(title: cat.name, color: .secondary) }.buttonStyle(.plain).padding(.horizontal).id(cat.id) }
                         }.padding(.vertical)
                     }
                     .onAppear {
@@ -313,7 +314,8 @@ struct StandardLayout: View {
                                 HStack(spacing: 12) {
                                     ForEach(viewModel.filteredCategories) { cat in
                                         Button(action: { withAnimation { selectedCategory = cat; searchText = "" } }) {
-                                            CategoryCard(title: cat.name, color: .secondary)
+                                            CategoryCard(title: cat.name, color: .secondary, lineLimit: 2)
+                                                .multilineTextAlignment(.leading)
                                                 .frame(width: 200, height: 85)
                                         }.buttonStyle(.plain)
                                     }
@@ -376,7 +378,9 @@ struct CategoryDetailView: View {
                                                         Button(action: { 
                                                             onCategorySelect?(cat)
                                                         }) {
-                                                            CategoryCard(title: cat.name, color: .secondary).frame(width: 200, height: 85)
+                                                            CategoryCard(title: cat.name, color: .secondary, lineLimit: 2)
+                                                                .multilineTextAlignment(.leading)
+                                                                .frame(width: 200, height: 85)
                                                         }.buttonStyle(.plain)
                                                     }
                                                 }.padding(.horizontal)
