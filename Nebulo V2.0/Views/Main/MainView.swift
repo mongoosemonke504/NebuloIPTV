@@ -11,58 +11,59 @@ struct MainView: View {
     var body: some View {
         GeometryReader { geo in
             let isL = geo.size.width > geo.size.height
-            NavigationStack {
-                ZStack {
-                    NebulaBackgroundView(color1: Color(hex: nebColor1) ?? .purple, color2: Color(hex: nebColor2) ?? .blue, color3: Color(hex: nebColor3) ?? .pink, point1: UnitPoint(x: nebX1, y: nebY1), point2: UnitPoint(x: nebX2, y: nebY2), point3: UnitPoint(x: nebX3, y: nebY3)).zIndex(0)
-                    
-                    Group {
-                        if shouldUseSidebar(isLandscape: isL) { SidebarLayout(viewModel: viewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $viewModel.searchText, isLandscape: isL, accentColor: accentColor, playAction: playChannel, showMultiView: $showMultiView, showSettings: $showSettings) }
-                        else { StandardLayout(viewModel: viewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $viewModel.searchText, accentColor: accentColor, playAction: playChannel, showMultiView: $showMultiView, showSettings: $showSettings) }
-                    }
-                    .zIndex(1)
-                    
-                    if let channel = selectedChannel {
-                        CustomVideoPlayerView(channel: channel, viewModel: viewModel, onDismiss: { 
-                            withAnimation(.easeInOut(duration: 0.4)) { selectedChannel = nil }
-                            // Trigger scroll restoration slightly after animation starts/finishes to ensure view is visible
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                viewModel.scrollRestoreTrigger = UUID()
-                            }
-                        }).transition(.asymmetric(insertion: .move(edge: .bottom), removal: .opacity)).zIndex(10)
-                    }
-                    
-                    // MODIFIED: EPG Indicator coming down and going back to the top (Dynamic Island)
-                    if viewModel.isUpdatingEPG {
-                        VStack {
-                            EPGLoadingNotification(progress: viewModel.displayEPGProgress, accentColor: accentColor)
-                                .padding(.top, 11) // Precise spacing for Dynamic Island positioning
-                            Spacer()
+            ZStack {
+                NavigationStack {
+                    ZStack {
+                        NebulaBackgroundView(color1: Color(hex: nebColor1) ?? .purple, color2: Color(hex: nebColor2) ?? .blue, color3: Color(hex: nebColor3) ?? .pink, point1: UnitPoint(x: nebX1, y: nebY1), point2: UnitPoint(x: nebX2, y: nebY2), point3: UnitPoint(x: nebX3, y: nebY3)).zIndex(0)
+                        
+                        Group {
+                            if shouldUseSidebar(isLandscape: isL) { SidebarLayout(viewModel: viewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $viewModel.searchText, isLandscape: isL, accentColor: accentColor, playAction: playChannel, showMultiView: $showMultiView, showSettings: $showSettings) }
+                            else { StandardLayout(viewModel: viewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $viewModel.searchText, accentColor: accentColor, playAction: playChannel, showMultiView: $showMultiView, showSettings: $showSettings) }
                         }
-                        // Use move edge top for both in and out to return back to the island
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                        .zIndex(20)
+                        .zIndex(1)
+                        
+                        if viewModel.activeMultiViewCount > 0 && !showMultiView && selectedChannel == nil {
+                            MultiViewIndicator(count: viewModel.activeMultiViewCount, accentColor: nil, action: { withAnimation(.spring()) { showMultiView = true } }).zIndex(5)
+                        }
                     }
-                    
-                    if viewModel.activeMultiViewCount > 0 && !showMultiView && selectedChannel == nil {
-                        MultiViewIndicator(count: viewModel.activeMultiViewCount, accentColor: nil, action: { withAnimation(.spring()) { showMultiView = true } }).zIndex(5)
-                    }
-                }
-                .toolbar(selectedChannel != nil || showMultiView ? .hidden : .visible, for: .navigationBar)
-                .if(selectedChannel == nil && !showMultiView) { view in
-                    view.searchable(text: $viewModel.searchText, prompt: "Search")
-                        .toolbar {
-                            ToolbarItem(placement: .topBarTrailing) {
-                                HStack {
-                                    Button(action: { withAnimation(.spring()) { showMultiView = true } }) { Image(systemName: "square.grid.2x2.fill").foregroundStyle(.white.opacity(0.8)) }
-                                    Button(action: { showSettings = true }) { Image(systemName: "gearshape.fill").foregroundStyle(.white.opacity(0.8)) }
+                    .if(selectedChannel == nil && !showMultiView) { view in
+                        view.searchable(text: $viewModel.searchText, prompt: "Search")
+                            .toolbar {
+                                ToolbarItem(placement: .topBarTrailing) {
+                                    HStack {
+                                        Button(action: { withAnimation(.spring()) { showMultiView = true } }) { Image(systemName: "square.grid.2x2.fill").foregroundStyle(.white.opacity(0.8)) }
+                                        Button(action: { showSettings = true }) { Image(systemName: "gearshape.fill").foregroundStyle(.white.opacity(0.8)) }
+                                    }
                                 }
                             }
-                        }
+                    }
+                    .fullScreenCover(isPresented: $showMultiView) { MultiViewScreen(viewModel: viewModel, showMultiView: $showMultiView) }
+                    .sheet(isPresented: $showSettings) { SettingsView(categories: $viewModel.categories, accentColor: accentColor, viewModel: viewModel, onSave: { viewModel.saveCategorySettings() }) }
+                    .alert("No Streams Found", isPresented: $viewModel.showNoStreamsAlert) { Button("OK", role: .cancel) { } } message: { Text("No streams were found. Please search for the channel manually.") }
+                    .alert("Rename", isPresented: $viewModel.showRenameAlert) { TextField("New Name", text: $viewModel.renameInput); Button("Save") { viewModel.confirmRename() }; Button("Cancel", role: .cancel) {} }
                 }
-                .fullScreenCover(isPresented: $showMultiView) { MultiViewScreen(viewModel: viewModel, showMultiView: $showMultiView) }
-                .sheet(isPresented: $showSettings) { SettingsView(categories: $viewModel.categories, accentColor: accentColor, viewModel: viewModel, onSave: { viewModel.saveCategorySettings() }) }
-                .alert("No Streams Found", isPresented: $viewModel.showNoStreamsAlert) { Button("OK", role: .cancel) { } } message: { Text("No streams were found. Please search for the channel manually.") }
-                .alert("Rename", isPresented: $viewModel.showRenameAlert) { TextField("New Name", text: $viewModel.renameInput); Button("Save") { viewModel.confirmRename() }; Button("Cancel", role: .cancel) {} }
+                
+                if let channel = selectedChannel {
+                    CustomVideoPlayerView(channel: channel, viewModel: viewModel, onDismiss: { 
+                        withAnimation(.easeInOut(duration: 0.4)) { selectedChannel = nil }
+                        // Trigger scroll restoration slightly after animation starts/finishes to ensure view is visible
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            viewModel.scrollRestoreTrigger = UUID()
+                        }
+                    }).transition(.asymmetric(insertion: .move(edge: .bottom), removal: .opacity)).zIndex(10)
+                }
+                
+                // MODIFIED: EPG Indicator coming down and going back to the top (Dynamic Island)
+                if viewModel.isUpdatingEPG {
+                    VStack {
+                        EPGLoadingNotification(progress: viewModel.displayEPGProgress, accentColor: accentColor)
+                            .padding(.top, 11) // Precise spacing for Dynamic Island positioning
+                        Spacer()
+                    }
+                    // Use move edge top for both in and out to return back to the island
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(20)
+                }
             }
         }
         .task {
