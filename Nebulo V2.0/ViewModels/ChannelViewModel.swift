@@ -37,6 +37,7 @@ class ChannelViewModel: ObservableObject {
     @Published var showSelectionSheet = false
     @Published var isSearchingGame = false
     @Published var lastPlayedChannelID: Int? = nil
+    @Published var scrollRestoreTrigger = UUID()
     
     // EPG State
     @Published var epgData: [String: [EPGProgram]] = [:]

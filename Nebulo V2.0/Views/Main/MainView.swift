@@ -23,7 +23,13 @@ struct MainView: View {
                     .zIndex(1)
                     
                     if let channel = selectedChannel {
-                        CustomVideoPlayerView(channel: channel, viewModel: viewModel, onDismiss: { withAnimation(.easeInOut(duration: 0.4)) { selectedChannel = nil } }).transition(.move(edge: .bottom).combined(with: .opacity)).zIndex(10)
+                        CustomVideoPlayerView(channel: channel, viewModel: viewModel, onDismiss: { 
+                            withAnimation(.easeInOut(duration: 0.4)) { selectedChannel = nil }
+                            // Trigger scroll restoration slightly after animation starts/finishes to ensure view is visible
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                viewModel.scrollRestoreTrigger = UUID()
+                            }
+                        }).transition(.move(edge: .bottom).combined(with: .opacity)).zIndex(10)
                     }
                     
                     // MODIFIED: EPG Indicator coming down and going back to the top (Dynamic Island)
@@ -137,6 +143,11 @@ struct SidebarLayout: View {
                         }
                         .onChange(of: viewModel.lastPlayedChannelID) { id in
                             if let id = id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
+                        }
+                        .onChange(of: viewModel.scrollRestoreTrigger) { _ in
+                            if let last = viewModel.lastPlayedChannelID {
+                                withAnimation { proxy.scrollTo(last, anchor: .center) }
+                            }
                         }
                     }
                 }
@@ -333,6 +344,11 @@ struct CategoryDetailView: View {
                     }
                     .onChange(of: viewModel.lastPlayedChannelID) { id in
                          if let id = id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
+                    }
+                    .onChange(of: viewModel.scrollRestoreTrigger) { _ in
+                        if let last = viewModel.lastPlayedChannelID {
+                            withAnimation { proxy.scrollTo(last, anchor: .center) }
+                        }
                     }
                 }
             }
