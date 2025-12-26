@@ -19,7 +19,7 @@ struct CustomVideoPlayerView: View {
                     }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center).allowsHitTesting(true)
                     VStack {
                         HStack(alignment: .center) {
-                            Button(action: { onDismiss?() }) { Image(systemName: "xmark").font(.title3.bold()).foregroundColor(.white).padding(12).background(Material.ultraThinMaterial).clipShape(Circle()) }
+                            Button(action: { dismissAnimate() }) { Image(systemName: "xmark").font(.title3.bold()).foregroundColor(.white).padding(12).background(Material.ultraThinMaterial).clipShape(Circle()) }
                             Spacer()
                             if let vm = viewModel { Button(action: { vm.triggerMultiViewFromPlayer(with: channel) }) { Image(systemName: "square.grid.2x2.fill").font(.title3).foregroundColor(.white).padding(12).background(Material.ultraThinMaterial).clipShape(Circle()) } }
                             AirPlayButton().frame(width: 44, height: 44)
@@ -39,8 +39,9 @@ struct CustomVideoPlayerView: View {
                     }
                 }.transition(.opacity.animation(.easeInOut(duration: 0.15)))
             }
-        }.offset(y: offset.height).gesture(DragGesture().onChanged { if $0.translation.height > 0 { offset = $0.translation } }.onEnded { if $0.translation.height > 100 { onDismiss?() } else { withAnimation { offset = .zero } } }).onAppear { setupPlayer(); resetTimer(); startLiveEdgeChecker() }.onDisappear { player.pause(); timer?.cancel(); liveChecker?.invalidate(); pipAdapter = nil }
+        }.offset(y: offset.height).gesture(DragGesture().onChanged { if $0.translation.height > 0 { offset = $0.translation } }.onEnded { if $0.translation.height > 100 { dismissAnimate() } else { withAnimation { offset = .zero } } }).onAppear { setupPlayer(); resetTimer(); startLiveEdgeChecker() }.onDisappear { player.pause(); timer?.cancel(); liveChecker?.invalidate(); pipAdapter = nil }
     }
+    func dismissAnimate() { withAnimation(.easeInOut(duration: 0.35)) { offset = CGSize(width: 0, height: UIScreen.main.bounds.height) }; DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { onDismiss?() } }
     func seek(by s: Double) { guard let c = player.currentItem else { return }; let next = c.currentTime().seconds + s; player.seek(to: CMTime(seconds: next, preferredTimescale: 600)); resetTimer() }
     func jumpToLive() { guard let c = player.currentItem, let r = c.seekableTimeRanges.last?.timeRangeValue else { return }; player.seek(to: r.end); player.play(); isPlaying = true; isAtLiveEdge = true; resetTimer() }
     func startLiveEdgeChecker() { liveChecker = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in guard let c = player.currentItem, let r = c.seekableTimeRanges.last?.timeRangeValue else { return }; let isL = (r.end.seconds - c.currentTime().seconds) < 4.0; if isL != self.isAtLiveEdge { withAnimation { self.isAtLiveEdge = isL } } } }

@@ -29,7 +29,7 @@ struct MainView: View {
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                                 viewModel.scrollRestoreTrigger = UUID()
                             }
-                        }).transition(.move(edge: .bottom).combined(with: .opacity)).zIndex(10)
+                        }).transition(.asymmetric(insertion: .move(edge: .bottom), removal: .opacity)).zIndex(10)
                     }
                     
                     // MODIFIED: EPG Indicator coming down and going back to the top (Dynamic Island)
