@@ -138,15 +138,15 @@ struct SidebarLayout: View {
                         .transition(.blurFade)
                         .onAppear {
                             if let last = viewModel.lastPlayedChannelID {
-                                DispatchQueue.main.async { withAnimation { proxy.scrollTo(last, anchor: .center) } }
+                                DispatchQueue.main.async { proxy.scrollTo(last, anchor: .center) }
                             }
                         }
                         .onChange(of: viewModel.lastPlayedChannelID) { id in
-                            if let id = id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
+                            if let id = id { proxy.scrollTo(id, anchor: .center) }
                         }
                         .onChange(of: viewModel.scrollRestoreTrigger) { _ in
                             if let last = viewModel.lastPlayedChannelID {
-                                withAnimation { proxy.scrollTo(last, anchor: .center) }
+                                proxy.scrollTo(last, anchor: .center)
                             }
                         }
                     }
@@ -242,7 +242,7 @@ struct StandardLayout: View {
                     }
                     .onAppear {
                         if let last = viewModel.lastSelectedHomeID {
-                            DispatchQueue.main.async { withAnimation { proxy.scrollTo(last, anchor: .center) } }
+                            DispatchQueue.main.async { proxy.scrollTo(last, anchor: .center) }
                         }
                     }
                 }.transition(.blurFade)
@@ -346,15 +346,15 @@ struct CategoryDetailView: View {
                     }
                     .onAppear {
                         if let last = viewModel.lastPlayedChannelID {
-                            DispatchQueue.main.async { withAnimation { proxy.scrollTo(last, anchor: .center) } }
+                            DispatchQueue.main.async { proxy.scrollTo(last, anchor: .center) }
                         }
                     }
                     .onChange(of: viewModel.lastPlayedChannelID) { id in
-                         if let id = id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
+                         if let id = id { proxy.scrollTo(id, anchor: .center) }
                     }
                     .onChange(of: viewModel.scrollRestoreTrigger) { _ in
                         if let last = viewModel.lastPlayedChannelID {
-                            withAnimation { proxy.scrollTo(last, anchor: .center) }
+                            proxy.scrollTo(last, anchor: .center)
                         }
                     }
                 }
