@@ -36,6 +36,7 @@ class ChannelViewModel: ObservableObject {
     @Published var suggestedChannels: [StreamChannel] = []
     @Published var showSelectionSheet = false
     @Published var isSearchingGame = false
+    @Published var lastPlayedChannelID: Int? = nil
     
     // EPG State
     @Published var epgData: [String: [EPGProgram]] = [:]

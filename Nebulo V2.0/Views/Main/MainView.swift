@@ -71,7 +71,7 @@ struct MainView: View {
         .onChange(of: viewModel.channelToAutoPlay) { nc in if let c = nc { withAnimation(.easeInOut(duration: 0.4)) { selectedChannel = c }; viewModel.channelToAutoPlay = nil } }
         .onChange(of: viewModel.triggerMultiView) { nv in if nv { selectedChannel = nil; withAnimation(.spring()) { showMultiView = true }; viewModel.triggerMultiView = false } }
     }
-    func playChannel(_ channel: StreamChannel) { if viewModel.multiViewModeActive { viewModel.addToMultiView(channel); viewModel.multiViewModeActive = false; withAnimation(.spring()) { showMultiView = true } } else { viewModel.addToRecent(channel.id); withAnimation(.easeInOut(duration: 0.4)) { selectedChannel = channel } } }
+    func playChannel(_ channel: StreamChannel) { if viewModel.multiViewModeActive { viewModel.addToMultiView(channel); viewModel.multiViewModeActive = false; withAnimation(.spring()) { showMultiView = true } } else { viewModel.addToRecent(channel.id); viewModel.lastPlayedChannelID = channel.id; withAnimation(.easeInOut(duration: 0.4)) { selectedChannel = channel } } }
     func shouldUseSidebar(isLandscape: Bool) -> Bool { if selectedCategory?.id == -3 { return false }; switch ViewMode(rawValue: viewMode) ?? .automatic { case .automatic: return isLandscape; case .sidebar: return true; case .standard: return false } }
 }
 
@@ -114,13 +114,31 @@ struct SidebarLayout: View {
                     }
                 }
                 else {
-                    ScrollView(showsIndicators: false) {
-                        LazyVStack(spacing: 0) {
-                            let channels = getChannelsToShow()
-                            if channels.isEmpty { EmptyStateView(title: "No Channels", systemImage: "tv.slash", description: "Select a category.") }
-                            else { ForEach(channels) { c in ChannelRow(channel: c, epgProgram: viewModel.getCurrentProgram(for: c), isFavorite: viewModel.favoriteIDs.contains(c.id), accentColor: accentColor, isCompact: !isLandscape, playAction: { playAction(c) }, toggleFav: { viewModel.toggleFavorite(c.id) }).equatable().contextMenu { Button { viewModel.triggerRenameChannel(c) } label: { Label("Rename", systemImage: "pencil") }; Button { viewModel.hideChannel(c.id) } label: { Label("Hide", systemImage: "eye.slash") }; if selectedCategory?.id == -2 || viewModel.recentIDs.contains(c.id) { Button(role: .destructive) { viewModel.removeFromRecent(c.id) } label: { Label("Remove", systemImage: "clock.badge.xmark") } } } } }
+                    ScrollViewReader { proxy in
+                        ScrollView(showsIndicators: false) {
+                            LazyVStack(spacing: 0) {
+                                let channels = getChannelsToShow()
+                                if channels.isEmpty { EmptyStateView(title: "No Channels", systemImage: "tv.slash", description: "Select a category.") }
+                                else {
+                                    ForEach(channels) { c in
+                                        ChannelRow(channel: c, epgProgram: viewModel.getCurrentProgram(for: c), isFavorite: viewModel.favoriteIDs.contains(c.id), accentColor: accentColor, isCompact: !isLandscape, playAction: { playAction(c) }, toggleFav: { viewModel.toggleFavorite(c.id) })
+                                            .equatable()
+                                            .id(c.id)
+                                            .contextMenu { Button { viewModel.triggerRenameChannel(c) } label: { Label("Rename", systemImage: "pencil") }; Button { viewModel.hideChannel(c.id) } label: { Label("Hide", systemImage: "eye.slash") }; if selectedCategory?.id == -2 || viewModel.recentIDs.contains(c.id) { Button(role: .destructive) { viewModel.removeFromRecent(c.id) } label: { Label("Remove", systemImage: "clock.badge.xmark") } } }
+                                    }
+                                }
+                            }
                         }
-                    }.transition(.blurFade)
+                        .transition(.blurFade)
+                        .onAppear {
+                            if let last = viewModel.lastPlayedChannelID {
+                                DispatchQueue.main.async { withAnimation { proxy.scrollTo(last, anchor: .center) } }
+                            }
+                        }
+                        .onChange(of: viewModel.lastPlayedChannelID) { id in
+                            if let id = id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
+                        }
+                    }
                 }
             }.animation(.easeInOut(duration: 0.4), value: selectedCategory)
         }
@@ -272,38 +290,49 @@ struct CategoryDetailView: View {
             NebulaBackgroundView(color1: Color(hex: nebColor1) ?? .purple, color2: Color(hex: nebColor2) ?? .blue, color3: Color(hex: nebColor3) ?? .pink, point1: UnitPoint(x: nebX1, y: nebY1), point2: UnitPoint(x: nebX2, y: nebY2), point3: UnitPoint(x: nebX3, y: nebY3))
             
             VStack(spacing: 0) {
-                ScrollView(showsIndicators: false) {
-                    LazyVStack(spacing: 0) {
-                        if !viewModel.searchText.isEmpty {
-                            VStack(alignment: .leading, spacing: 20) {
-                                if viewModel.isSearching {
-                                    VStack(alignment: .leading, spacing: 20) {
-                                        SkeletonBox(width: 150, height: 14).padding(.horizontal)
-                                        ScrollView(.horizontal) { HStack { ForEach(0..<4) { _ in HorizontalCardSkeleton() } } }.padding(.horizontal)
-                                    }.padding(.top, 20)
-                                } else {
-                                    if !viewModel.filteredEPGChannels.isEmpty {
-                                        Text("EPG RESULTS").font(.caption.bold()).foregroundColor(.white.opacity(0.5)).padding(.horizontal)
-                                        HorizontalSearchList(channels: viewModel.filteredEPGChannels, viewModel: viewModel, accentColor: accentColor, playAction: playAction)
+                ScrollViewReader { proxy in
+                    ScrollView(showsIndicators: false) {
+                        LazyVStack(spacing: 0) {
+                            if !viewModel.searchText.isEmpty {
+                                VStack(alignment: .leading, spacing: 20) {
+                                    if viewModel.isSearching {
+                                        VStack(alignment: .leading, spacing: 20) {
+                                            SkeletonBox(width: 150, height: 14).padding(.horizontal)
+                                            ScrollView(.horizontal) { HStack { ForEach(0..<4) { _ in HorizontalCardSkeleton() } } }.padding(.horizontal)
+                                        }.padding(.top, 20)
+                                    } else {
+                                        if !viewModel.filteredEPGChannels.isEmpty {
+                                            Text("EPG RESULTS").font(.caption.bold()).foregroundColor(.white.opacity(0.5)).padding(.horizontal)
+                                            HorizontalSearchList(channels: viewModel.filteredEPGChannels, viewModel: viewModel, accentColor: accentColor, playAction: playAction)
+                                        }
+                                        if !viewModel.filteredNameChannels.isEmpty {
+                                            Text("NAME RESULTS").font(.caption.bold()).foregroundColor(.white.opacity(0.5)).padding(.horizontal)
+                                            HorizontalSearchList(channels: viewModel.filteredNameChannels, viewModel: viewModel, accentColor: accentColor, playAction: playAction)
+                                        }
+                                        
+                                        RecentSearchesView(viewModel: viewModel, accentColor: accentColor)
                                     }
-                                    if !viewModel.filteredNameChannels.isEmpty {
-                                        Text("NAME RESULTS").font(.caption.bold()).foregroundColor(.white.opacity(0.5)).padding(.horizontal)
-                                        HorizontalSearchList(channels: viewModel.filteredNameChannels, viewModel: viewModel, accentColor: accentColor, playAction: playAction)
-                                    }
-                                    
-                                    RecentSearchesView(viewModel: viewModel, accentColor: accentColor)
+                                }.padding(.top)
+                            } else {
+                                ForEach(channels) { c in
+                                    ChannelRow(channel: c, epgProgram: viewModel.getCurrentProgram(for: c), isFavorite: favoriteIDs.contains(c.id), accentColor: accentColor, playAction: { playAction(c) }, toggleFav: { toggleFav(c.id) })
+                                        .equatable()
+                                        .id(c.id)
+                                        .contextMenu {
+                                            Button { promptRename(c) } label: { Label("Rename", systemImage: "pencil") }
+                                            Button { hideChannel(c.id) } label: { Label("Hide", systemImage: "eye.slash") }
+                                        }
                                 }
-                            }.padding(.top)
-                        } else {
-                            ForEach(channels) { c in
-                                ChannelRow(channel: c, epgProgram: viewModel.getCurrentProgram(for: c), isFavorite: favoriteIDs.contains(c.id), accentColor: accentColor, playAction: { playAction(c) }, toggleFav: { toggleFav(c.id) })
-                                    .equatable()
-                                    .contextMenu {
-                                        Button { promptRename(c) } label: { Label("Rename", systemImage: "pencil") }
-                                        Button { hideChannel(c.id) } label: { Label("Hide", systemImage: "eye.slash") }
-                                    }
                             }
                         }
+                    }
+                    .onAppear {
+                        if let last = viewModel.lastPlayedChannelID {
+                            DispatchQueue.main.async { withAnimation { proxy.scrollTo(last, anchor: .center) } }
+                        }
+                    }
+                    .onChange(of: viewModel.lastPlayedChannelID) { id in
+                         if let id = id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
                     }
                 }
             }
