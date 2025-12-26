@@ -3,7 +3,7 @@ import SwiftUI
 struct SportsHubView: View {
     @ObservedObject var viewModel: ChannelViewModel
     let accentColor: Color; let playAction: (StreamChannel) -> Void; var onBack: (() -> Void)? = nil
-    @StateObject private var scoreViewModel = ScoreViewModel()
+    @ObservedObject var scoreViewModel: ScoreViewModel
     
     var body: some View {
         ZStack {

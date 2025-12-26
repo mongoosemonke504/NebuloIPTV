@@ -41,6 +41,9 @@ class ChannelViewModel: ObservableObject {
     @Published var lastSelectedHomeID: Int? = nil
     @Published var scrollRestoreTrigger = UUID()
     
+    // Shared ScoreViewModel for pre-loading
+    @Published var scoreViewModel = ScoreViewModel()
+    
     // EPG State
     @Published var epgData: [String: [EPGProgram]] = [:]
     @Published var currentTime = Date()
@@ -312,6 +315,8 @@ class ChannelViewModel: ObservableObject {
                         let processed = await self.processChannels(raw, safeURL: safeURL, user: user, pass: pass)
                         await MainActor.run { [weak self] in self?.channels = processed; self?.categorizeSports() }
                         await self.updateEPG(baseURL: baseURL, user: user, pass: pass)
+                        // Pre-load scores
+                        await self.scoreViewModel.fetchScores()
                     }
                 }
             } else {
@@ -319,6 +324,8 @@ class ChannelViewModel: ObservableObject {
                 if let content = String(data: data, encoding: .utf8) {
                     let (pChannels, pCategories, epgUrl) = await parseM3U(content: content)
                     self.channels = pChannels; self.categories = pCategories; self.categorizeSports()
+                    // Pre-load scores
+                    await self.scoreViewModel.fetchScores()
                     if let eURL = epgUrl, let xmlURL = URL(string: eURL) {
                         await self.updateEPGFromURL(xmlURL)
                     }

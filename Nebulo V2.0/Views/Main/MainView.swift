@@ -111,7 +111,7 @@ struct SidebarLayout: View {
             ZStack {
                 if !searchText.isEmpty {
                     searchView
-                } else if selectedCategory?.id == -3 { SportsHubView(viewModel: viewModel, accentColor: accentColor, playAction: playAction).transition(.blurFade) }
+                } else if selectedCategory?.id == -3 { SportsHubView(viewModel: viewModel, accentColor: accentColor, playAction: playAction, onBack: nil, scoreViewModel: viewModel.scoreViewModel).transition(.blurFade) }
                 else if viewModel.isLoading {
                     ScrollView {
                         VStack {
@@ -235,7 +235,7 @@ struct StandardLayout: View {
             if !searchText.isEmpty {
                 searchView
             } else if let cat = selectedCategory {
-                if cat.id == -3 { SportsHubView(viewModel: viewModel, accentColor: accentColor, playAction: playAction, onBack: { withAnimation { selectedCategory = nil } }).transition(.blurFade) }
+                if cat.id == -3 { SportsHubView(viewModel: viewModel, accentColor: accentColor, playAction: playAction, onBack: { withAnimation { selectedCategory = nil } }, scoreViewModel: viewModel.scoreViewModel).transition(.blurFade) }
                 else { CategoryDetailView(title: cat.name, channels: getChannelsToShow(for: cat), accentColor: accentColor, playAction: playAction, toggleFav: viewModel.toggleFavorite, promptRename: viewModel.triggerRenameChannel, hideChannel: viewModel.hideChannel, favoriteIDs: viewModel.favoriteIDs, viewModel: viewModel, showMultiView: $showMultiView, onBack: { withAnimation { selectedCategory = nil } }, onCategorySelect: { cat in withAnimation { selectedCategory = cat; searchText = "" } }).transition(.blurFade) }
             } else if viewModel.isLoading {
                 ScrollView {
