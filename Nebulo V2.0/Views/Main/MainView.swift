@@ -26,7 +26,7 @@ struct MainView: View {
                             MultiViewIndicator(count: viewModel.activeMultiViewCount, accentColor: nil, action: { withAnimation(.spring()) { showMultiView = true } }).zIndex(5)
                         }
                     }
-                    .if(selectedChannel == nil && !showMultiView) { view in
+                    .if(!showMultiView) { view in
                         view.searchable(text: $viewModel.searchText, prompt: "Search")
                             .toolbar {
                                 ToolbarItem(placement: .topBarTrailing) {
