@@ -203,19 +203,20 @@ class ChannelViewModel: ObservableObject {
     func runSmartSearch(home: String, away: String, sport: SportType, network: String? = nil) {
         let inputChannels = self.channels
         let inputHidden = self.hiddenIDs
+        let hiddenCatIDs = Set(self.categories.filter { $0.isHidden }.map { $0.id })
         let currentEPG = self.epgData
         let now = self.currentTime
         
         self.isSearchingGame = true; self.suggestedChannels = []; self.channelToAutoPlay = nil
         
-        Task.detached(priority: .userInitiated) { [weak self, inputChannels, inputHidden, currentEPG, now] in
+        Task.detached(priority: .userInitiated) { [weak self, inputChannels, inputHidden, hiddenCatIDs, currentEPG, now] in
             guard let self = self else { return }
             let homeTokens = SmartSearchLogic.tokenize(home)
             let awayTokens = SmartSearchLogic.tokenize(away)
             
             var exactMatches: [StreamChannel] = []
             for channel in inputChannels {
-                if inputHidden.contains(channel.id) { continue }
+                if inputHidden.contains(channel.id) || hiddenCatIDs.contains(channel.categoryID) { continue }
                 if let eID = channel.epgID, let schedule = currentEPG[eID] {
                     if let program = schedule.first(where: { now >= $0.start && now <= $0.stop }) {
                         let lowerTitle = program.title.lowercased()
@@ -237,7 +238,7 @@ class ChannelViewModel: ObservableObject {
             }
             
             let scored = inputChannels.compactMap { channel -> (StreamChannel, Int)? in
-                if inputHidden.contains(channel.id) || SmartSearchLogic.isBanner(channel.name) { return nil }
+                if inputHidden.contains(channel.id) || hiddenCatIDs.contains(channel.categoryID) || SmartSearchLogic.isBanner(channel.name) { return nil }
                 var score = SmartSearchLogic.calculateStreamScore(name: channel.name, sport: sport, targetNetwork: network)
                 let lowerName = channel.name.lowercased()
                 if homeTokens.contains(where: { lowerName.contains($0) }) && awayTokens.contains(where: { lowerName.contains($0) }) { score += 60000 }
