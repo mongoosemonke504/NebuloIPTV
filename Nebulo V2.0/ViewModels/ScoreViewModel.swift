@@ -59,23 +59,55 @@ class ScoreViewModel: ObservableObject {
     @MainActor
     func fetchScores(forceRefresh: Bool = false) async {
         if isLoading { return }
-        // If data is fresh, just re-filter (in case search text changed or view re-appeared) and return
-        if !forceRefresh, let lastFetch = lastFetchTimes[selectedSport], Date().timeIntervalSince(lastFetch) < 300 {
+        
+        // If we have recent data for the *selected* sport, we assume others are also relatively fresh or will be loaded.
+        // But the user wants EVERYTHING pre-loaded.
+        // So we check if *any* sport is missing or if forceRefresh is true.
+        // Or simply, check if the selected sport is stale, then refresh ALL to be safe.
+        // Actually, let's just refresh all if selected is stale, or if we haven't fetched all.
+        // For simplicity and to meet the requirement "Make sure every section ... is fully loaded":
+        
+        let now = Date()
+        let needsRefresh = forceRefresh || SportType.allCases.contains { sport in
+            guard let last = lastFetchTimes[sport] else { return true }
+            return now.timeIntervalSince(last) > 300
+        }
+        
+        if !needsRefresh {
             applyFilter(text: currentSearchText)
             return
         }
         
         isLoading = true
-        let newGames = (selectedSport == .soccer) ? await fetchMultiLeagueSoccer() : await fetchSingleSport(url: selectedSport.endpoint)
-        let statusPriority: [String: Int] = ["in": 0, "pre": 1, "post": 2]
-        let sorted = newGames.sorted { a, b in
-            let pA = statusPriority[a.status.type.state] ?? 3
-            let pB = statusPriority[b.status.type.state] ?? 3
-            if pA != pB { return pA < pB }
-            return a.gameDate > b.gameDate
+        
+        // Fetch ALL sports concurrently
+        let results = await withTaskGroup(of: (SportType, [ESPNEvent]).self) { group in
+            for sport in SportType.allCases {
+                group.addTask {
+                    let games = (sport == .soccer) ? await self.fetchMultiLeagueSoccer() : await self.fetchSingleSport(url: sport.endpoint)
+                    return (sport, games)
+                }
+            }
+            
+            var collected: [SportType: [ESPNEvent]] = [:]
+            for await (sport, games) in group {
+                collected[sport] = games
+            }
+            return collected
         }
-        self.gamesData[selectedSport] = sorted
-        self.lastFetchTimes[selectedSport] = Date()
+        
+        let statusPriority: [String: Int] = ["in": 0, "pre": 1, "post": 2]
+        
+        for (sport, newGames) in results {
+            let sorted = newGames.sorted { a, b in
+                let pA = statusPriority[a.status.type.state] ?? 3
+                let pB = statusPriority[b.status.type.state] ?? 3
+                if pA != pB { return pA < pB }
+                return a.gameDate > b.gameDate
+            }
+            self.gamesData[sport] = sorted
+            self.lastFetchTimes[sport] = Date()
+        }
         
         applyFilter(text: currentSearchText)
         isLoading = false
