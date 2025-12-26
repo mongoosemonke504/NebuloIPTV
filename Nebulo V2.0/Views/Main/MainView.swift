@@ -199,7 +199,7 @@ struct SidebarLayout: View {
                                 HStack(spacing: 12) {
                                     ForEach(viewModel.filteredCategories) { cat in
                                         Button(action: { withAnimation { selectedCategory = cat; searchText = "" } }) {
-                                            CategoryCard(title: cat.name, color: .secondary, lineLimit: 2)
+                                            CategoryCard(title: cat.name, color: .secondary, lineLimit: 1)
                                                 .multilineTextAlignment(.leading)
                                                 .frame(width: 200, height: 85)
                                         }.buttonStyle(.plain)
@@ -314,7 +314,7 @@ struct StandardLayout: View {
                                 HStack(spacing: 12) {
                                     ForEach(viewModel.filteredCategories) { cat in
                                         Button(action: { withAnimation { selectedCategory = cat; searchText = "" } }) {
-                                            CategoryCard(title: cat.name, color: .secondary, lineLimit: 2)
+                                            CategoryCard(title: cat.name, color: .secondary, lineLimit: 1)
                                                 .multilineTextAlignment(.leading)
                                                 .frame(width: 200, height: 85)
                                         }.buttonStyle(.plain)
@@ -378,7 +378,7 @@ struct CategoryDetailView: View {
                                                         Button(action: { 
                                                             onCategorySelect?(cat)
                                                         }) {
-                                                            CategoryCard(title: cat.name, color: .secondary, lineLimit: 2)
+                                                            CategoryCard(title: cat.name, color: .secondary, lineLimit: 1)
                                                                 .multilineTextAlignment(.leading)
                                                                 .frame(width: 200, height: 85)
                                                         }.buttonStyle(.plain)
