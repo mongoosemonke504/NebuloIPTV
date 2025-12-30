@@ -1,7 +1,0 @@
-{
-  "general": {
-    "checkpointing": {
-      "enabled": true
-    }
-  }
-}
