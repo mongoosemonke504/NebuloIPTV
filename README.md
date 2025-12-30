@@ -1,6 +1,6 @@
 # 🚀 Nebulo V2.0 - The Ultimate iOS IPTV Experience
 
-**Nebulo V2.0** is here! This is a complete rewrite and a massive leap forward, bringing desktop-class features to your iPhone and iPad. With a stunning glassmorphism UI, Multi-View support, and a dedicated Sports Center, Nebulo defines how IPTV should look and feel on iOS.
+**Nebulo V2.0** is here! This is a complete rewrite and a massive leap forward, bringing a ton of new features to your iPhone and iPad. With a stunning glassmorphism UI, Multi-View support, and a dedicated Sports Center, Nebulo is a refreshing upgrade to how IPTV should look and feel on iOS.
 
 ## ✨ New Features
 
@@ -13,7 +13,7 @@ Watch up to **4 streams simultaneously**! Perfect for sports days or tracking mu
 ### ⏯️ **All-New Custom Video Player**
 Built on top of `AVKit` for maximum performance and battery efficiency.
 - **Smart Picture-in-Picture (PiP):** Now with refined logic—PiP only activates when *you* want it and automatically dismisses when you switch streams.
-- **Quick Switcher:** Swipe up to surf channels without leaving the stream.
+- **Quick Switcher:** Click the channels button to surf channels without leaving the stream.
 - **Quality Indicators:** Auto-detects 4K, 1080p, 720p, and SD streams.
 - **Mini Player:** Keep watching in-app while browsing the guide.
 
@@ -21,9 +21,11 @@ Built on top of `AVKit` for maximum performance and battery efficiency.
 - **Sports Hub:** A dedicated view to find live events quickly.
 - **Dynamic EPG:** Live program updates with a "Dynamic Island" style loading indicator.
 - **Smart Search:** Find channels, categories, and current programs instantly.
+- **Powerful Game Search Engine:** When clicking on a game, it will automatically bring up the best stream to view the game.
 
 ### 🎨 **Stunning UI/UX**
 - **Nebula Backgrounds:** Dynamic, colorful backgrounds that breathe with the app.
+- **Custom Photo Backgrounds:** Choose your own background from files or camera role and add blur.
 - **Adaptive Layouts:** Optimized interfaces for both iPhone (Standard) and iPad (Sidebar/Landscape).
 - **Glassmorphism:** Modern, translucent aesthetics throughout the app.
 
