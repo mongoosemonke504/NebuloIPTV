@@ -35,9 +35,9 @@ Built on top of `AVKit` for maximum performance and battery efficiency.
 ---
 
 ## 📸 Screenshots
-<img width="245" height="436" alt="IMG_0025" src="https://github.com/user-attachments/assets/89d2b1bf-bab3-463f-afa5-8cb366582626" />
-<img width="245" height="436" alt="IMG_0021" src="https://github.com/user-attachments/assets/f4b1c02b-603f-4111-81a3-2b114199d306" />
-<img width="245" height="436" alt="IMG_0024" src="https://github.com/user-attachments/assets/290e074a-debe-4875-85c9-06310eceeb04" />
+<img width="245" height="445" alt="IMG_0025" src="https://github.com/user-attachments/assets/89d2b1bf-bab3-463f-afa5-8cb366582626" />
+<img width="245" height="445" alt="IMG_0021" src="https://github.com/user-attachments/assets/f4b1c02b-603f-4111-81a3-2b114199d306" />
+<img width="245" height="445" alt="IMG_0024" src="https://github.com/user-attachments/assets/290e074a-debe-4875-85c9-06310eceeb04" />
 <img width="436" height="245" alt="IMG_0022" src="https://github.com/user-attachments/assets/33214bb6-b0e4-4adf-871d-5bb79a37e6ce" />
 
 ---
