@@ -90,19 +90,39 @@ struct LoginView: View {
                             VStack(spacing: 16) {
                                 GlassTextField(icon: "tag.fill", placeholder: "Playlist Name (Optional)", text: $playlistNameInput)
                                 
-                                GlassTextField(
-                                    icon: "link",
-                                    placeholder: selectedLoginType == .m3u ? "M3U Playlist URL" : "Portal URL",
-                                    text: $urlInput,
-                                    keyboard: .URL
-                                )
-                                
-                                if selectedLoginType == .xtream {
-                                    GlassTextField(icon: "person.fill", placeholder: "Username", text: $usernameInput)
-                                    GlassTextField(icon: "lock.fill", placeholder: "Password", text: $passwordInput, isSecure: true)
-                                } else if selectedLoginType == .mac {
-                                    GlassTextField(icon: "cpu", placeholder: "00:1A:79...", text: $macInput)
-                                        .onChangeCompat(of: macInput) { nv in formatMAC(nv) }
+                                if selectedLoginType == .mac {
+                                    VStack(spacing: 12) {
+                                        Image(systemName: "hammer.fill")
+                                            .font(.system(size: 40))
+                                            .foregroundColor(.yellow)
+                                        Text("Under Construction")
+                                            .font(.headline)
+                                            .foregroundColor(.white)
+                                        Text("Stalker/MAC Portal support is coming soon.")
+                                            .font(.caption)
+                                            .foregroundColor(.white.opacity(0.7))
+                                            .multilineTextAlignment(.center)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 30)
+                                    .background(Color.white.opacity(0.05))
+                                    .cornerRadius(12)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 12)
+                                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                                    )
+                                } else {
+                                    GlassTextField(
+                                        icon: "link",
+                                        placeholder: selectedLoginType == .m3u ? "M3U Playlist URL" : "Portal URL",
+                                        text: $urlInput,
+                                        keyboard: .URL
+                                    )
+                                    
+                                    if selectedLoginType == .xtream {
+                                        GlassTextField(icon: "person.fill", placeholder: "Username", text: $usernameInput)
+                                        GlassTextField(icon: "lock.fill", placeholder: "Password", text: $passwordInput, isSecure: true)
+                                    }
                                 }
                             }
                             
@@ -117,6 +137,8 @@ struct LoginView: View {
                                     .cornerRadius(16)
                                     .shadow(color: .white.opacity(0.2), radius: 15)
                             }
+                            .disabled(selectedLoginType == .mac)
+                            .opacity(selectedLoginType == .mac ? 0.5 : 1)
                             .padding(.top, 8)
                         }
                         .padding(24)
@@ -152,6 +174,13 @@ struct LoginView: View {
     func parseM3ULink(_ input: String) { guard input.contains("username=") && input.contains("password="), let c = URLComponents(string: input) else { return }; if let u = c.queryItems?.first(where: { $0.name == "username" })?.value { usernameInput = u }; if let p = c.queryItems?.first(where: { $0.name == "password" })?.value { passwordInput = p }; if let sc = c.scheme, let h = c.host { var b = "\(sc)://\(h)"; if let po = c.port { b += ":\(po)" }; urlInput = b } }
     
     func login() {
+        // Temporary interception for Stalker/MAC
+        if selectedLoginType == .mac {
+            errorMessage = "Stalker/MAC Portal support is currently under construction."
+            showError = true
+            return
+        }
+
         let cl = urlInput.trimmingCharacters(in: .whitespaces)
         var safe = cl
         if safe.hasSuffix("/") { safe = String(safe.dropLast()) }

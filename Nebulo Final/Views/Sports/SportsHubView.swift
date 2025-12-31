@@ -44,16 +44,23 @@ struct SportsHubView: View {
         .task { 
             await scoreViewModel.fetchScores()
             scoreViewModel.applyFilter(text: viewModel.searchText)
+            // Pre-resolve visible games
+            let allGames = scoreViewModel.filteredGames.values.flatMap { $0 }
+            viewModel.preResolveGames(allGames)
         }
         .onChangeCompat(of: scoreViewModel.selectedSport) { _ in Task { await scoreViewModel.fetchScores() } }
         .onChangeCompat(of: viewModel.searchText) { text in scoreViewModel.applyFilter(text: text) }
+        .onChangeCompat(of: scoreViewModel.filteredGames) { games in
+            let allGames = games.values.flatMap { $0 }
+            viewModel.preResolveGames(allGames)
+        }
         .sheet(isPresented: $viewModel.showSelectionSheet) { ManualSelectionSheet(viewModel: viewModel, accentColor: accentColor, playAction: playAction) }
     }
     private func scoreButton(game: ESPNEvent, sport: SportType) -> some View {
         Button(action: { 
             let h = game.homeCompetitor?.team?.shortDisplayName ?? game.homeCompetitor?.athlete?.shortName ?? ""
             let a = game.awayCompetitor?.team?.shortDisplayName ?? game.awayCompetitor?.athlete?.shortName ?? ""
-            viewModel.runSmartSearch(home: h, away: a, sport: sport, network: game.broadcastName)
+            viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.broadcastName)
         }) { ScoreRow(game: game, sport: sport).equatable() }.buttonStyle(.plain)
     }
 }
@@ -93,6 +100,7 @@ struct ScoreRow: View, Equatable {
             } 
         }
         .padding(.vertical, 18).padding(.horizontal, 12)
+        .frame(maxWidth: .infinity)
         .background(Color.black.opacity(0.4)).clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1)) 
     }

@@ -115,6 +115,13 @@ struct AddPlaylistSheet: View {
     func parseM3ULink(_ input: String) { guard input.contains("username=") && input.contains("password="), let c = URLComponents(string: input) else { return }; if let u = c.queryItems?.first(where: { $0.name == "username" })?.value { usernameInput = u }; if let p = c.queryItems?.first(where: { $0.name == "password" })?.value { passwordInput = p }; if let sc = c.scheme, let h = c.host { var b = "\(sc)://\(h)"; if let po = c.port { b += ":\(po)" }; urlInput = b } }
     
     func save() {
+        // Temporary interception for Stalker/MAC
+        if selectedLoginType == .mac {
+            errorMessage = "Stalker/MAC Portal support is currently under construction."
+            showError = true
+            return
+        }
+
         let cl = urlInput.trimmingCharacters(in: .whitespaces)
         var safe = cl
         if safe.hasSuffix("/") { safe = String(safe.dropLast()) }

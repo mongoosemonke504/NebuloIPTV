@@ -91,11 +91,6 @@ struct SettingsView: View {
                                 .shadow(radius: 5)
                         }
                         .padding(.top, 20)
-                        
-                        Text("Version 2.0.0 • Nebulo")
-                            .font(.caption2)
-                            .foregroundColor(.white.opacity(0.3))
-                            .padding(.bottom, 40)
                     }
                     .padding(20)
                 }

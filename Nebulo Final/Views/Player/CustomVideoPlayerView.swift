@@ -35,13 +35,13 @@ class NebuloPlayer: ObservableObject {
         let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": h])
         let item = AVPlayerItem(asset: asset)
         
-        // Aggressive Buffering for "Snappy" feel
-        item.preferredForwardBufferDuration = 2.0
+        // Aggressive Buffering for "Snappy" feel - Smarters Optimization
+        item.preferredForwardBufferDuration = 1.5
         item.automaticallyPreservesTimeOffsetFromLive = true
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         
         player.replaceCurrentItem(with: item)
-        player.play()
+        player.playImmediately(atRate: 1.0)
         currentURL = channel.streamURL
     }
     
@@ -94,31 +94,9 @@ struct CustomVideoPlayerView: View {
                     Button(action: { seek(by: 10) }) { Image(systemName: "goforward.10").font(.system(size: 35)).foregroundColor(isAtLiveEdge ? .white.opacity(0.3) : .white) }.disabled(isAtLiveEdge)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center).allowsHitTesting(true).opacity(showFullDescription ? 0 : 1)
                 
-                // Side Navigation Buttons
-                HStack {
-                    Button(action: { switchChannel(offset: -1) }) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 30, weight: .bold))
-                            .foregroundColor(.white)
-                            .shadow(radius: 4)
-                            .contentShape(Rectangle())
-                    }
-                    .padding(.leading, 10)
-                    
-                    Spacer()
-                    
-                    Button(action: { switchChannel(offset: 1) }) {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 30, weight: .bold))
-                            .foregroundColor(.white)
-                            .shadow(radius: 4)
-                            .contentShape(Rectangle())
-                    }
-                    .padding(.trailing, 10)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                .allowsHitTesting(true)
-                .opacity(showFullDescription ? 0 : 1)
+                // Side Navigation Buttons Removed for Swipe Gestures
+                
+
 
                 VStack {
                     HStack(alignment: .center) {
@@ -166,7 +144,6 @@ struct CustomVideoPlayerView: View {
                             }
                         }
                         AirPlayButton().frame(width: 44, height: 44)
-                        if pipAdapter?.isPipPossible == true { Button(action: { if pipAdapter?.isPipActive == true { pipAdapter?.stopPip() } else { pipAdapter?.startPip() } }) { Image(systemName: pipAdapter?.isPipActive == true ? "pip.exit" : "pip.enter").font(.title3).foregroundColor(.white).padding(12).background(Material.ultraThinMaterial).clipShape(Circle()) } }
                     }.padding(.top, 70).padding(.horizontal, 20); Spacer()
                 }.opacity(showFullDescription ? 0 : 1)
                 VStack {
@@ -355,14 +332,32 @@ struct CustomVideoPlayerView: View {
                 )
             }
 
-        }.offset(y: offset.height).gesture(DragGesture().onChanged { 
-            if $0.translation.height > 0 && !showQuickSwitcher { 
-                // Normal dismiss logic
-                offset = $0.translation 
+        }.offset(y: offset.height).gesture(DragGesture().onChanged { val in
+            if showQuickSwitcher { return }
+            // Only allow vertical drag for dismiss if it's clearly vertical
+            if val.translation.height > 0 && abs(val.translation.height) > abs(val.translation.width) {
+                offset = val.translation
             }
-        }.onEnded { 
-            if showQuickSwitcher { return } 
-            if $0.translation.height > 100 { dismissAnimate() } else { withAnimation { offset = .zero } } 
+        }.onEnded { val in
+            if showQuickSwitcher { return }
+            
+            // Vertical Dismiss
+            if val.translation.height > 100 && abs(val.translation.height) > abs(val.translation.width) {
+                dismissAnimate()
+            }
+            // Horizontal Swipe Next
+            else if val.translation.width < -50 && abs(val.translation.width) > abs(val.translation.height) {
+                switchChannel(offset: 1)
+                withAnimation { offset = .zero }
+            }
+            // Horizontal Swipe Previous
+            else if val.translation.width > 50 && abs(val.translation.width) > abs(val.translation.height) {
+                switchChannel(offset: -1)
+                withAnimation { offset = .zero }
+            }
+            else {
+                withAnimation { offset = .zero }
+            }
         })
         .onAppear { 
             setupPlayer(); resetTimer(); startLiveEdgeChecker()
@@ -426,17 +421,98 @@ struct CustomVideoPlayerView: View {
     func toggleControls() { withAnimation(.easeInOut(duration: 0.15)) { if showControls { showControls = false; timer?.cancel() } else { showControls = true; resetTimer() } } }
     func setupPlayer() {
         pipAdapter?.stopPip()
-        // Use Shared Player
-        NebuloPlayer.shared.play(channel: channel)
         
-        // Re-attach observer
-        guard let item = NebuloPlayer.shared.player.currentItem else { return }
-        sizeObserver = item.observe(\.presentationSize, options: [.new]) { _, ch in guard let sz = ch.newValue, sz != .zero else { return }; DispatchQueue.main.async { if sz.height >= 2160 { resolutionLabel = "4K" } else if sz.height >= 1080 { resolutionLabel = "1080p" } else if sz.height >= 720 { resolutionLabel = "720p" } else if sz.height > 0 { resolutionLabel = "SD" } } }
+        Task {
+            // Resolve URL if needed (Stalker support)
+            // If viewModel is nil, fallback to original URL
+            let resolvedURL = await viewModel?.resolveStalkerStream(channel) ?? channel.streamURL
+            
+            var resolvedChannel = channel
+            resolvedChannel.streamURL = resolvedURL
+            
+            await MainActor.run {
+                // Use Shared Player
+                NebuloPlayer.shared.play(channel: resolvedChannel)
+                
+                // Re-attach observer
+                guard let item = NebuloPlayer.shared.player.currentItem else { return }
+                sizeObserver = item.observe(\.presentationSize, options: [.new]) { _, ch in guard let sz = ch.newValue, sz != .zero else { return }; DispatchQueue.main.async { if sz.height >= 2160 { resolutionLabel = "4K" } else if sz.height >= 1080 { resolutionLabel = "1080p" } else if sz.height >= 720 { resolutionLabel = "720p" } else if sz.height > 0 { resolutionLabel = "SD" } } }
+            }
+        }
     }
     func resetTimer() { timer?.cancel(); timer = Just(()).delay(for: 3.5, scheduler: RunLoop.main).sink { _ in withAnimation(.easeInOut(duration: 0.15)) { showControls = false } } }
 }
 
-class PipAdapter: NSObject, AVPictureInPictureControllerDelegate, ObservableObject { private var pipController: AVPictureInPictureController?; @Published var isPipPossible = false; @Published var isPipActive = false; func setup(layer: AVPlayerLayer) { if AVPictureInPictureController.isPictureInPictureSupported() { pipController = AVPictureInPictureController(playerLayer: layer); pipController?.delegate = self; if #available(iOS 14.2, *) { pipController?.canStartPictureInPictureAutomaticallyFromInline = false }; pipController?.addObserver(self, forKeyPath: "isPictureInPicturePossible", options: [.new, .initial], context: nil) } }; func startPip() { pipController?.startPictureInPicture() }; func stopPip() { pipController?.stopPictureInPicture() }; override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) { if keyPath == "isPictureInPicturePossible" { DispatchQueue.main.async { self.isPipPossible = self.pipController?.isPictureInPicturePossible ?? false } } }; func pictureInPictureControllerDidStartPictureInPicture(_ pc: AVPictureInPictureController) { DispatchQueue.main.async { self.isPipActive = true } }; func pictureInPictureControllerDidStopPictureInPicture(_ pc: AVPictureInPictureController) { DispatchQueue.main.async { self.isPipActive = false } } }
-struct PlayerViewRepresentable: UIViewRepresentable { let player: AVPlayer; @Binding var pipAdapter: PipAdapter?; func makeUIView(context: Context) -> PlayerUIView { let v = PlayerUIView(); v.playerLayer.player = player; v.playerLayer.videoGravity = .resizeAspect; let a = PipAdapter(); a.setup(layer: v.playerLayer); DispatchQueue.main.async { self.pipAdapter = a }; return v }; func updateUIView(_ ui: PlayerUIView, context: Context) {} }
-class PlayerUIView: UIView { override class var layerClass: AnyClass { AVPlayerLayer.self }; var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer } }
+class PipAdapter: NSObject, AVPictureInPictureControllerDelegate, ObservableObject {
+    private var pipController: AVPictureInPictureController?
+    @Published var isPipPossible = false
+    @Published var isPipActive = false
+    
+    func setup(layer: AVPlayerLayer) {
+        if AVPictureInPictureController.isPictureInPictureSupported() {
+            pipController = AVPictureInPictureController(playerLayer: layer)
+            pipController?.delegate = self
+            if #available(iOS 14.2, *) {
+                pipController?.canStartPictureInPictureAutomaticallyFromInline = true
+            }
+            pipController?.addObserver(self, forKeyPath: "isPictureInPicturePossible", options: [.new, .initial], context: nil)
+        }
+    }
+    
+    func startPip() { pipController?.startPictureInPicture() }
+    func stopPip() { pipController?.stopPictureInPicture() }
+    
+    override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
+        if keyPath == "isPictureInPicturePossible" {
+            DispatchQueue.main.async { self.isPipPossible = self.pipController?.isPictureInPicturePossible ?? false }
+        }
+    }
+    
+    func pictureInPictureControllerDidStartPictureInPicture(_ pc: AVPictureInPictureController) {
+        DispatchQueue.main.async { self.isPipActive = true }
+    }
+    
+    func pictureInPictureControllerDidStopPictureInPicture(_ pc: AVPictureInPictureController) {
+        DispatchQueue.main.async { self.isPipActive = false }
+    }
+    
+    func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void) {
+        completionHandler(true)
+    }
+}
+
+struct PlayerViewRepresentable: UIViewRepresentable {
+    let player: AVPlayer
+    @Binding var pipAdapter: PipAdapter?
+    
+    func makeUIView(context: Context) -> PlayerUIView {
+        let v = PlayerUIView()
+        v.playerLayer.player = player
+        v.playerLayer.videoGravity = .resizeAspect
+        v.backgroundColor = .black
+        let a = PipAdapter()
+        a.setup(layer: v.playerLayer)
+        DispatchQueue.main.async { self.pipAdapter = a }
+        return v
+    }
+    
+    func updateUIView(_ ui: PlayerUIView, context: Context) {
+        if ui.playerLayer.videoGravity != .resizeAspect {
+            ui.playerLayer.videoGravity = .resizeAspect
+        }
+    }
+}
+
+class PlayerUIView: UIView {
+    override class var layerClass: AnyClass { AVPlayerLayer.self }
+    var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+    
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        playerLayer.frame = bounds
+        CATransaction.commit()
+    }
+}
 struct AirPlayButton: UIViewRepresentable { func makeUIView(context: Context) -> AVRoutePickerView { let v = AVRoutePickerView(); v.activeTintColor = .white; v.tintColor = .white; v.backgroundColor = .clear; v.prioritizesVideoDevices = true; return v }; func updateUIView(_ ui: AVRoutePickerView, context: Context) {} }

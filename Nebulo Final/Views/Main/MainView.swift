@@ -64,18 +64,6 @@ struct MainView: View {
                 }
                 .zIndex(1)
                 
-                if let channel = selectedChannel {
-                    CustomVideoPlayerView(channel: channel, viewModel: viewModel, onDismiss: { 
-                        withAnimation(.easeInOut(duration: 0.4)) { selectedChannel = nil; showQuickSwitcher = false }
-                        // Trigger scroll restoration slightly after animation starts/finishes to ensure view is visible
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            viewModel.scrollRestoreTrigger = UUID()
-                        }
-                    }, onPlayChannel: { newChannel in
-                        playChannel(newChannel)
-                    }, showQuickSwitcher: $showQuickSwitcher).transition(.asymmetric(insertion: .move(edge: .bottom), removal: .opacity)).zIndex(10)
-                }
-                
                 // MODIFIED: EPG Indicator coming down and going back to the top (Dynamic Island)
                 if viewModel.isUpdatingEPG {
                     VStack {
@@ -112,6 +100,21 @@ struct MainView: View {
                     }
                     .zIndex(15)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
+            .overlay {
+                if let channel = selectedChannel {
+                    CustomVideoPlayerView(channel: channel, viewModel: viewModel, onDismiss: { 
+                        withAnimation(.easeInOut(duration: 0.4)) { selectedChannel = nil; showQuickSwitcher = false }
+                        // Trigger scroll restoration slightly after animation starts/finishes to ensure view is visible
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            viewModel.scrollRestoreTrigger = UUID()
+                        }
+                    }, onPlayChannel: { newChannel in
+                        playChannel(newChannel)
+                    }, showQuickSwitcher: $showQuickSwitcher)
+                    .transition(.asymmetric(insertion: .move(edge: .bottom), removal: .opacity))
+                    .ignoresSafeArea()
                 }
             }
         }

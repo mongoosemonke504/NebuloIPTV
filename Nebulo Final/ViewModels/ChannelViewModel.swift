@@ -105,7 +105,7 @@ class ChannelViewModel: ObservableObject {
     func loadCurrentAccount() async {
         guard let account = AccountManager.shared.currentAccount else { return }
         self.reset()
-        await loadData(url: account.url, user: account.username ?? "", pass: account.password ?? "", type: account.type)
+        await loadData(url: account.url, user: account.username ?? "", pass: account.password ?? "", mac: account.macAddress, type: account.type)
     }
     
     func reset() {
@@ -119,7 +119,7 @@ class ChannelViewModel: ObservableObject {
         NebuloPlayer.shared.prewarm(channel: channel)
     }
 
-    func backgroundRefresh() async -> UIBackgroundFetchResult {
+    func backgroundFetch() async -> UIBackgroundFetchResult {
         let url = UserDefaults.standard.string(forKey: "xstreamURL") ?? ""
         let user = UserDefaults.standard.string(forKey: "username") ?? ""
         let pass = UserDefaults.standard.string(forKey: "password") ?? ""
@@ -283,7 +283,120 @@ class ChannelViewModel: ObservableObject {
         }
     }
 
-    func runSmartSearch(home: String, away: String, sport: SportType, network: String? = nil) {
+    // Cache for pre-resolved games
+    @Published var preResolvedCache: [String: StreamChannel] = [:]
+
+    private struct GameSearchInfo: Sendable {
+        let id: String
+        let home: String
+        let away: String
+        let network: String?
+    }
+
+    func preResolveGames(_ games: [ESPNEvent]) {
+        // Extract data on Main Actor to avoid isolation issues
+        let infos: [GameSearchInfo] = games.map { game in
+            let h = game.homeCompetitor?.team?.shortDisplayName ?? game.homeCompetitor?.athlete?.shortName ?? ""
+            let a = game.awayCompetitor?.team?.shortDisplayName ?? game.awayCompetitor?.athlete?.shortName ?? ""
+            return GameSearchInfo(id: game.id, home: h, away: a, network: game.broadcastName)
+        }
+        
+        let inputChannels = self.channels
+        let inputHidden = self.hiddenIDs
+        let hiddenCatIDs = Set(self.categories.filter { $0.isHidden }.map { $0.id })
+        let currentEPG = self.epgData
+        let now = self.currentTime
+        
+        Task.detached(priority: .utility) { [weak self, inputChannels, inputHidden, hiddenCatIDs, currentEPG, now, infos] in
+            guard let self = self else { return }
+            
+            for info in infos {
+                if await self.preResolvedCache[info.id] != nil { continue }
+                
+                if let best = ChannelViewModel.resolveBestMatch(home: info.home, away: info.away, network: info.network, channels: inputChannels, hiddenIDs: inputHidden, hiddenCatIDs: hiddenCatIDs, epg: currentEPG, now: now) {
+                    await MainActor.run {
+                        self.preResolvedCache[info.id] = best
+                        // Smarters Logic: Warm up the connection immediately
+                        self.prewarmChannel(best)
+                    }
+                }
+            }
+        }
+    }
+    
+    nonisolated static func resolveBestMatch(home: String, away: String, network: String?, channels: [StreamChannel], hiddenIDs: Set<Int>, hiddenCatIDs: Set<Int>, epg: [String: [EPGProgram]], now: Date) -> StreamChannel? {
+        let homeTokens = SmartSearchLogic.tokenize(home)
+        let awayTokens = SmartSearchLogic.tokenize(away)
+        let targetNetwork = (network ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        
+        func matchCount(_ text: String, tokens: [String]) -> Int {
+            let lower = text.lowercased()
+            return tokens.filter { lower.contains($0) }.count
+        }
+        
+        var bestChannel: StreamChannel? = nil
+        var bestScore = 0
+        
+        for channel in channels {
+            if hiddenIDs.contains(channel.id) || hiddenCatIDs.contains(channel.categoryID) { continue }
+            if SmartSearchLogic.isBanner(channel.name) { continue }
+            
+            var score = 0
+            
+            // 1. Network Match
+            if !targetNetwork.isEmpty && channel.name.localizedCaseInsensitiveContains(targetNetwork) {
+                score += 1000
+            }
+            
+            // 2. Content Match
+            var epgTitle = ""
+            var epgDesc = ""
+            
+            if let eID = channel.epgID, let schedule = epg[eID],
+               let program = schedule.first(where: { now >= $0.start && now <= $0.stop }) {
+                epgTitle = program.title
+                epgDesc = program.description ?? ""
+            }
+            
+            let nameH = matchCount(channel.name, tokens: homeTokens)
+            let nameA = matchCount(channel.name, tokens: awayTokens)
+            let titleH = matchCount(epgTitle, tokens: homeTokens)
+            let titleA = matchCount(epgTitle, tokens: awayTokens)
+            let descH = matchCount(epgDesc, tokens: homeTokens)
+            let descA = matchCount(epgDesc, tokens: awayTokens)
+            
+            if titleH > 0 { score += 500 }
+            if titleA > 0 { score += 500 }
+            if descH > 0 { score += 300 }
+            if descA > 0 { score += 300 }
+            if nameH > 0 { score += 200 }
+            if nameA > 0 { score += 200 }
+            
+            let totalH = nameH + titleH + descH
+            let totalA = nameA + titleA + descA
+            if totalH > 0 && totalA > 0 { score += 300 }
+            
+            score += ChannelViewModel.qualityScore(for: channel.name)
+            
+            if score > bestScore {
+                bestScore = score
+                bestChannel = channel
+            }
+        }
+        
+        // Only return if High Confidence (Perfect Match)
+        return bestScore >= 1300 ? bestChannel : nil
+    }
+
+    func runSmartSearch(gameID: String? = nil, home: String, away: String, sport: SportType, network: String? = nil) {
+        // 1. Check Pre-Resolved Cache (Instant Play)
+        if let gid = gameID, let cached = preResolvedCache[gid] {
+            self.isSearchingGame = false
+            withAnimation(.easeInOut(duration: 0.4)) { self.channelToAutoPlay = cached }
+            self.prewarmChannel(cached)
+            return
+        }
+    
         let inputChannels = self.channels
         let inputHidden = self.hiddenIDs
         let hiddenCatIDs = Set(self.categories.filter { $0.isHidden }.map { $0.id })
@@ -321,13 +434,13 @@ class ChannelViewModel: ObservableObject {
                 if SmartSearchLogic.isBanner(channel.name) { continue }
                 
                 var score = 0
-                var isNetMatch = false
+                var isNetMatch = false // This variable is no longer needed and can be removed
                 var isContMatch = false
                 
                 // 1. Network Match
                 if !targetNetwork.isEmpty && channel.name.localizedCaseInsensitiveContains(targetNetwork) {
                     score += 1000
-                    isNetMatch = true
+                    isNetMatch = true // This assignment is now unused
                 }
                 
                 // 2. Content Match (EPG & Name)
@@ -386,20 +499,17 @@ class ChannelViewModel: ObservableObject {
                 let winner = best.channel
                 await MainActor.run {
                     self.isSearchingGame = false
-                    self.suggestedChannels = [winner] // Just show the winner or empty if auto-play handles it?
-                    // Original logic showed selection sheet unless high confidence.
-                    // User said: "This should mean that every game has a perfect match. If it doesn't, give 5 options..."
-                    // We'll auto-play if it's a "Perfect Match".
+                    self.suggestedChannels = [winner] 
                     withAnimation(.easeInOut(duration: 0.4)) { self.channelToAutoPlay = winner }
                     // Optimization: Pre-warm
                     self.prewarmChannel(winner)
+                    // Update cache for future
+                    if let gid = gameID { self.preResolvedCache[gid] = winner }
                 }
                 return
             }
             
             // Fallback: 5 Options
-            // 3 from Network Matches (Channels in API for that game)
-            // 2 from Content Matches (Team Names in EPG/Name)
             
             let networkMatches = scoredChannels.filter { $0.isNetworkMatch }
             let contentMatches = scoredChannels.filter { $0.isContentMatch && !$0.isNetworkMatch } // Exclude duplicates primarily
@@ -540,11 +650,11 @@ class ChannelViewModel: ObservableObject {
         }
     }
     
-    func loadData(url: String, user: String, pass: String, type: LoginType, silent: Bool = false) async {
+    func loadData(url: String, user: String, pass: String, mac: String? = nil, type: LoginType, silent: Bool = false) async {
         guard !url.isEmpty else { return }
         
         // Update settings prefix based on login to isolate settings per user
-        let prefixKey = "\(url)_\(user)".components(separatedBy: CharacterSet.alphanumerics.inverted).joined()
+        let prefixKey = "\(url)_\(user)_\(mac ?? "")".components(separatedBy: CharacterSet.alphanumerics.inverted).joined()
         self.settingsPrefix = prefixKey.isEmpty ? "" : prefixKey + "_"
         self.loadSettings()
         
@@ -578,6 +688,17 @@ class ChannelViewModel: ObservableObject {
                         await self.scoreViewModel.fetchScores()
                     }
                 }
+            } else if type == .mac, let macAddress = mac {
+                // Stalker / MAC Portal Logic
+                let (channels, categories, token) = try await ChannelViewModel.fetchStalkerData(portalURL: baseURL, mac: macAddress, prefix: prefix)
+                await MainActor.run {
+                    self.channels = channels
+                    self.categories = categories
+                    self.stalkerToken = token
+                    self.stalkerPortalURL = baseURL
+                    self.categorizeSports()
+                }
+                await self.scoreViewModel.fetchScores()
             } else {
                 let (data, _) = try await URLSession.shared.data(from: baseURL)
                 if let content = String(data: data, encoding: .utf8) {
@@ -838,5 +959,142 @@ class ChannelViewModel: ObservableObject {
         let data = UserDefaults.standard.data(forKey: prefix + "renamedChannels") ?? Data()
         let renames = (try? JSONDecoder().decode([Int: String].self, from: data)) ?? [:]
         return raw.map { var c = $0; c.streamURL = "\(safeURL)/live/\(user)/\(pass)/\($0.id).m3u8"; c.originalName = c.name; if let custom = renames[c.id] { c.name = custom } else { c.name = NameCleaner.clean(c.name) }; return c }
+    }
+    
+    // Stalker State
+    @Published var stalkerToken: String? = nil
+    @Published var stalkerPortalURL: URL? = nil
+
+    // Stalker / MAC Implementation
+    nonisolated static func fetchStalkerData(portalURL: URL, mac: String, prefix: String) async throws -> ([StreamChannel], [StreamCategory], String) {
+        let components = URLComponents(url: portalURL.appendingPathComponent("portal.php"), resolvingAgainstBaseURL: false)
+        
+        func createRequest(action: String, token: String? = nil) throws -> URLRequest {
+            var c = components
+            var items = [
+                URLQueryItem(name: "type", value: "stb"),
+                URLQueryItem(name: "action", value: action),
+                URLQueryItem(name: "mac", value: mac)
+            ]
+            if let t = token {
+                items.append(URLQueryItem(name: "token", value: t))
+                if action != "handshake" { items[0].value = "itv" }
+            }
+            c?.queryItems = items
+            guard let url = c?.url else { throw URLError(.badURL) }
+            var req = URLRequest(url: url)
+            req.setValue("Bearer " + (token ?? ""), forHTTPHeaderField: "Authorization")
+            req.setValue("mac=" + mac, forHTTPHeaderField: "Cookie")
+            return req
+        }
+        
+        // Handshake
+        let handshakeReq = try createRequest(action: "handshake")
+        let (hData, _) = try await URLSession.shared.data(for: handshakeReq)
+        
+        struct StalkerResponse: Codable {
+            struct JS: Codable { let token: String? }
+            let js: JS?
+        }
+        
+        let hRes = try JSONDecoder().decode(StalkerResponse.self, from: hData)
+        guard let token = hRes.js?.token else { throw URLError(.userAuthenticationRequired) }
+        
+        // Fetch Categories
+        let catReq = try createRequest(action: "get_genres", token: token)
+        let (cData, _) = try await URLSession.shared.data(for: catReq)
+        
+        struct StalkerCategory: Codable {
+            let id: String
+            let title: String
+        }
+        struct GenreResponse: Codable {
+            let js: [StalkerCategory]?
+        }
+        
+        let cRes = try JSONDecoder().decode(GenreResponse.self, from: cData)
+        
+        var categories: [StreamCategory] = []
+        let loadedCats = (cRes.js ?? []).compactMap { cat -> StreamCategory? in
+            guard let id = Int(cat.id) else { return nil }
+            return StreamCategory(id: id, name: cat.title)
+        }
+        categories = await processCategories(loadedCats, prefix: prefix)
+        
+        // Fetch Channels
+        let chReq = try createRequest(action: "get_all_channels", token: token)
+        let (chData, _) = try await URLSession.shared.data(for: chReq)
+        
+        struct StalkerChannel: Codable {
+            let id: String?
+            let name: String
+            let cmd: String?
+            let tv_genre_id: String?
+            let logo: String?
+        }
+        struct ChannelResponse: Codable {
+            let js: [StalkerChannel]?
+        }
+        
+        let chRes = try JSONDecoder().decode(ChannelResponse.self, from: chData)
+        
+        let data = UserDefaults.standard.data(forKey: prefix + "renamedChannels") ?? Data()
+        let renames = (try? JSONDecoder().decode([Int: String].self, from: data)) ?? [:]
+        
+        let channels = (chRes.js ?? []).compactMap { c -> StreamChannel? in
+            guard let sid = c.id, let intID = Int(sid) else { return nil }
+            guard let catID = Int(c.tv_genre_id ?? "0") else { return nil }
+            
+            // Keep the cmd as is for Stalker, we resolve it later if needed
+            let url = c.cmd ?? ""
+            
+            var name = c.name
+            if let custom = renames[intID] { name = custom }
+            else { name = NameCleaner.clean(name) }
+            
+            return StreamChannel(id: intID, name: name, streamURL: url, icon: c.logo, categoryID: catID, originalName: c.name)
+        }
+        
+        return (channels, categories, token)
+    }
+    
+    func resolveStalkerStream(_ channel: StreamChannel) async -> String {
+        guard let token = stalkerToken, let portalURL = stalkerPortalURL else { return channel.streamURL }
+        // If it looks like a direct link already, just use it (simple heuristic)
+        if channel.streamURL.hasPrefix("http") && !channel.streamURL.contains("ffmpeg") { return channel.streamURL }
+        
+        // Call create_link
+        // action=create_link&cmd=...
+        var components = URLComponents(url: portalURL.appendingPathComponent("portal.php"), resolvingAgainstBaseURL: false)
+        components?.queryItems = [
+            URLQueryItem(name: "type", value: "itv"),
+            URLQueryItem(name: "action", value: "create_link"),
+            URLQueryItem(name: "cmd", value: channel.streamURL),
+            URLQueryItem(name: "token", value: token)
+        ]
+        
+        guard let url = components?.url else { return channel.streamURL }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        
+        do {
+            let (data, _) = try await URLSession.shared.data(for: req)
+            struct LinkResponse: Codable {
+                struct JS: Codable { let cmd: String? }
+                let js: JS?
+            }
+            let res = try JSONDecoder().decode(LinkResponse.self, from: data)
+            if let finalURL = res.js?.cmd {
+                return finalURL
+            }
+        } catch {
+            print("Stalker resolve error: \(error)")
+        }
+        
+        // Fallback: try basic cleaning
+        var clean = channel.streamURL
+        clean = clean.replacingOccurrences(of: "ffmpeg ", with: "")
+        clean = clean.replacingOccurrences(of: "auto ", with: "")
+        return clean
     }
 }
