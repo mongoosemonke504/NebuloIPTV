@@ -559,7 +559,9 @@ struct MiniPlayerView: View {
     let onExpand: () -> Void
     let onClose: () -> Void
     
-    @State private var player = AVPlayer()
+    // Use Shared Player
+    private var player: AVPlayer { NebuloPlayer.shared.player }
+    
     @State private var isPlaying = true
     @State private var showControls = false
     @State private var pipOffset: CGSize = .zero
@@ -602,7 +604,10 @@ struct MiniPlayerView: View {
                                     // Close and Expand Buttons at the top
                                     VStack {
                                         HStack(spacing: 12) {
-                                            Button(action: onClose) {
+                                            Button(action: {
+                                                onClose()
+                                                NebuloPlayer.shared.pause()
+                                            }) {
                                                 Image(systemName: "xmark")
                                                     .font(.caption.bold())
                                                     .foregroundColor(.white)
@@ -662,18 +667,10 @@ struct MiniPlayerView: View {
         .onAppear {
             setupPlayer()
         }
-        .onDisappear {
-            player.pause()
-        }
     }
     
     private func setupPlayer() {
-        guard let url = URL(string: channel.streamURL) else { return }
-        let h: [String: Any] = ["User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"]
-        let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": h])
-        let item = AVPlayerItem(asset: asset)
-        player.replaceCurrentItem(with: item)
-        player.play()
+        NebuloPlayer.shared.play(channel: channel)
     }
 }
 

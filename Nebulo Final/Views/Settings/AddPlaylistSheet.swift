@@ -1,13 +1,7 @@
 import SwiftUI
 
-// MARK: - REVAMPED LOGIN VIEW
-struct LoginView: View {
-    @AppStorage("isLoggedIn") private var isLoggedIn = false
-    @AppStorage("xstreamURL") private var xstreamURL = ""
-    @AppStorage("username") private var username = ""
-    @AppStorage("password") private var password = ""
-    @AppStorage("macAddress") private var macAddress = ""
-    @AppStorage("loginTypeRaw") private var loginTypeRaw = LoginType.xtream.rawValue
+struct AddPlaylistSheet: View {
+    @Environment(\.dismiss) private var dismiss
     
     @State private var urlInput = ""
     @State private var usernameInput = ""
@@ -18,6 +12,8 @@ struct LoginView: View {
     @State private var errorMessage = ""
     @State private var selectedLoginType: LoginType = .xtream
     
+    // Namespace for matched geometry if we want animation, but simple state switch is fine for sheet
+    
     var body: some View {
         NavigationStack {
             ZStack {
@@ -26,43 +22,18 @@ struct LoginView: View {
                 
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 30) {
-                        // Branding Section
-                        VStack(spacing: 12) {
-                            ZStack {
-                                Circle()
-                                    .fill(.white.opacity(0.1))
-                                    .frame(width: 120, height: 120)
-                                    .blur(radius: 20)
-                                
-                                Image(systemName: "play.tv.fill")
-                                    .font(.system(size: 70))
-                                    .foregroundStyle(.white)
-                                    .shadow(color: .white.opacity(0.3), radius: 10)
-                            }
-                            
-                            VStack(spacing: 4) {
-                                Text("Nebulo")
-                                    .font(.system(size: 42, weight: .black, design: .rounded))
-                                    .foregroundStyle(.white)
-                                
-                                Text("STREAMING REIMAGINED")
-                                    .font(.system(size: 10, weight: .bold))
-                                    .kerning(2.5)
-                                    .foregroundStyle(.white.opacity(0.5))
-                            }
-                        }
-                        .padding(.top, 60)
+                        Text("Add New Playlist")
+                            .font(.system(size: 28, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                            .padding(.top, 40)
                         
-                        // Main Login Card
+                        // Main Card
                         VStack(spacing: 24) {
                             // Picker
                             HStack(spacing: 0) {
                                 ForEach(LoginType.allCases) { t in
                                     Button(action: {
-                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                            selectedLoginType = t
-                                            loginTypeRaw = t.rawValue
-                                        }
+                                        withAnimation(.spring()) { selectedLoginType = t }
                                     }) {
                                         Text(t == .xtream ? "Xtream" : (t == .m3u ? "M3U" : "MAC"))
                                             .font(.system(size: 13, weight: .bold))
@@ -73,7 +44,6 @@ struct LoginView: View {
                                                     if selectedLoginType == t {
                                                         RoundedRectangle(cornerRadius: 10)
                                                             .fill(.white)
-                                                            .matchedGeometryEffect(id: "picker", in: loginNamespace)
                                                             .shadow(color: .black.opacity(0.2), radius: 5)
                                                     }
                                                 }
@@ -88,9 +58,9 @@ struct LoginView: View {
                             
                             // Input Fields
                             VStack(spacing: 16) {
-                                GlassTextField(icon: "tag.fill", placeholder: "Playlist Name (Optional)", text: $playlistNameInput)
+                                PlaylistGlassTextField(icon: "tag.fill", placeholder: "Playlist Name (Optional)", text: $playlistNameInput)
                                 
-                                GlassTextField(
+                                PlaylistGlassTextField(
                                     icon: "link",
                                     placeholder: selectedLoginType == .m3u ? "M3U Playlist URL" : "Portal URL",
                                     text: $urlInput,
@@ -98,17 +68,17 @@ struct LoginView: View {
                                 )
                                 
                                 if selectedLoginType == .xtream {
-                                    GlassTextField(icon: "person.fill", placeholder: "Username", text: $usernameInput)
-                                    GlassTextField(icon: "lock.fill", placeholder: "Password", text: $passwordInput, isSecure: true)
+                                    PlaylistGlassTextField(icon: "person.fill", placeholder: "Username", text: $usernameInput)
+                                    PlaylistGlassTextField(icon: "lock.fill", placeholder: "Password", text: $passwordInput, isSecure: true)
                                 } else if selectedLoginType == .mac {
-                                    GlassTextField(icon: "cpu", placeholder: "00:1A:79...", text: $macInput)
+                                    PlaylistGlassTextField(icon: "cpu", placeholder: "00:1A:79...", text: $macInput)
                                         .onChangeCompat(of: macInput) { nv in formatMAC(nv) }
                                 }
                             }
                             
-                            // Login Button
-                            Button(action: login) {
-                                Text("Connect to Server")
+                            // Save Button
+                            Button(action: save) {
+                                Text("Add Playlist")
                                     .font(.headline)
                                     .foregroundColor(.black)
                                     .frame(maxWidth: .infinity)
@@ -122,44 +92,37 @@ struct LoginView: View {
                         .padding(24)
                         .modifier(GlassEffect(cornerRadius: 30, isSelected: true, accentColor: nil))
                         .padding(.horizontal, 24)
-                        
-                        Text(" ")
-                            .font(.caption2)
-                            .foregroundColor(.white.opacity(0.4))
                     }
                     .padding(.bottom, 50)
                 }
             }
-            .alert("Connection Error", isPresented: $showError) {
-                Button("Got it", role: .cancel) {}
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                        .foregroundColor(.white)
+                }
+            }
+            .alert("Input Error", isPresented: $showError) {
+                Button("OK", role: .cancel) {}
             } message: {
                 Text(errorMessage)
             }
             .onChangeCompat(of: urlInput) { nv in if selectedLoginType == .xtream { parseM3ULink(nv) } }
-            .onAppear {
-                if let s = LoginType(rawValue: loginTypeRaw) { selectedLoginType = s }
-                macInput = macAddress
-                urlInput = xstreamURL
-                usernameInput = username
-                passwordInput = password
-            }
         }
     }
-    
-    @Namespace private var loginNamespace
     
     func formatMAC(_ input: String) { let clean = input.uppercased().replacingOccurrences(of: "[^0-9A-F]", with: "", options: .regularExpression); var res = ""; for (i, c) in clean.enumerated() { if i > 0 && i % 2 == 0 && i < 12 { res.append(":") }; if i < 12 { res.append(c) } }; macInput = res }
     func parseM3ULink(_ input: String) { guard input.contains("username=") && input.contains("password="), let c = URLComponents(string: input) else { return }; if let u = c.queryItems?.first(where: { $0.name == "username" })?.value { usernameInput = u }; if let p = c.queryItems?.first(where: { $0.name == "password" })?.value { passwordInput = p }; if let sc = c.scheme, let h = c.host { var b = "\(sc)://\(h)"; if let po = c.port { b += ":\(po)" }; urlInput = b } }
     
-    func login() {
+    func save() {
         let cl = urlInput.trimmingCharacters(in: .whitespaces)
         var safe = cl
         if safe.hasSuffix("/") { safe = String(safe.dropLast()) }
         
         if selectedLoginType == .xtream {
-            guard !usernameInput.isEmpty, !passwordInput.isEmpty, !safe.isEmpty else { errorMessage = "Please enter your server URL, username, and password."; showError = true; return }
+            guard !usernameInput.isEmpty, !passwordInput.isEmpty, !safe.isEmpty else { errorMessage = "Please enter server URL, username, and password."; showError = true; return }
         } else if selectedLoginType == .mac {
-            guard !macInput.isEmpty, macInput.count >= 17, !safe.isEmpty else { errorMessage = "Please enter a valid Portal URL and MAC Address."; showError = true; return }
+            guard !macInput.isEmpty, macInput.count >= 17, !safe.isEmpty else { errorMessage = "Please enter valid Portal URL and MAC."; showError = true; return }
         } else {
             guard !safe.isEmpty else { errorMessage = "Please enter a valid Playlist URL."; showError = true; return }
         }
@@ -174,13 +137,13 @@ struct LoginView: View {
             macAddress: macInput
         )
         
-        AccountManager.shared.saveAccount(newAccount)
-        withAnimation(.easeInOut(duration: 0.5)) { isLoggedIn = true }
+        AccountManager.shared.saveAccount(newAccount, makeActive: true)
+        dismiss()
     }
 }
 
-// MARK: - LOGIN SUBCOMPONENTS
-struct GlassTextField: View {
+// Duplicated for standalone usage in sheet
+struct PlaylistGlassTextField: View {
     let icon: String
     let placeholder: String
     @Binding var text: String

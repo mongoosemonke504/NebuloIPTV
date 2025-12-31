@@ -84,9 +84,28 @@ class ChannelViewModel: ObservableObject {
     private var settingsPrefix: String = ""
     var activeMultiViewCount: Int { multiViewSlots.compactMap { $0 }.count }
     
+    private var cancellables = Set<AnyCancellable>()
+    
     init() {
         loadSettings()
         startEPGClock()
+        
+        // Observe Account Changes
+        AccountManager.shared.$currentAccount
+            .dropFirst()
+            .sink { [weak self] account in
+                guard let self = self, let _ = account else { return }
+                Task {
+                    await self.loadCurrentAccount()
+                }
+            }
+            .store(in: &cancellables)
+    }
+    
+    func loadCurrentAccount() async {
+        guard let account = AccountManager.shared.currentAccount else { return }
+        self.reset()
+        await loadData(url: account.url, user: account.username ?? "", pass: account.password ?? "", type: account.type)
     }
     
     func reset() {
@@ -94,6 +113,10 @@ class ChannelViewModel: ObservableObject {
         self.searchText = ""; self.errorMessage = nil; self.isLoading = false; self.isSearchingGame = false
         self.multiViewSlots = [nil, nil, nil, nil]; self.multiViewModeActive = false; self.suggestedChannels = []
         self.showSelectionSheet = false; self.epgData = [:]
+    }
+    
+    func prewarmChannel(_ channel: StreamChannel) {
+        NebuloPlayer.shared.prewarm(channel: channel)
     }
 
     func backgroundRefresh() async -> UIBackgroundFetchResult {
@@ -368,6 +391,8 @@ class ChannelViewModel: ObservableObject {
                     // User said: "This should mean that every game has a perfect match. If it doesn't, give 5 options..."
                     // We'll auto-play if it's a "Perfect Match".
                     withAnimation(.easeInOut(duration: 0.4)) { self.channelToAutoPlay = winner }
+                    // Optimization: Pre-warm
+                    self.prewarmChannel(winner)
                 }
                 return
             }
@@ -420,6 +445,10 @@ class ChannelViewModel: ObservableObject {
                 } else {
                     self.suggestedChannels = finalSorted
                     self.showSelectionSheet = true
+                    // Optimization: Pre-warm top 3
+                    for ch in finalSorted.prefix(3) {
+                        self.prewarmChannel(ch)
+                    }
                 }
             }
         }
@@ -579,13 +608,26 @@ class ChannelViewModel: ObservableObject {
             // Cache missing or empty? Fall through to fetch.
         }
 
+        // Primary EPG
+        var urls: [URL] = []
         let epgUrl = baseURL.appendingPathComponent("xmltv.php")
         var c = URLComponents(url: epgUrl, resolvingAgainstBaseURL: false)
         c?.queryItems = [URLQueryItem(name: "username", value: user), URLQueryItem(name: "password", value: pass)]
-        if let finalEPG = c?.url { await updateEPGFromURL(finalEPG, silent: silent) }
+        if let finalEPG = c?.url { urls.append(finalEPG) }
+        
+        // External EPGs from Current Account
+        if let current = AccountManager.shared.currentAccount {
+            for ext in current.externalEPGUrls {
+                if let u = URL(string: ext) {
+                    urls.append(u)
+                }
+            }
+        }
+        
+        await updateEPGFromURLs(urls, silent: silent)
     }
     
-    func updateEPGFromURL(_ url: URL, silent: Bool = false) async {
+    func updateEPGFromURLs(_ urls: [URL], silent: Bool = false) async {
         var shouldManageLoading = false
         
         await MainActor.run {
@@ -646,7 +688,7 @@ class ChannelViewModel: ObservableObject {
                 }
         }
         
-        let epgMap = await EPGService().fetchAndParseEPG(url: url) { progress in
+        let epgMap = await EPGService().fetchAndMergeEPGs(urls: urls) { progress in
             self.epgProgress = progress
         }
         
@@ -661,6 +703,11 @@ class ChannelViewModel: ObservableObject {
                 self.isLoading = false
             }
         }
+    }
+    
+    // Legacy support (redirects to list version)
+    func updateEPGFromURL(_ url: URL, silent: Bool = false) async {
+        await updateEPGFromURLs([url], silent: silent)
     }
     
     // Exposed property for the UI to use the smooth progress

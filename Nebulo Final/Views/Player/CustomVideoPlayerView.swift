@@ -3,11 +3,77 @@ import AVKit
 import Combine
 import AVFoundation
 
+// MARK: - NEBULO PLAYER SINGLETON (Smarters Lite Optimization)
+class NebuloPlayer: ObservableObject {
+    static let shared = NebuloPlayer()
+    let player = AVPlayer()
+    private var currentURL: String?
+    
+    init() {
+        // Optimize Session Setup (Run Once)
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch { print("Audio Session Error: \(error)") }
+        
+        if #available(iOS 15.0, *) {
+            player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
+        }
+        player.automaticallyWaitsToMinimizeStalling = true
+    }
+    
+    func play(channel: StreamChannel) {
+        // Check if already playing this exact stream to avoid reload
+        if currentURL == channel.streamURL && player.currentItem != nil {
+            if player.timeControlStatus != .playing { player.play() }
+            return
+        }
+        
+        guard let url = URL(string: channel.streamURL) else { return }
+        
+        let h: [String: Any] = ["User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"]
+        let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": h])
+        let item = AVPlayerItem(asset: asset)
+        
+        // Aggressive Buffering for "Snappy" feel
+        item.preferredForwardBufferDuration = 2.0
+        item.automaticallyPreservesTimeOffsetFromLive = true
+        item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+        
+        player.replaceCurrentItem(with: item)
+        player.play()
+        currentURL = channel.streamURL
+    }
+    
+    func prewarm(channel: StreamChannel) {
+        guard let url = URL(string: channel.streamURL) else { return }
+        // Initialize asset to trigger DNS/Handshake cache where possible
+        let h: [String: Any] = ["User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"]
+        let _ = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": h])
+    }
+    
+    func retrieveAsset(for url: String) -> AVAsset? {
+        if currentURL == url, let item = player.currentItem {
+            let asset = item.asset
+            // Detach from shared player
+            player.replaceCurrentItem(with: nil)
+            currentURL = nil
+            return asset
+        }
+        return nil
+    }
+    
+    func pause() { player.pause() }
+}
+
 struct CustomVideoPlayerView: View {
     let channel: StreamChannel; var viewModel: ChannelViewModel? = nil; var onDismiss: (() -> Void)? = nil; var onPlayChannel: ((StreamChannel) -> Void)? = nil
     @Binding var showQuickSwitcher: Bool
     
-    @State private var player = AVPlayer(); @State private var isPlaying = true; @State private var showControls = true; @State private var offset: CGSize = .zero; @State private var timer: AnyCancellable?; @State private var pipAdapter: PipAdapter?; @State private var resolutionLabel: String = ""; @State private var sizeObserver: NSKeyValueObservation?; @State private var isAtLiveEdge = true; @State private var liveChecker: Timer?; @State private var showFullDescription = false; @State private var descriptionHeight: CGFloat = 0
+    // Use Shared Player
+    private var player: AVPlayer { NebuloPlayer.shared.player }
+    
+    @State private var isPlaying = true; @State private var showControls = true; @State private var offset: CGSize = .zero; @State private var timer: AnyCancellable?; @State private var pipAdapter: PipAdapter?; @State private var resolutionLabel: String = ""; @State private var sizeObserver: NSKeyValueObservation?; @State private var isAtLiveEdge = true; @State private var liveChecker: Timer?; @State private var showFullDescription = false; @State private var descriptionHeight: CGFloat = 0
     
     // Quick Switcher State
     @State private var quickSwitcherOffset: CGFloat = -200
@@ -20,11 +86,40 @@ struct CustomVideoPlayerView: View {
             Color.black.ignoresSafeArea(); PlayerViewRepresentable(player: player, pipAdapter: $pipAdapter).ignoresSafeArea(); Color.black.opacity(0.001).ignoresSafeArea().onTapGesture { if showFullDescription { withAnimation { showFullDescription = false }; resetTimer() } else { toggleControls() } }
             ZStack {
                 Color.black.opacity(0.4).ignoresSafeArea().onTapGesture { if showFullDescription { withAnimation { showFullDescription = false }; resetTimer() } else { toggleControls() } }
+                
+                // Center Controls
                 HStack(spacing: 50) {
                     Button(action: { seek(by: -10) }) { Image(systemName: "gobackward.10").font(.system(size: 35)).foregroundColor(.white) }
                     Button(action: { togglePlay() }) { Image(systemName: isPlaying ? "pause.fill" : "play.fill").font(.system(size: 60)).foregroundColor(.white).shadow(radius: 10) }
                     Button(action: { seek(by: 10) }) { Image(systemName: "goforward.10").font(.system(size: 35)).foregroundColor(isAtLiveEdge ? .white.opacity(0.3) : .white) }.disabled(isAtLiveEdge)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center).allowsHitTesting(true).opacity(showFullDescription ? 0 : 1)
+                
+                // Side Navigation Buttons
+                HStack {
+                    Button(action: { switchChannel(offset: -1) }) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 30, weight: .bold))
+                            .foregroundColor(.white)
+                            .shadow(radius: 4)
+                            .contentShape(Rectangle())
+                    }
+                    .padding(.leading, 10)
+                    
+                    Spacer()
+                    
+                    Button(action: { switchChannel(offset: 1) }) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 30, weight: .bold))
+                            .foregroundColor(.white)
+                            .shadow(radius: 4)
+                            .contentShape(Rectangle())
+                    }
+                    .padding(.trailing, 10)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .allowsHitTesting(true)
+                .opacity(showFullDescription ? 0 : 1)
+
                 VStack {
                     HStack(alignment: .center) {
                         Button(action: { dismissAnimate() }) { Image(systemName: "xmark").font(.title3.bold()).foregroundColor(.white).padding(12).background(Material.ultraThinMaterial).clipShape(Circle()) }
@@ -275,7 +370,17 @@ struct CustomVideoPlayerView: View {
                 frozenRecentIDs = viewModel?.recentIDs ?? []
                 quickSwitcherOffset = 0; showControls = false 
             }
-        }.onDisappear { player.pause(); timer?.cancel(); liveChecker?.invalidate(); pipAdapter = nil }
+        }.onDisappear { 
+            // Only pause if NOT transitioning to Mini Player, NOT triggering MultiView, and PiP is NOT active
+            let isGoingToMini = viewModel?.miniPlayerChannel != nil
+            let isGoingToMulti = viewModel?.triggerMultiView == true
+            let isPip = pipAdapter?.isPipActive == true
+            
+            if !isGoingToMini && !isGoingToMulti && !isPip {
+                NebuloPlayer.shared.pause() 
+            }
+            timer?.cancel(); liveChecker?.invalidate(); pipAdapter = nil 
+        }
         .onChangeCompat(of: channel) { _ in setupPlayer() }
         .onChangeCompat(of: showQuickSwitcher) { isOpen in
             if isOpen { 
@@ -297,6 +402,22 @@ struct CustomVideoPlayerView: View {
         return vm.channels.filter { $0.categoryID == switcherCategory.id && !vm.hiddenIDs.contains($0.id) }
     }
 
+    func switchChannel(offset: Int) {
+        guard let vm = viewModel else { return }
+        let allChannels = vm.channels.filter { !vm.hiddenIDs.contains($0.id) }
+        guard let idx = allChannels.firstIndex(where: { $0.id == channel.id }) else { return }
+        
+        var nextIdx = idx + offset
+        if nextIdx < 0 { nextIdx = allChannels.count - 1 }
+        if nextIdx >= allChannels.count { nextIdx = 0 }
+        
+        if allChannels.indices.contains(nextIdx) {
+            let nextChannel = allChannels[nextIdx]
+            onPlayChannel?(nextChannel)
+            resetTimer()
+        }
+    }
+
     func dismissAnimate() { withAnimation(.easeInOut(duration: 0.35)) { offset = CGSize(width: 0, height: UIScreen.main.bounds.height) }; DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { onDismiss?() } }
     func seek(by s: Double) { guard let c = player.currentItem else { return }; let next = c.currentTime().seconds + s; player.seek(to: CMTime(seconds: next, preferredTimescale: 600)); resetTimer() }
     func jumpToLive() { guard let c = player.currentItem, let r = c.seekableTimeRanges.last?.timeRangeValue else { return }; player.seek(to: r.end); player.play(); isPlaying = true; isAtLiveEdge = true; resetTimer() }
@@ -305,14 +426,11 @@ struct CustomVideoPlayerView: View {
     func toggleControls() { withAnimation(.easeInOut(duration: 0.15)) { if showControls { showControls = false; timer?.cancel() } else { showControls = true; resetTimer() } } }
     func setupPlayer() {
         pipAdapter?.stopPip()
-        do { try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback); try AVAudioSession.sharedInstance().setActive(true) } catch {}
-        guard let url = URL(string: channel.streamURL) else { return }
-        let h: [String: Any] = ["User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"]
-        let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": h]); let item = AVPlayerItem(asset: asset); item.preferredForwardBufferDuration = 0; item.automaticallyPreservesTimeOffsetFromLive = true; item.canUseNetworkResourcesForLiveStreamingWhilePaused = true; player.replaceCurrentItem(with: item); player.allowsExternalPlayback = true
-        if #available(iOS 15.0, *) {
-            player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
-        }
-        player.automaticallyWaitsToMinimizeStalling = true; player.play()
+        // Use Shared Player
+        NebuloPlayer.shared.play(channel: channel)
+        
+        // Re-attach observer
+        guard let item = NebuloPlayer.shared.player.currentItem else { return }
         sizeObserver = item.observe(\.presentationSize, options: [.new]) { _, ch in guard let sz = ch.newValue, sz != .zero else { return }; DispatchQueue.main.async { if sz.height >= 2160 { resolutionLabel = "4K" } else if sz.height >= 1080 { resolutionLabel = "1080p" } else if sz.height >= 720 { resolutionLabel = "720p" } else if sz.height > 0 { resolutionLabel = "SD" } } }
     }
     func resetTimer() { timer?.cancel(); timer = Just(()).delay(for: 3.5, scheduler: RunLoop.main).sink { _ in withAnimation(.easeInOut(duration: 0.15)) { showControls = false } } }

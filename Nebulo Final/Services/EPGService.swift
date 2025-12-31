@@ -7,15 +7,51 @@ final class EPGService: Sendable {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?.appendingPathComponent("epg_cache.json")
     }
     
-    func fetchAndParseEPG(url: URL, onProgress: @escaping @MainActor @Sendable (Double) -> Void) async -> [String: [EPGProgram]] {
+    func fetchAndMergeEPGs(urls: [URL], onProgress: @escaping @MainActor @Sendable (Double) -> Void) async -> [String: [EPGProgram]] {
+        guard !urls.isEmpty else { return [:] }
+        
         return await Task.detached {
-            let delegate = await EPGParserDelegate(onProgress: onProgress)
-            let result = await delegate.parse(url: url)
-            if !result.isEmpty {
-                self.saveToDisk(result)
+            var combined: [String: [EPGProgram]] = [:]
+            
+            // Fetch concurrently
+            await withTaskGroup(of: [String: [EPGProgram]].self) { group in
+                let totalSources = Double(urls.count)
+                var completedSources = 0.0
+                
+                for url in urls {
+                    group.addTask {
+                        let delegate = await EPGParserDelegate(onProgress: { _ in }) // We handle overall progress manually
+                        return await delegate.parse(url: url)
+                    }
+                }
+                
+                for await result in group {
+                    completedSources += 1.0
+                    // Update main progress roughly based on completed sources
+                    let prog = completedSources / totalSources
+                    await MainActor.run { onProgress(prog) }
+                    
+                    // Merge
+                    for (channelID, programs) in result {
+                        if combined[channelID] == nil {
+                            combined[channelID] = programs
+                        } else {
+                            combined[channelID]?.append(contentsOf: programs)
+                        }
+                    }
+                }
             }
-            return result
+            
+            // Save combined to disk
+            if !combined.isEmpty {
+                self.saveToDisk(combined)
+            }
+            return combined
         }.value
+    }
+    
+    func fetchAndParseEPG(url: URL, onProgress: @escaping @MainActor @Sendable (Double) -> Void) async -> [String: [EPGProgram]] {
+        return await fetchAndMergeEPGs(urls: [url], onProgress: onProgress)
     }
     
     func loadFromDisk() -> [String: [EPGProgram]]? {
