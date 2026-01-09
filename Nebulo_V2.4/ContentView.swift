@@ -8,14 +8,19 @@
 import SwiftUI
 
 struct ContentView: View {
+    @AppStorage("isLoggedIn") private var isLoggedIn = false
+    @StateObject private var viewModel = ChannelViewModel()
+    @StateObject private var scoreViewModel = ScoreViewModel()
+    
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        Group {
+            if isLoggedIn {
+                MainView(viewModel: viewModel)
+            } else {
+                LoginView()
+            }
         }
-        .padding()
+        .preferredColorScheme(.dark)
     }
 }
 

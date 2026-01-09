@@ -1,0 +1,12 @@
+# Logs
+*.log
+
+# Xcode
+build/
+DerivedData/
+*.moved-aside
+*.xcuserstate
+xcuserdata/
+
+# macOS
+.DS_Store
