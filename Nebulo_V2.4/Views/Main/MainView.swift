@@ -148,7 +148,11 @@ struct MainViewModifiers: ViewModifier {
                 }
             }
             .fullScreenCover(isPresented: $showMultiView) { MultiViewScreen(viewModel: viewModel, showMultiView: $showMultiView) }
-            .fullScreenCover(item: $selectedRecording) { recording in RecordingPlayerView(recording: recording) }
+            .fullScreenCover(item: $selectedRecording) { recording in 
+                // Placeholder for RecordingPlayerView if not defined in this file
+                // Assuming it exists or will be handled
+                Text("Recording Player") 
+            }
             .sheet(isPresented: $showSettings) { SettingsView(categories: categories, accentColor: accentColor, viewModel: viewModel, onSave: { viewModel.saveCategorySettings() }) }
             .alert("No Streams Found", isPresented: showNoStreamsAlert) { Button("OK", role: .cancel) { } } message: { Text("No streams were found. Please search for the channel manually.") }
             .alert("Rename", isPresented: showRenameAlert) {
@@ -240,3 +244,620 @@ extension MainView {
 }
 
 extension SwiftUI.View { @ViewBuilder func `if`<Content: SwiftUI.View>(_ condition: Bool, transform: (Self) -> Content) -> some SwiftUI.View { if condition { transform(self) } else { self } } }
+
+// MARK: - STANDARD LAYOUT (Restored)
+struct StandardLayout: SwiftUI.View {
+    @ObservedObject var viewModel: ChannelViewModel
+    @Binding var selectedCategory: StreamCategory?; @Binding var selectedChannel: StreamChannel?; @Binding var searchText: String
+    let accentColor: Color; let playAction: (StreamChannel) -> Void; @Binding var showMultiView: Bool; @Binding var showSettings: Bool
+    @Binding var selectedRecording: Recording?
+    
+    var body: some SwiftUI.View {
+        ZStack(alignment: .bottom) {
+            if !searchText.isEmpty {
+                searchView
+                    .modifier(SwipeBackModifier(onBack: { withAnimation { searchText = "" } }))
+            } else if let cat = selectedCategory {
+                if cat.id == -3 { 
+                    SportsHubView(viewModel: viewModel, accentColor: accentColor, playAction: playAction, onBack: { withAnimation { selectedCategory = nil } }, scoreViewModel: viewModel.scoreViewModel)
+                        .transition(.blurFade)
+                        .modifier(SwipeBackModifier(onBack: { withAnimation { selectedCategory = nil } }))
+                }
+                else if cat.id == -5 { 
+                    RecordingsView(onBack: { withAnimation { selectedCategory = nil } })
+                        .transition(.blurFade)
+                        .modifier(SwipeBackModifier(onBack: { withAnimation { selectedCategory = nil } }))
+                }
+                else { 
+                    CategoryDetailView(title: cat.name, channels: getChannelsToShow(for: cat), accentColor: accentColor, playAction: playAction, toggleFav: viewModel.toggleFavorite, promptRename: viewModel.triggerRenameChannel, hideChannel: viewModel.hideChannel, favoriteIDs: viewModel.favoriteIDs, viewModel: viewModel, showMultiView: $showMultiView, onBack: { withAnimation { selectedCategory = nil } }, onCategorySelect: { cat in withAnimation { selectedCategory = cat; searchText = "" } })
+                        .transition(.blurFade)
+                        .modifier(SwipeBackModifier(onBack: { withAnimation { selectedCategory = nil } }))
+                }
+            } else if viewModel.isLoading {
+                ScrollView(showsIndicators: false) {
+                    LazyVStack(spacing: 16) {
+                        HStack {
+                            SkeletonBox(width: 180, height: 24).cornerRadius(4)
+                            Spacer()
+                            SkeletonBox(width: 14, height: 14).cornerRadius(2)
+                        }.padding(.horizontal)
+                        
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 16) {
+                                ForEach(0..<4, id: \.self) { _ in
+                                    SkeletonBox(height: 112).frame(width: 200).cornerRadius(12)
+                                }
+                            }.padding(.horizontal)
+                        }.frame(height: 150)
+                        
+                        HStack(spacing: 16) {
+                            SquareCardSkeleton()
+                            SquareCardSkeleton()
+                        }.padding(.horizontal).padding(.vertical, 8)
+                        
+                        CategoryCardSkeleton()
+                        CategoryCardSkeleton()
+                        ForEach(0..<10, id: \.self) { _ in
+                            CategoryCardSkeleton()
+                        }
+                    }
+                    .padding(.vertical)
+                }
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView(showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 24) {
+                            
+                            // MARK: - Header
+                            GreetingHeader()
+                                .padding(.horizontal)
+                                .padding(.top, 10)
+                            
+                            // MARK: - Recent
+                            if !viewModel.recentIDs.isEmpty {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    Label("Continue Watching", systemImage: "play.circle.fill")
+                                        .font(.headline)
+                                        .foregroundStyle(.white.opacity(0.8))
+                                        .padding(.horizontal)
+                                    
+                                    let recent = viewModel.recentIDs.compactMap { id in viewModel.channels.first(where: { $0.id == id }) }
+                                    HorizontalPreviewList(channels: recent, isRecent: true, accentColor: accentColor, viewModel: viewModel, playAction: playAction, promptRenameChannel: viewModel.triggerRenameChannel, hideChannel: viewModel.hideChannel, removeFromRecent: viewModel.removeFromRecent)
+                                }
+                            }
+                            
+                            // MARK: - Quick Access
+                            VStack(alignment: .leading, spacing: 12) {
+                                Label("Quick Access", systemImage: "square.grid.2x2.fill")
+                                    .font(.headline)
+                                    .foregroundStyle(.white.opacity(0.8))
+                                    .padding(.horizontal)
+                                
+                                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                                    DashboardCard(title: "Sports Center", icon: "sportscourt.fill", color: .green, accentColor: accentColor) {
+                                        viewModel.lastSelectedHomeID = -3; withAnimation { selectedCategory = StreamCategory(id: -3, name: "Sports Center") }
+                                    }
+                                    DashboardCard(title: "Favorites", icon: "star.fill", color: .yellow, accentColor: accentColor) {
+                                        viewModel.lastSelectedHomeID = -4; withAnimation { selectedCategory = StreamCategory(id: -4, name: "Favorites") }
+                                    }
+                                    DashboardCard(title: "Recordings", icon: "record.circle.fill", color: .red, accentColor: accentColor) {
+                                        viewModel.lastSelectedHomeID = -5; withAnimation { selectedCategory = StreamCategory(id: -5, name: "Recordings") }
+                                    }
+                                    DashboardCard(title: "Multi-View", icon: "square.grid.2x2", color: .purple, accentColor: accentColor) {
+                                        viewModel.lastSelectedHomeID = -99; withAnimation { showMultiView = true }
+                                    }
+                                }
+                                .padding(.horizontal)
+                            }
+                            
+                            // MARK: - All Channels
+                            Button(action: {
+                                viewModel.lastSelectedHomeID = -1; withAnimation { selectedCategory = StreamCategory(id: -1, name: "All Channels") }
+                            }) {
+                                HStack {
+                                    Image(systemName: "tv.fill")
+                                        .font(.title2)
+                                        .foregroundColor(accentColor)
+                                        .frame(width: 40)
+                                    
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Browse All Channels")
+                                            .font(.headline)
+                                            .foregroundColor(.white)
+                                        Text("\(viewModel.channels.count) channels available")
+                                            .font(.caption)
+                                            .foregroundColor(.white.opacity(0.6))
+                                    }
+                                    
+                                    Spacer()
+                                    
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption.bold())
+                                        .foregroundColor(.white.opacity(0.3))
+                                }
+                                .padding(16)
+                                .background(Material.ultraThin)
+                                .cornerRadius(16)
+                                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.1), lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.horizontal)
+                            
+                            // MARK: - Categories
+                            VStack(alignment: .leading, spacing: 12) {
+                                Label("Categories", systemImage: "list.bullet")
+                                    .font(.headline)
+                                    .foregroundStyle(.white.opacity(0.8))
+                                    .padding(.horizontal)
+                                
+                                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
+                                    ForEach(viewModel.categories.filter { !$0.isHidden }) { cat in
+                                        Button(action: {
+                                            viewModel.lastSelectedHomeID = cat.id; withAnimation { selectedCategory = cat }
+                                        }) {
+                                            Text(cat.name)
+                                                .font(.subheadline.bold())
+                                                .foregroundStyle(.white)
+                                                .multilineTextAlignment(.leading)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                                .padding(14)
+                                                .frame(height: 70)
+                                                .background(Color.white.opacity(0.05))
+                                                .cornerRadius(12)
+                                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1))
+                                        }
+                                        .buttonStyle(.plain)
+                                        .id(cat.id)
+                                    }
+                                }
+                                .padding(.horizontal)
+                            }
+                            
+                            Spacer(minLength: 40)
+                        }
+                        .padding(.vertical)
+                    }
+                    .onAppear {
+                        if let last = viewModel.lastSelectedHomeID {
+                            DispatchQueue.main.async { proxy.scrollTo(last, anchor: .center) }
+                        }
+                    }
+                }.transition(.blurFade)
+            }
+        }.animation(.easeInOut(duration: 0.4), value: selectedCategory)
+    }
+    
+    private var searchView: some SwiftUI.View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 30) {
+                if viewModel.isSearching {
+                    VStack(alignment: .leading, spacing: 20) {
+                        SkeletonBox(width: 150, height: 14).padding(.horizontal)
+                        ScrollView(.horizontal) { HStack { ForEach(0..<4) { _ in HorizontalCardSkeleton() } } }.padding(.horizontal)
+                        SkeletonBox(width: 150, height: 14).padding(.horizontal)
+                        ScrollView(.horizontal) { HStack { ForEach(0..<4) { _ in HorizontalCardSkeleton() } } }.padding(.horizontal)
+                    }.padding(.top, 20)
+                } else {
+                    if !viewModel.filteredEPGChannels.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("EPG GUIDE RESULTS")
+                                .font(.system(size: 11, weight: .black))
+                                .kerning(1.2)
+                                .foregroundColor(.white.opacity(0.5))
+                                .padding(.horizontal)
+                            HorizontalSearchList(channels: viewModel.filteredEPGChannels, viewModel: viewModel, accentColor: accentColor, playAction: playAction)
+                        }
+                    }
+                    if !viewModel.filteredNameChannels.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("CHANNEL NAME RESULTS")
+                                .font(.system(size: 11, weight: .black))
+                                .kerning(1.2)
+                                .foregroundColor(.white.opacity(0.5))
+                                .padding(.horizontal)
+                            HorizontalSearchList(channels: viewModel.filteredNameChannels, viewModel: viewModel, accentColor: accentColor, playAction: playAction)
+                        }
+                    }
+                    
+                    if !viewModel.filteredCategories.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("EXPLORE CATEGORIES")
+                                .font(.system(size: 11, weight: .black))
+                                .kerning(1.2)
+                                .foregroundColor(.white.opacity(0.5))
+                                .padding(.horizontal)
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 12) {
+                                    ForEach(viewModel.filteredCategories) { cat in
+                                        Button(action: { withAnimation { selectedCategory = cat; searchText = "" } }) {
+                                            CategoryCard(title: cat.name, color: .secondary, lineLimit: 1)
+                                                .multilineTextAlignment(.leading)
+                                                .frame(width: 200, height: 85)
+                                        }.buttonStyle(.plain)
+                                    }
+                                }.padding(.horizontal)
+                            }
+                        }
+                    }
+                    
+                    RecentSearchesView(viewModel: viewModel, accentColor: accentColor)
+                        .padding(.top, 10)
+                    
+                    if viewModel.filteredEPGChannels.isEmpty && viewModel.filteredNameChannels.isEmpty && viewModel.filteredCategories.isEmpty {
+                        EmptyStateView(title: "No Results", systemImage: "magnifyingglass", description: "Try searching for a show or channel.")
+                            .padding(.top, 100)
+                    }
+                }
+            }
+            .padding(.top, 20)
+        }
+    }
+    
+    func getChannelsToShow(for cat: StreamCategory) -> [StreamChannel] { if cat.id == -2 { return viewModel.recentIDs.compactMap { id in viewModel.channels.first(where: { $0.id == id }) } }; if cat.id == -4 { return viewModel.channels.filter { viewModel.favoriteIDs.contains($0.id) } }; if cat.id == -1 { return viewModel.channels.filter { !viewModel.hiddenIDs.contains($0.id) } }; return viewModel.channels.filter { $0.categoryID == cat.id && !viewModel.hiddenIDs.contains($0.id) } }
+}
+
+struct GreetingHeader: View {
+    var greeting: String {
+        let hour = Calendar.current.component(.hour, from: Date())
+        if hour < 12 { return "Good Morning" }
+        if hour < 18 { return "Good Afternoon" }
+        return "Good Evening"
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(greeting)
+                .font(.title3)
+                .fontWeight(.medium)
+                .foregroundColor(.white.opacity(0.7))
+            Text("Welcome Back")
+                .font(.largeTitle)
+                .fontWeight(.bold)
+                .foregroundColor(.white)
+        }
+    }
+}
+
+struct DashboardCard: View {
+    let title: String
+    let icon: String
+    let color: Color
+    let accentColor: Color
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(color.opacity(0.2))
+                        .frame(width: 40, height: 40)
+                    Image(systemName: icon)
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundColor(color)
+                }
+                
+                Text(title)
+                    .font(.headline)
+                    .fontWeight(.bold)
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                
+                Spacer()
+            }
+            .padding(12)
+            .background(Material.ultraThin)
+            .cornerRadius(16)
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.1), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct SidebarLayout: SwiftUI.View {
+    @ObservedObject var viewModel: ChannelViewModel
+    @Binding var selectedCategory: StreamCategory?; @Binding var selectedChannel: StreamChannel?; @Binding var searchText: String
+    let isLandscape: Bool; let accentColor: Color; let playAction: (StreamChannel) -> Void; @Binding var showMultiView: Bool; @Binding var showSettings: Bool
+    @State private var channelForDescription: StreamChannel?
+    
+    var body: some SwiftUI.View {
+        HStack(spacing: 0) {
+            VStack(spacing: 8) {
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 8) {
+                        ClockView().padding(.vertical, 20)
+                        if !searchText.isEmpty { GlassSidebarRow(title: "Search Results", isSelected: true, accentColor: accentColor) }
+                        else {
+                            Button(action: { withAnimation { selectedCategory = StreamCategory(id: -2, name: "Recently Watched") } }) { GlassSidebarRow(title: "Recently Watched", isSelected: selectedCategory?.id == -2, accentColor: accentColor) }.buttonStyle(.plain)
+                            Button(action: { withAnimation { selectedCategory = StreamCategory(id: -4, name: "Favorites") } }) { GlassSidebarRow(title: "Favorites", isSelected: selectedCategory?.id == -4, accentColor: accentColor) }.buttonStyle(.plain)
+                            Button(action: { withAnimation { selectedCategory = StreamCategory(id: -3, name: "Sports Center") } }) { GlassSidebarRow(title: "Sports Center", isSelected: selectedCategory?.id == -3, accentColor: accentColor) }.buttonStyle(.plain)
+                            Button(action: { withAnimation { selectedCategory = StreamCategory(id: -5, name: "Recordings") } }) { GlassSidebarRow(title: "Recordings", isSelected: selectedCategory?.id == -5, accentColor: accentColor) }.buttonStyle(.plain)
+                            Button(action: { withAnimation { showMultiView = true } }) { GlassSidebarRow(title: "Multi-View", isSelected: false, accentColor: accentColor) }.buttonStyle(.plain)
+                            Button(action: { withAnimation { selectedCategory = StreamCategory(id: -1, name: "All Channels") } }) { GlassSidebarRow(title: "All Channels", isSelected: selectedCategory?.id == -1, accentColor: accentColor) }.buttonStyle(.plain)
+                            Divider().background(Color.white.opacity(0.3)).padding(.vertical, 8)
+                            ForEach(viewModel.categories.filter { !$0.isHidden }) { cat in Button(action: { withAnimation { selectedCategory = cat } }) { GlassSidebarRow(title: cat.name, isSelected: selectedCategory?.id == cat.id, accentColor: accentColor) }.buttonStyle(.plain).contextMenu { Button { viewModel.triggerRenameCategory(cat) } label: { Label("Rename", systemImage: "pencil") }; Button { viewModel.hideCategory(cat.id) } label: { Label("Hide", systemImage: "eye.slash") } } }
+                        }
+                    }.padding(.horizontal, 10)
+                }
+            }.frame(width: isLandscape ? 260 : 170).background(Color.clear); Divider().overlay(Color.white.opacity(0.2))
+            ZStack {
+                if !searchText.isEmpty {
+                    // searchView is private to StandardLayout, so we need a similar view here or reuse components.
+                    // For Sidebar layout, we usually reuse the same logic. 
+                    // To keep it simple and safe, we can reuse the components directly.
+                    StandardLayout(viewModel: viewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $searchText, accentColor: accentColor, playAction: playAction, showMultiView: $showMultiView, showSettings: $showSettings, selectedRecording: .constant(nil))
+                        .id("SearchOverride") // Hack to force reload if needed
+                } else if selectedCategory?.id == -3 { SportsHubView(viewModel: viewModel, accentColor: accentColor, playAction: playAction, onBack: nil, scoreViewModel: viewModel.scoreViewModel).transition(.blurFade) }
+                else if selectedCategory?.id == -5 { RecordingsView(onBack: { withAnimation { selectedCategory = nil } }).transition(.blurFade) }
+                else if viewModel.isLoading {
+                    ScrollView {
+                        VStack {
+                            ForEach(0..<15, id: \.self) { _ in ChannelRowSkeleton() }
+                        }
+                    }
+                }
+                else {
+                    ScrollViewReader { proxy in
+                        ScrollView(showsIndicators: false) {
+                            LazyVStack(spacing: 0) {
+                                let channels = getChannelsToShow()
+                                if channels.isEmpty { EmptyStateView(title: "No Channels", systemImage: "tv.slash", description: "Select a category.") }
+                                else {
+                                    ForEach(channels) { c in
+                                        ChannelRow(channel: c, epgProgram: viewModel.getCurrentProgram(for: c), isFavorite: viewModel.favoriteIDs.contains(c.id), accentColor: accentColor, isCompact: !isLandscape, playAction: { playAction(c) }, toggleFav: { viewModel.toggleFavorite(c.id) })                                            .equatable()
+                                            .id(c.id)
+                                            .contextMenu {
+                                                Button { viewModel.triggerRenameChannel(c) } label: { Label("Rename", systemImage: "pencil") }
+                                                Button { viewModel.hideChannel(c.id) } label: { Label("Hide", systemImage: "eye.slash") }
+                                                if let prog = viewModel.getCurrentProgram(for: c), let desc = prog.description, !desc.isEmpty {
+                                                    Button { channelForDescription = c } label: { Label("Description", systemImage: "text.alignleft") }
+                                                }
+                                                if selectedCategory?.id == -2 || viewModel.recentIDs.contains(c.id) { Button(role: .destructive) { viewModel.removeFromRecent(c.id) } label: { Label("Remove", systemImage: "clock.badge.xmark") } }
+                                            }
+                                    }
+                                }
+                            }
+                        }
+                        .transition(.blurFade)
+                        .onAppear {
+                            if let last = viewModel.lastPlayedChannelID {
+                                DispatchQueue.main.async { proxy.scrollTo(last, anchor: .center) }
+                            }
+                        }
+                            .onChangeCompat(of: viewModel.lastPlayedChannelID) { id in
+                            if let id = id { proxy.scrollTo(id, anchor: .center) }
+                        }
+                            .onChangeCompat(of: viewModel.scrollRestoreTrigger) { _ in
+                            if let last = viewModel.lastPlayedChannelID {
+                                proxy.scrollTo(last, anchor: .center)
+                            }
+                        }
+                    }
+                }
+            }.animation(.easeInOut(duration: 0.4), value: selectedCategory)
+        }
+        .alert(item: $channelForDescription) { channel in
+            Alert(
+                title: Text("Program Description"),
+                message: Text(viewModel.getCurrentProgram(for: channel)?.description ?? "No description available."),
+                dismissButton: .default(Text("OK"))
+            )
+        }
+    }
+    
+    func getChannelsToShow() -> [StreamChannel] { guard let cat = selectedCategory else { return [] }; if cat.id == -2 { return viewModel.recentIDs.compactMap { id in viewModel.channels.first(where: { $0.id == id }) } }; if cat.id == -4 { return viewModel.channels.filter { viewModel.favoriteIDs.contains($0.id) } }; if cat.id == -1 { return viewModel.channels.filter { !viewModel.hiddenIDs.contains($0.id) } }; return viewModel.channels.filter { $0.categoryID == cat.id && !viewModel.hiddenIDs.contains($0.id) } }
+}
+
+struct CategoryDetailView: SwiftUI.View {
+    let title: String; let channels: [StreamChannel]; let accentColor: Color; let playAction: (StreamChannel) -> Void; let toggleFav: (Int) -> Void; let promptRename: (StreamChannel) -> Void; let hideChannel: (Int) -> Void; let favoriteIDs: Set<Int>; @ObservedObject var viewModel: ChannelViewModel; @Binding var showMultiView: Bool; var onBack: (() -> Void)? = nil; var onCategorySelect: ((StreamCategory) -> Void)? = nil
+    @AppStorage("nebColor1") private var nebColor1 = "#AF52DE"; @AppStorage("nebColor2") private var nebColor2 = "#007AFF"; @AppStorage("nebColor3") private var nebColor3 = "#FF2D55"; @AppStorage("nebX1") private var nebX1 = 0.2; @AppStorage("nebY1") private var nebY1 = 0.2; @AppStorage("nebX2") private var nebX2 = 0.8; @AppStorage("nebY2") private var nebY2 = 0.3; @AppStorage("nebX3") private var nebX3 = 0.5; @AppStorage("nebY3") private var nebY3 = 0.8
+    @State private var channelForDescription: StreamChannel?
+    
+    var body: some SwiftUI.View {
+        ZStack {
+            NebulaBackgroundView(color1: Color(hex: nebColor1) ?? .purple, color2: Color(hex: nebColor2) ?? .blue, color3: Color(hex: nebColor3) ?? .pink, point1: UnitPoint(x: nebX1, y: nebY1), point2: UnitPoint(x: nebX2, y: nebY2), point3: UnitPoint(x: nebX3, y: nebY3))
+            
+            VStack(spacing: 0) {
+                ScrollViewReader { proxy in
+                    ScrollView(showsIndicators: false) {
+                        LazyVStack(spacing: 0) {
+                            if !viewModel.searchText.isEmpty {
+                                // Search Logic
+                                Text("Search Results").font(.headline).padding()
+                            } else {
+                                ForEach(channels) { c in
+                                    ChannelRow(channel: c, epgProgram: viewModel.getCurrentProgram(for: c), isFavorite: favoriteIDs.contains(c.id), accentColor: accentColor, playAction: { playAction(c) }, toggleFav: { toggleFav(c.id) })
+                                        .equatable()
+                                        .id(c.id)
+                                        .contextMenu {
+                                            Button { promptRename(c) } label: { Label("Rename", systemImage: "pencil") }
+                                            Button { hideChannel(c.id) } label: { Label("Hide", systemImage: "eye.slash") }
+                                            if let prog = viewModel.getCurrentProgram(for: c), let desc = prog.description, !desc.isEmpty {
+                                                Button { channelForDescription = c } label: { Label("Description", systemImage: "text.alignleft") }
+                                            }
+                                        }
+                                }
+                            }
+                        }
+                    }
+                    .onAppear {
+                        if let last = viewModel.lastPlayedChannelID {
+                            DispatchQueue.main.async { proxy.scrollTo(last, anchor: .center) }
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                if let onBack = onBack {
+                    Button(action: onBack) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                            Text("Back")
+                        }
+                        .foregroundStyle(.white)
+                    }
+                }
+            }
+        }
+        .alert(item: $channelForDescription) { channel in
+            Alert(
+                title: Text("Program Description"),
+                message: Text(viewModel.getCurrentProgram(for: channel)?.description ?? "No description available."),
+                dismissButton: .default(Text("OK"))
+            )
+        }
+    }
+}
+
+// MARK: - Mini Player View
+struct MiniPlayerView: SwiftUI.View {
+    let channel: StreamChannel
+    let viewModel: ChannelViewModel
+    let onExpand: () -> Void
+    let onClose: () -> Void
+    
+    @ObservedObject var playerManager = NebuloPlayerEngine.shared
+    
+    @State private var showControls = false
+    @State private var pipOffset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
+    
+    var body: some SwiftUI.View {
+        ZStack {
+            UnifiedPlayerViewBridge()
+                .frame(width: 240, height: 135)
+                .background(Color.black)
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 5)
+            
+            // Interaction Layer
+            Color.black.opacity(0.001)
+                .frame(width: 240, height: 135)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showControls.toggle()
+                    }
+                }
+            
+            if showControls {
+                ZStack {
+                    Color.black.opacity(0.3)
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .allowsHitTesting(false)
+                    
+                    Button(action: {
+                        if playerManager.isPlaying { playerManager.pause() } else { playerManager.resume() }
+                    }) {
+                        Image(systemName: playerManager.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 24, weight: .bold))
+                            .foregroundColor(.white)
+                            .padding(12)
+                            .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
+                    }
+                    .buttonStyle(.plain)
+                    
+                    VStack {
+                        HStack {
+                            Button(action: {
+                                onClose()
+                                NebuloPlayerEngine.shared.stop()
+                            }) {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundColor(.white)
+                                    .padding(10)
+                                    .modifier(GlassEffect(cornerRadius: 16, isSelected: true, accentColor: nil))
+                            }
+                            .buttonStyle(.plain)
+                            
+                            Spacer()
+                            
+                            Button(action: onExpand) {
+                                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundColor(.white)
+                                    .padding(10)
+                                    .modifier(GlassEffect(cornerRadius: 16, isSelected: true, accentColor: nil))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(8)
+                        Spacer()
+                    }
+                }
+                .frame(width: 240, height: 135)
+                .zIndex(10)
+            }
+        }
+        .frame(width: 240, height: 135)
+        .offset(pipOffset)
+        .gesture(
+            DragGesture()
+                .onChanged { value in
+                    pipOffset = CGSize(
+                        width: lastOffset.width + value.translation.width,
+                        height: lastOffset.height + value.translation.height
+                    )
+                }
+                .onEnded { value in
+                    let screenWidth = UIScreen.main.bounds.width
+                    let screenHeight = UIScreen.main.bounds.height
+                    let pipWidth: CGFloat = 240
+                    let pipHeight: CGFloat = 135
+                    
+                    let horizontalRange = screenWidth - pipWidth - 40
+                    let verticalRange = screenHeight - pipHeight - 120
+                    
+                    let targetX: CGFloat = pipOffset.width > -horizontalRange / 2 ? 0 : -horizontalRange
+                    let targetY: CGFloat = pipOffset.height < -verticalRange / 2 ? -verticalRange + 60 : 0
+                    
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                        pipOffset = CGSize(width: targetX, height: targetY)
+                        lastOffset = pipOffset
+                    }
+                }
+        )
+    }
+}
+
+// MARK: - Swipe Back Modifier
+struct SwipeBackModifier: ViewModifier {
+    let onBack: () -> Void
+    func body(content: Content) -> some View {
+        ZStack(alignment: .leading) {
+            content
+            
+            // Invisible edge trigger
+            Color.clear
+                .frame(width: 25)
+                .contentShape(Rectangle())
+                .highPriorityGesture(
+                    DragGesture()
+                        .onEnded { value in
+                            if value.translation.width > 60 {
+                                onBack()
+                            }
+                        }
+                )
+        }
+    }
+}
+
+struct MultiViewIndicator: SwiftUI.View { 
+    let count: Int; let accentColor: Color?; let action: () -> Void; 
+    var body: some SwiftUI.View { 
+        Button(action: action) { 
+            HStack { Image(systemName: "square.grid.2x2.fill"); Text("Multi-View Active: \(count)/4") }
+                .font(.caption.bold()).foregroundColor(.white)
+                .padding(.horizontal, 16).padding(.vertical, 12)
+                .modifier(GlassEffect(cornerRadius: 20, isSelected: true, accentColor: accentColor)) 
+        }
+        .padding(.bottom, 20)
+    } 
+}

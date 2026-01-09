@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct PlayerControlsView: View {
-    @ObservedObject var playerManager: PlaybackManager
+    @ObservedObject var playerManager: NebuloPlayerEngine
     @ObservedObject var recordingManager = RecordingManager.shared
     let channel: StreamChannel
     var viewModel: ChannelViewModel?
@@ -1199,7 +1199,7 @@ struct PlayerControlsView: View {
             await MainActor.run {
                 if let finalURL = url {
                     timeshiftStartTime = date
-                    playerManager.currentTimeshiftStartDate = date
+                    // playerManager.currentTimeshiftStartDate is read-only derived from URL
                     playerManager.play(url: finalURL)
                 } else {
                     // Fallback or error? For now just try to play original if timeshift fails
