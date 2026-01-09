@@ -8,13 +8,13 @@
 import SwiftUI
 
 struct ContentView: View {
-    @AppStorage("isLoggedIn") private var isLoggedIn = false
-    @StateObject private var viewModel = ChannelViewModel()
-    @StateObject private var scoreViewModel = ScoreViewModel()
+    @ObservedObject private var accountManager = AccountManager.shared
+    @ObservedObject var viewModel: ChannelViewModel
+    @ObservedObject var scoreViewModel: ScoreViewModel
     
     var body: some View {
         Group {
-            if isLoggedIn {
+            if accountManager.isLoggedIn {
                 MainView(viewModel: viewModel)
             } else {
                 LoginView()
@@ -25,5 +25,5 @@ struct ContentView: View {
 }
 
 #Preview {
-    ContentView()
+    ContentView(viewModel: ChannelViewModel(), scoreViewModel: ScoreViewModel())
 }

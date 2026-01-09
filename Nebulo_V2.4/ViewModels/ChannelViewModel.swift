@@ -93,7 +93,7 @@ class ChannelViewModel: ObservableObject {
         
         // Observe Account Changes
         AccountManager.shared.$currentAccount
-            .dropFirst()
+            .receive(on: RunLoop.main)
             .sink { [weak self] account in
                 guard let self = self, let _ = account else { return }
                 Task {
@@ -101,6 +101,11 @@ class ChannelViewModel: ObservableObject {
                 }
             }
             .store(in: &cancellables)
+            
+        // Trigger initial load if account is already present
+        if AccountManager.shared.currentAccount != nil {
+            Task { await self.loadCurrentAccount() }
+        }
     }
     
     func loadCurrentAccount() async {
