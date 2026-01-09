@@ -13,7 +13,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
     @Binding var showQuickSwitcher: Bool
     
     // OBSERVE THE PLAYER MANAGER
-    @ObservedObject var playerManager = PlaybackManager.shared
+    @ObservedObject var playerManager = NebuloPlayerEngine.shared
     
     @State private var showControls = true
     @State private var offset: CGSize = .zero

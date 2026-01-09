@@ -274,15 +274,15 @@ struct VLCPlayerView: UIViewRepresentable {
             player?.drawable = nil
         }
         
-        func mediaPlayerStateChanged(_ aNotification: Notification) {
-            guard let player = aNotification.object as? VLCMediaPlayer else { return }
+        func mediaPlayerStateChanged(_ aNotification: Notification?) {
+            guard let notification = aNotification, let player = notification.object as? VLCMediaPlayer else { return }
             if player.state == .ended || player.state == .stopped {
                 parent.isPlaying = false
             }
         }
         
-        func mediaPlayerTimeChanged(_ aNotification: Notification) {
-            guard let player = aNotification.object as? VLCMediaPlayer, !parent.isScrubbing else { return }
+        func mediaPlayerTimeChanged(_ aNotification: Notification?) {
+            guard let notification = aNotification, let player = notification.object as? VLCMediaPlayer, !parent.isScrubbing else { return }
             
             let time = Double(player.time.intValue)
             let len = Double(player.media?.length.intValue ?? 0)

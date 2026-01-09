@@ -83,9 +83,3 @@ extension View {
         self.background(NavigationPopGestureHandler(isEnabled: isEnabled))
     }
 }
-
-extension AnyTransition {
-    static var blurFade: AnyTransition {
-        .opacity.combined(with: .scale(scale: 0.95))
-    }
-}

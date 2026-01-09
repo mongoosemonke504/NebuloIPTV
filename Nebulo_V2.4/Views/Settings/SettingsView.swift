@@ -29,10 +29,6 @@ struct SettingsView: View {
     @State private var showAddPlaylist = false
     @State private var inputImage: UIImage?
     
-    private var nebC1: Color { Color(hex: nebColor1) ?? .purple }
-    private var nebC2: Color { Color(hex: nebColor2) ?? .blue }
-    private var nebC3: Color { Color(hex: nebColor3) ?? .pink }
-    
     // Background Settings States (Local copies for editing)
     @AppStorage("nebColor1") private var nebColor1 = "#AF52DE"; @AppStorage("nebColor2") private var nebColor2 = "#007AFF"; @AppStorage("nebColor3") private var nebColor3 = "#FF2D55"; @AppStorage("nebX1") private var nebX1 = 0.2; @AppStorage("nebY1") private var nebY1 = 0.2; @AppStorage("nebX2") private var nebX2 = 0.8; @AppStorage("nebY2") private var nebY2 = 0.3; @AppStorage("nebX3") private var nebX3 = 0.5; @AppStorage("nebY3") private var nebY3 = 0.8
     @AppStorage("useCustomBackground") private var useCustomBackground = false
@@ -43,7 +39,7 @@ struct SettingsView: View {
             ZStack {
                 // Background
                 Color.black.ignoresSafeArea()
-                NebulaBackgroundView(color1: nebC1, color2: nebC2, color3: nebC3, point1: UnitPoint(x: nebX1, y: nebY1), point2: UnitPoint(x: nebX2, y: nebY2), point3: UnitPoint(x: nebX3, y: nebY3))
+                NebulaBackgroundView(color1: Color(hex: nebColor1) ?? .purple, color2: Color(hex: nebColor2) ?? .blue, color3: Color(hex: nebColor3) ?? .pink, point1: UnitPoint(x: nebX1, y: nebY1), point2: UnitPoint(x: nebX2, y: nebY2), point3: UnitPoint(x: nebX3, y: nebY3))
                     .opacity(0.3)
                     .ignoresSafeArea()
                 
@@ -60,6 +56,10 @@ struct SettingsView: View {
                             accentColor: accentColor
                         )
                         
+                        // MARK: - PLAYBACK
+                        SettingsSectionHeader(title: "Playback")
+                        PlaybackCard()
+                        
                         // MARK: - CONTENT MANAGEMENT
                         SettingsSectionHeader(title: "Content Management")
                         ContentManagementCard(
@@ -68,10 +68,6 @@ struct SettingsView: View {
                             viewModel: viewModel,
                             showAddPlaylist: $showAddPlaylist
                         )
-                        
-                        // MARK: - PLAYBACK
-                        SettingsSectionHeader(title: "Playback")
-                        PlaybackCard(accentColor: accentColor)
                         
                         // MARK: - UPDATES
                         SettingsSectionHeader(title: "Updates")
@@ -107,22 +103,11 @@ struct SettingsView: View {
             .navigationBarTitleDisplayMode(.large)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { onSave(); dismiss() }.fontWeight(.bold) } }
             .sheet(isPresented: $showAddPlaylist) { AddPlaylistSheet() }
-            .sheet(isPresented: $showImagePicker) { PhotoPicker(image: inputImageBinding) }
-            .sheet(isPresented: $showFilePicker) { FilePicker(image: inputImageBinding) }
+            .sheet(isPresented: $showImagePicker) { PhotoPicker(image: $inputImage) }
+            .sheet(isPresented: $showFilePicker) { FilePicker(image: $inputImage) }
+            .onChangeCompat(of: inputImage) { newImage in if let img = newImage { saveImage(img) } }
             .onAppear { loadSavedImage() }
         }
-    }
-    
-    private var inputImageBinding: Binding<UIImage?> {
-        Binding(
-            get: { inputImage },
-            set: { 
-                inputImage = $0
-                if let img = $0 {
-                    saveImage(img)
-                }
-            }
-        )
     }
     
     func saveImage(_ image: UIImage) {
@@ -140,55 +125,6 @@ struct SettingsView: View {
             if let data = try? Data(contentsOf: fileURL), let uiImage = UIImage(data: data) {
                 self.inputImage = uiImage
             }
-        }
-    }
-}
-
-// MARK: - PLAYBACK CARD
-struct PlaybackCard: View {
-    @AppStorage("autoBuffer") private var autoBuffer = true
-    @AppStorage("bufferTime") private var bufferTime = 2.0
-    @AppStorage("playerCore") private var playerCore = 1 // 0 = FFmpeg (KS), 1 = AVPlayer (Default)
-    let accentColor: Color
-    
-    var body: some View {
-        SettingsCard {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    Text("Video Engine").font(.body).foregroundColor(.white)
-                    Spacer()
-                    Picker("Engine", selection: $playerCore) {
-                        Text("FFmpeg (Recommended)").tag(0)
-                        Text("System (AVPlayer)").tag(1)
-                    }
-                    .pickerStyle(.menu)
-                    .tint(.white.opacity(0.7))
-                }
-                
-                Divider().background(Color.white.opacity(0.1))
-                
-                SettingsToggle(title: "Auto Buffer", isOn: $autoBuffer)
-                
-                if !autoBuffer {
-                    Divider().background(Color.white.opacity(0.1))
-                    
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Buffer Size")
-                                .font(.body)
-                                .foregroundColor(.white)
-                            Spacer()
-                            Text(String(format: "%.1f s", bufferTime))
-                                .font(.caption.bold())
-                                .foregroundColor(accentColor)
-                        }
-                        
-                        Slider(value: $bufferTime, in: 0.5...10.0, step: 0.5)
-                            .tint(accentColor)
-                    }
-                }
-            }
-            .padding()
         }
     }
 }
@@ -266,6 +202,31 @@ struct AppearanceCard: View {
     }
 }
 
+struct PlaybackCard: View {
+    @AppStorage("autoBuffer") private var autoBuffer = true
+    @AppStorage("bufferTime") private var bufferTime = 2.0
+    
+    var body: some View {
+        SettingsCard {
+            VStack(spacing: 16) {
+                SettingsToggle(title: "Auto Buffer", isOn: $autoBuffer)
+                
+                if !autoBuffer {
+                    Divider().background(Color.white.opacity(0.1))
+                    VStack(alignment: .leading) {
+                        Text("Buffer Duration: \(String(format: "%.1f", bufferTime))s")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.7))
+                        Slider(value: $bufferTime, in: 0.5...10.0, step: 0.5)
+                            .tint(.blue)
+                    }
+                }
+            }
+            .padding()
+        }
+    }
+}
+
 struct CustomBackgroundEditor: View {
     @Binding var showSourceSelection: Bool
     @Binding var showImagePicker: Bool
@@ -312,10 +273,6 @@ struct NebulaEditorView: View {
     @AppStorage("nebColor1") private var nebColor1 = "#AF52DE"; @AppStorage("nebColor2") private var nebColor2 = "#007AFF"; @AppStorage("nebColor3") private var nebColor3 = "#FF2D55"; @AppStorage("nebX1") private var nebX1 = 0.2; @AppStorage("nebY1") private var nebY1 = 0.2; @AppStorage("nebX2") private var nebX2 = 0.8; @AppStorage("nebY2") private var nebY2 = 0.3; @AppStorage("nebX3") private var nebX3 = 0.5; @AppStorage("nebY3") private var nebY3 = 0.8
     
     var body: some View {
-        let c1 = Color(hex: nebColor1) ?? .purple
-        let c2 = Color(hex: nebColor2) ?? .blue
-        let c3 = Color(hex: nebColor3) ?? .pink
-        
         VStack(spacing: 12) {
             HStack {
                 Spacer()
@@ -323,14 +280,14 @@ struct NebulaEditorView: View {
                     let screenBounds = UIScreen.main.bounds
                     let screenRatio = screenBounds.width / screenBounds.height
                     
-                    NebulaBackgroundView(color1: c1, color2: c2, color3: c3, point1: UnitPoint(x: nebX1, y: nebY1), point2: UnitPoint(x: nebX2, y: nebY2), point3: UnitPoint(x: nebX3, y: nebY3), targetFPS: 60.0)
+                    NebulaBackgroundView(color1: Color(hex: nebColor1) ?? .purple, color2: Color(hex: nebColor2) ?? .blue, color3: Color(hex: nebColor3) ?? .pink, point1: UnitPoint(x: nebX1, y: nebY1), point2: UnitPoint(x: nebX2, y: nebY2), point3: UnitPoint(x: nebX3, y: nebY3), targetFPS: 60.0)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.2), lineWidth: 1))
                     
                     GeometryReader { geo in
-                        DragHandle(x: $nebX1, y: $nebY1, color: c1, size: geo.size)
-                        DragHandle(x: $nebX2, y: $nebY2, color: c2, size: geo.size)
-                        DragHandle(x: $nebX3, y: $nebY3, color: c3, size: geo.size)
+                        DragHandle(x: $nebX1, y: $nebY1, color: Color(hex: nebColor1) ?? .purple, size: geo.size)
+                        DragHandle(x: $nebX2, y: $nebY2, color: Color(hex: nebColor2) ?? .blue, size: geo.size)
+                        DragHandle(x: $nebX3, y: $nebY3, color: Color(hex: nebColor3) ?? .pink, size: geo.size)
                     }
                     .aspectRatio(screenRatio, contentMode: .fit)
                 }
@@ -341,9 +298,9 @@ struct NebulaEditorView: View {
             .padding(.bottom, 8)
             
             HStack(spacing: 20) {
-                ColorPicker("Aura 1", selection: Binding(get: { c1 }, set: { if let h = $0.toHex() { nebColor1 = h } })).labelsHidden()
-                ColorPicker("Aura 2", selection: Binding(get: { c2 }, set: { if let h = $0.toHex() { nebColor2 = h } })).labelsHidden()
-                ColorPicker("Aura 3", selection: Binding(get: { c3 }, set: { if let h = $0.toHex() { nebColor3 = h } })).labelsHidden()
+                ColorPicker("Aura 1", selection: Binding(get: { Color(hex: nebColor1) ?? .purple }, set: { if let h = $0.toHex() { nebColor1 = h } })).labelsHidden()
+                ColorPicker("Aura 2", selection: Binding(get: { Color(hex: nebColor2) ?? .blue }, set: { if let h = $0.toHex() { nebColor2 = h } })).labelsHidden()
+                ColorPicker("Aura 3", selection: Binding(get: { Color(hex: nebColor3) ?? .pink }, set: { if let h = $0.toHex() { nebColor3 = h } })).labelsHidden()
                 Spacer()
                 Button("Reset") {
                     nebColor1 = "#AF52DE"; nebColor2 = "#007AFF"; nebColor3 = "#FF2D55"
@@ -371,17 +328,42 @@ struct ContentManagementCard: View {
             VStack(spacing: 0) {
                 // Playlists
                 ForEach(accountManager.accounts) { account in
-                    AccountRow(
-                        account: account,
-                        isSelected: accountManager.currentAccount?.id == account.id,
-                        accentColor: accentColor,
-                        onSelect: {
-                            withAnimation { accountManager.switchToAccount(account) }
-                        },
-                        onDelete: {
-                            accountManager.removeAccount(account)
+                    Button(action: {
+                        withAnimation { accountManager.switchToAccount(account) }
+                    }) {
+                        HStack {
+                            Circle()
+                                .fill(Color.white.opacity(0.1))
+                                .frame(width: 40, height: 40)
+                                .overlay(Image(systemName: "play.tv.fill").font(.caption).foregroundColor(.white))
+                            
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(account.displayName)
+                                    .font(.subheadline.bold())
+                                    .foregroundColor(.white)
+                                Text(account.url)
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.5))
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            if accountManager.currentAccount?.id == account.id {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(accentColor)
+                                    .font(.title3)
+                            }
                         }
-                    )
+                        .padding()
+                        .background(Color.white.opacity(accountManager.currentAccount?.id == account.id ? 0.05 : 0))
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        Button(role: .destructive) {
+                            accountManager.removeAccount(account)
+                        } label: {
+                            Label("Delete Playlist", systemImage: "trash")
+                        }
+                    }
                     
                     Divider().background(Color.white.opacity(0.1)).padding(.leading, 60)
                 }
@@ -402,83 +384,32 @@ struct ContentManagementCard: View {
                 Divider().background(Color.white.opacity(0.1))
                 
                 // Management Tools
-                managementTools
-            }
-        }
-    }
-    
-    private var managementTools: some View {
-        Group {
-            Button(action: {
-                dismiss()
-                Task {
-                    if let url = URL(string: xstreamURL) {
-                        await viewModel.updateEPG(baseURL: url, user: username, pass: password, force: true, silent: false)
+                Group {
+                    Button(action: {
+                        dismiss()
+                        Task { if let url = URL(string: xstreamURL) { await viewModel.updateEPG(baseURL: url, user: username, pass: password, force: true, silent: false) } }
+                    }) {
+                        SettingsRow(icon: "arrow.clockwise.icloud", title: "Update TV Guide", subtitle: viewModel.isUpdatingEPG ? "Updating..." : nil, showChevron: false)
+                    }
+                    .disabled(viewModel.isUpdatingEPG)
+                    
+                    NavigationLink(destination: CategoriesManagerView(categories: $categories, accentColor: accentColor, viewModel: viewModel)) {
+                        SettingsRow(icon: "list.bullet.rectangle.portrait.fill", title: "Manage Categories")
+                    }
+                    
+                    NavigationLink(destination: ManageEPGsView()) {
+                        SettingsRow(icon: "list.bullet.clipboard", title: "Manage EPGs")
+                    }
+                    
+                    NavigationLink(destination: RecordingsView()) {
+                        SettingsRow(icon: "recordingtape", title: "Recordings", subtitle: "\(RecordingManager.shared.recordings.count) Saved")
+                    }
+                    
+                    NavigationLink(destination: HiddenChannelsSettingsView(viewModel: viewModel)) {
+                        SettingsRow(icon: "eye.slash.fill", title: "Hidden Channels", subtitle: !viewModel.hiddenIDs.isEmpty ? "\(viewModel.hiddenIDs.count)" : nil, iconColor: .white)
                     }
                 }
-            }) {
-                SettingsRow(icon: "arrow.clockwise.icloud", title: "Update TV Guide", subtitle: viewModel.isUpdatingEPG ? "Updating..." : nil, showChevron: false)
-            }
-            .disabled(viewModel.isUpdatingEPG)
-            
-            NavigationLink(destination: CategoriesManagerView(categories: $categories, accentColor: accentColor, viewModel: viewModel)) {
-                SettingsRow(icon: "list.bullet.rectangle.portrait.fill", title: "Manage Categories")
-            }
-            
-            NavigationLink(destination: ManageEPGsView()) {
-                SettingsRow(icon: "list.bullet.clipboard", title: "Manage EPGs")
-            }
-            
-            NavigationLink(destination: RecordingsView()) {
-                SettingsRow(icon: "recordingtape", title: "Recordings", subtitle: "\(RecordingManager.shared.recordings.count) Saved")
-            }
-            
-            NavigationLink(destination: HiddenChannelsSettingsView(viewModel: viewModel)) {
-                SettingsRow(icon: "eye.slash.fill", title: "Hidden Channels", subtitle: !viewModel.hiddenIDs.isEmpty ? "\(viewModel.hiddenIDs.count)" : nil, iconColor: .white)
-            }
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-struct AccountRow: View {
-    let account: Account
-    let isSelected: Bool
-    let accentColor: Color
-    let onSelect: () -> Void
-    let onDelete: () -> Void
-    
-    var body: some View {
-        Button(action: onSelect) {
-            HStack {
-                Circle()
-                    .fill(Color.white.opacity(0.1))
-                    .frame(width: 40, height: 40)
-                    .overlay(Image(systemName: "play.tv.fill").font(.caption).foregroundColor(.white))
-                
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(account.displayName)
-                        .font(.subheadline.bold())
-                        .foregroundColor(.white)
-                    Text(account.url)
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.5))
-                        .lineLimit(1)
-                }
-                Spacer()
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(accentColor)
-                        .font(.title3)
-                }
-            }
-            .padding()
-            .background(Color.white.opacity(isSelected ? 0.05 : 0))
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-            Button(role: .destructive, action: onDelete) {
-                Label("Delete Playlist", systemImage: "trash")
+                .buttonStyle(.plain)
             }
         }
     }
@@ -488,7 +419,6 @@ struct SupportCard: View {
     @AppStorage("showSupportPopup") private var showSupportPopup = true
     
     var body: some View {
-        let discordBlue = Color(hex: "#5865F2") ?? .blue
         SettingsCard {
             VStack(spacing: 0) {
                 SettingsToggle(title: "Show Support Popup", isOn: $showSupportPopup)
@@ -498,7 +428,7 @@ struct SupportCard: View {
                 Divider().background(Color.white.opacity(0.1)).padding(.leading, 16)
                 
                 Link(destination: URL(string: "https://discord.gg/QkBUjsGCJ2")!) {
-                    SettingsRow(icon: "bubble.left.and.bubble.right.fill", title: "Join Discord", iconColor: discordBlue)
+                    SettingsRow(icon: "bubble.left.and.bubble.right.fill", title: "Join Discord", iconColor: Color(hex: "#5865F2") ?? .blue)
                 }
                 
                 Link(destination: URL(string: "https://buymeacoffee.com/mongoosemonke")!) {
@@ -621,12 +551,7 @@ struct SettingsSectionHeader: View {
 }
 
 struct SettingsCard<Content: View>: View {
-    let content: Content
-    
-    init(@ViewBuilder content: () -> Content) {
-        self.content = content()
-    }
-    
+    @ViewBuilder let content: Content
     var body: some View {
         VStack(spacing: 0) {
             content
@@ -692,159 +617,16 @@ struct SettingsToggle: View {
 }
 
 // Retain Helpers
-struct DragHandle: View {
-    @Binding var x: Double
-    @Binding var y: Double
-    let color: Color
-    let size: CGSize
-    
-    var body: some View {
-        Circle()
-            .fill(color)
-            .frame(width: 30, height: 30)
-            .overlay(Circle().stroke(Color.white, lineWidth: 2))
-            .shadow(radius: 4)
-            .position(x: x * size.width, y: y * size.height)
-            .gesture(
-                DragGesture().onChanged { v in
-                    x = min(max(v.location.x / size.width, 0), 1)
-                    y = min(max(v.location.y / size.height, 0), 1)
-                }
-            )
-    }
-}
+struct DragHandle: View { @Binding var x: Double; @Binding var y: Double; let color: Color; let size: CGSize; var body: some View { Circle().fill(color).frame(width: 30, height: 30).overlay(Circle().stroke(Color.white, lineWidth: 2)).shadow(radius: 4).position(x: x * size.width, y: y * size.height).gesture(DragGesture().onChanged { v in x = min(max(v.location.x / size.width, 0), 1); y = min(max(v.location.y / size.height, 0), 1) }) } }
 
 struct CategoriesManagerView: View {
-    @Binding var categories: [StreamCategory]
-    let accentColor: Color
-    @ObservedObject var viewModel: ChannelViewModel
-    @State private var categoryToRename: StreamCategory?
-    @State private var localRenameName = ""
-    @State private var showLocalRenameAlert = false
-    
-    var body: some View {
-        List {
-            Section {
-                Button(action: {
-                    categories.indices.forEach { categories[$0].isHidden = false }
-                }) {
-                    Label("Show All Categories", systemImage: "eye")
-                }
-                Button(action: {
-                    categories.indices.forEach { categories[$0].isHidden = true }
-                }) {
-                    Label("Hide All Categories", systemImage: "eye.slash")
-                }
-            }
-            
-            Section(header: Text("Drag to Reorder"), footer: Text("Tap eye icon to toggle visibility. Long press to rename.")) {
-                ForEach($categories) { $cat in
-                    HStack {
-                        Button(action: {
-                            withAnimation { cat.isHidden.toggle() }
-                        }) {
-                            Image(systemName: cat.isHidden ? "eye.slash" : "eye")
-                                .foregroundColor(cat.isHidden ? .gray : accentColor)
-                                .frame(width: 30)
-                        }
-                        .buttonStyle(.plain)
-                        
-                        Text(cat.name)
-                            .foregroundStyle(cat.isHidden ? .secondary : .primary)
-                            .strikethrough(cat.isHidden)
-                        
-                        Spacer()
-                    }
-                    .contextMenu {
-                        Button {
-                            categoryToRename = cat
-                            localRenameName = cat.name
-                            showLocalRenameAlert = true
-                        } label: {
-                            Label("Rename", systemImage: "pencil")
-                        }
-                    }
-                }
-                .onMove { src, dst in
-                    categories.move(fromOffsets: src, toOffset: dst)
-                    for i in 0..<categories.count {
-                        categories[i].order = i
-                    }
-                }
-            }
-        }
-        .environment(\.editMode, .constant(.active))
-        .navigationTitle("Categories")
-        .alert("Rename Category", isPresented: $showLocalRenameAlert) {
-            TextField("Name", text: $localRenameName)
-            Button("Save") {
-                if let c = categoryToRename {
-                    viewModel.renameCategory(id: c.id, newName: localRenameName)
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        }
-    }
+    @Binding var categories: [StreamCategory]; let accentColor: Color; @ObservedObject var viewModel: ChannelViewModel; @State private var categoryToRename: StreamCategory?; @State private var localRenameName = ""; @State private var showLocalRenameAlert = false
+    var body: some View { List { Section { Button(action: { categories.indices.forEach { categories[$0].isHidden = false } }) { Label("Show All Categories", systemImage: "eye") }; Button(action: { categories.indices.forEach { categories[$0].isHidden = true } }) { Label("Hide All Categories", systemImage: "eye.slash") } }; Section(header: Text("Drag to Reorder"), footer: Text("Tap eye icon to toggle visibility. Long press to rename.")) { ForEach($categories) { $cat in HStack { Button(action: { withAnimation { cat.isHidden.toggle() } }) { Image(systemName: cat.isHidden ? "eye.slash" : "eye").foregroundColor(cat.isHidden ? .gray : accentColor).frame(width: 30) }.buttonStyle(.plain); Text(cat.name).foregroundStyle(cat.isHidden ? .secondary : .primary).strikethrough(cat.isHidden); Spacer() }.contextMenu { Button { categoryToRename = cat; localRenameName = cat.name; showLocalRenameAlert = true } label: { Label("Rename", systemImage: "pencil") } } }.onMove { src, dst in categories.move(fromOffsets: src, toOffset: dst); for i in 0..<categories.count { categories[i].order = i } } } }.environment(\.editMode, .constant(.active)).navigationTitle("Categories").alert("Rename Category", isPresented: $showLocalRenameAlert) { TextField("Name", text: $localRenameName); Button("Save") { if let c = categoryToRename { viewModel.renameCategory(id: c.id, newName: localRenameName) } }; Button("Cancel", role: .cancel) {} } }
 }
-
 struct HiddenChannelsSettingsView: View {
-    @ObservedObject var viewModel: ChannelViewModel
-    @State private var searchText = ""
-    
-    var hidden: [StreamChannel] {
-        let h = viewModel.channels.filter { viewModel.hiddenIDs.contains($0.id) }
-        if searchText.isEmpty { return h }
-        return h.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
-    }
-    
-    var body: some View {
-        List {
-            if viewModel.hiddenIDs.isEmpty {
-                Section {
-                    Text("No hidden channels")
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding()
-                }
-            } else {
-                Section(header: Text("Hidden Channels (\(hidden.count))")) {
-                    ForEach(hidden) { c in
-                        HStack {
-                            CachedAsyncImage(urlString: c.icon ?? "", size: CGSize(width: 30, height: 30))
-                                .frame(width: 30, height: 30)
-                                .padding(2)
-                                .cornerRadius(4)
-                            
-                            Text(c.name)
-                                .lineLimit(1)
-                            
-                            Spacer()
-                            
-                            Button("Unhide") {
-                                withAnimation { viewModel.unhideChannel(c.id) }
-                            }
-                            .buttonStyle(.bordered)
-                            .tint(.blue)
-                            .controlSize(.small)
-                        }
-                    }
-                }
-            }
-        }
-        .searchable(text: $searchText, prompt: "Search hidden channels")
-        .navigationTitle("Hidden Channels")
-        .toolbar {
-            if !viewModel.hiddenIDs.isEmpty {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Unhide All") {
-                        withAnimation {
-                            viewModel.hiddenIDs.forEach { viewModel.unhideChannel($0) }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    @ObservedObject var viewModel: ChannelViewModel; @State private var searchText = ""
+    var hidden: [StreamChannel] { let h = viewModel.channels.filter { viewModel.hiddenIDs.contains($0.id) }; if searchText.isEmpty { return h }; return h.filter { $0.name.localizedCaseInsensitiveContains(searchText) } }
+    var body: some View { List { if viewModel.hiddenIDs.isEmpty { Section { Text("No hidden channels").foregroundColor(.secondary).frame(maxWidth: .infinity, alignment: .center).padding() } } else { Section(header: Text("Hidden Channels (\(hidden.count))")) { ForEach(hidden) { c in HStack { CachedAsyncImage(urlString: c.icon ?? "", size: CGSize(width: 30, height: 30)).frame(width: 30, height: 30).padding(2).cornerRadius(4); Text(c.name).lineLimit(1); Spacer(); Button("Unhide") { withAnimation { viewModel.unhideChannel(c.id) } }.buttonStyle(.bordered).tint(.blue).controlSize(.small) } } } } }.searchable(text: $searchText, prompt: "Search hidden channels").navigationTitle("Hidden Channels").toolbar { if !viewModel.hiddenIDs.isEmpty { ToolbarItem(placement: .topBarTrailing) { Button("Unhide All") { withAnimation { viewModel.hiddenIDs.forEach { viewModel.unhideChannel($0) } } } } } } }
 }
 
 struct PhotoPicker: UIViewControllerRepresentable {
