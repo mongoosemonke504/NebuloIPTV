@@ -1,0 +1,200 @@
+import Foundation
+import Combine
+
+class RecordingManager: NSObject, ObservableObject {
+    static let shared = RecordingManager()
+    
+    @Published var recordings: [Recording] = []
+    
+    // Active recorders (Recording ID -> StreamRecorder)
+    private var activeRecorders: [UUID: StreamRecorder] = [:]
+    
+    private let recordingsKey = "saved_recordings_v1"
+    
+    override init() {
+        super.init()
+        loadRecordings()
+    }
+    
+    func scheduleRecording(channel: StreamChannel, startTime: Date, endTime: Date) {
+        let recording = Recording(
+            id: UUID(),
+            channelName: channel.name,
+            channelIcon: channel.icon,
+            streamURL: channel.streamURL,
+            hasArchive: channel.hasArchive,
+            startTime: startTime,
+            endTime: endTime,
+            createdAt: Date(),
+            status: .scheduled,
+            localFileName: nil
+        )
+        
+        recordings.append(recording)
+        saveRecordings()
+        
+        // Schedule timer to start
+        let now = Date()
+        if startTime <= now {
+            startRecording(recording)
+        } else {
+            let delay = startTime.timeIntervalSince(now)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.startRecording(recording)
+            }
+        }
+    }
+    
+    private func startRecording(_ recording: Recording) {
+        guard let index = recordings.firstIndex(where: { $0.id == recording.id }) else { return }
+        
+        // Prevent duplicates
+        if activeRecorders[recording.id] != nil { return }
+        
+        recordings[index].status = .recording
+        saveRecordings()
+        
+        guard let url = URL(string: recording.streamURL) else {
+            failRecording(recording, reason: "Invalid URL")
+            return
+        }
+        
+        // Setup Output File
+        let filename = "\(recording.id.uuidString).ts"
+        let outputURL = getDocumentsDirectory().appendingPathComponent(filename)
+        
+        let recorder = StreamRecorder(streamURL: url, outputURL: outputURL)
+        
+        // Setup callbacks
+        recorder.onCompletion = { [weak self] in
+            DispatchQueue.main.async {
+                guard let self = self, let idx = self.recordings.firstIndex(where: { $0.id == recording.id }) else { return }
+                self.recordings[idx].status = .completed
+                self.recordings[idx].localFileName = filename
+                self.saveRecordings()
+                self.activeRecorders.removeValue(forKey: recording.id)
+            }
+        }
+        
+        recorder.onError = { [weak self] error in
+            DispatchQueue.main.async {
+                print("Recording error: \(error)")
+                // Don't fail immediately, maybe retrying? For now, fail.
+                // Or if partial file exists, mark completed?
+                self?.failRecording(recording, reason: error.localizedDescription)
+                self?.activeRecorders.removeValue(forKey: recording.id)
+            }
+        }
+        
+        activeRecorders[recording.id] = recorder
+        recorder.start()
+        
+        // Schedule Stop
+        let timeUntilEnd = recording.endTime.timeIntervalSince(Date())
+        if timeUntilEnd > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + timeUntilEnd) { [weak self] in
+                self?.stopRecording(recording.id)
+            }
+        } else {
+            stopRecording(recording.id)
+        }
+    }
+    
+    func stopRecording(_ id: UUID) {
+        guard let index = recordings.firstIndex(where: { $0.id == id }) else { return }
+        
+        if let recorder = activeRecorders[id] {
+            recorder.stop() // Will trigger onCompletion
+        } else {
+            // Force status update if something went wrong
+            if recordings[index].status == .recording {
+                recordings[index].status = .completed
+                saveRecordings()
+            }
+        }
+    }
+    
+    func deleteRecording(_ recording: Recording) {
+        // Stop if running
+        if activeRecorders[recording.id] != nil {
+            stopRecording(recording.id)
+        }
+        
+        // Delete file
+        if let path = recording.localFileName {
+            let fileURL = getDocumentsDirectory().appendingPathComponent(path)
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+        
+        recordings.removeAll { $0.id == recording.id }
+        saveRecordings()
+    }
+    
+    private func failRecording(_ recording: Recording, reason: String) {
+        if let index = recordings.firstIndex(where: { $0.id == recording.id }) {
+            recordings[index].status = .failed
+            saveRecordings()
+        }
+        print("Recording failed: \(reason)")
+    }
+    
+    func isRecording(channelName: String) -> Bool {
+        let recordingStatus = recordings.contains(where: { $0.channelName == channelName && $0.status == .recording })
+        print("RecordingManager: isRecording for \(channelName): \(recordingStatus)")
+        return recordingStatus
+    }
+    
+    // Persistence
+    private func loadRecordings() {
+        if let data = UserDefaults.standard.data(forKey: recordingsKey),
+           let decoded = try? JSONDecoder().decode([Recording].self, from: data) {
+            recordings = decoded
+        }
+    }
+    
+    private func saveRecordings() {
+        if let encoded = try? JSONEncoder().encode(recordings) {
+            UserDefaults.standard.set(encoded, forKey: recordingsKey)
+        }
+    }
+    
+    private func getDocumentsDirectory() -> URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    }
+    
+    func getPlaybackURL(for recording: Recording) -> URL? {
+        if let filename = recording.localFileName {
+            let url = getDocumentsDirectory().appendingPathComponent(filename)
+            if FileManager.default.fileExists(atPath: url.path) {
+                return url
+            }
+        }
+        return resolveFallbackURL(for: recording)
+    }
+    
+    private func resolveFallbackURL(for recording: Recording) -> URL? {
+        guard recording.hasArchive, let original = URL(string: recording.streamURL) else { return nil }
+        let urlString = original.absoluteString
+        
+        // XTREAM CODES TIMESHIFT LOGIC
+        if urlString.contains("/live/") {
+            let durationMinutes = Int(recording.duration / 60)
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd:HH-mm"
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
+            let startString = formatter.string(from: recording.startTime)
+            
+            let newString = urlString.replacingOccurrences(of: "/live/", with: "/timeshift/")
+            if let lastSlash = newString.lastIndex(of: "/") {
+                let prefix = newString[..<lastSlash]
+                let idPart = newString[newString.index(after: lastSlash)...]
+                let streamID = idPart.components(separatedBy: ".").first ?? String(idPart)
+                
+                // Use .m3u8 for HLS Timeshift (better seeking/compatibility on iOS)
+                let finalURLString = "\(prefix)/\(durationMinutes)/\(startString)/\(streamID).m3u8"
+                return URL(string: finalURLString)
+            }
+        }
+        return nil
+    }
+}
