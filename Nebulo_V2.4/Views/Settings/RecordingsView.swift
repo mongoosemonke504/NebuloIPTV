@@ -229,11 +229,25 @@ struct VLCPlayerView: UIViewRepresentable {
         
         let player = VLCMediaPlayer()
         player.drawable = view
-        player.media = VLCMedia(url: url)
+        
+        // Configure media
+        let media = VLCMedia(url: url)
+        // Add options to ensure hardware decoding and better format support
+        media.addOptions([
+            "network-caching": 1500,
+            "clock-jitter": 0,
+            "clock-synchro": 0
+        ])
+        player.media = media
         player.delegate = context.coordinator
-        player.play()
         
         context.coordinator.player = player
+        
+        // Start playback with a slight delay to ensure the view is ready
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            player.play()
+        }
+        
         return view
     }
     

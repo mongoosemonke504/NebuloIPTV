@@ -69,8 +69,19 @@ class RecordingManager: NSObject, ObservableObject {
         recorder.onCompletion = { [weak self] in
             DispatchQueue.main.async {
                 guard let self = self, let idx = self.recordings.firstIndex(where: { $0.id == recording.id }) else { return }
-                self.recordings[idx].status = .completed
-                self.recordings[idx].localFileName = filename
+                
+                let url = self.getDocumentsDirectory().appendingPathComponent(filename)
+                let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
+                
+                if size > 1024 {
+                    self.recordings[idx].status = .completed
+                    self.recordings[idx].localFileName = filename
+                } else {
+                    self.recordings[idx].status = .failed
+                    // Clean up empty file
+                    try? FileManager.default.removeItem(at: url)
+                }
+                
                 self.saveRecordings()
                 self.activeRecorders.removeValue(forKey: recording.id)
             }

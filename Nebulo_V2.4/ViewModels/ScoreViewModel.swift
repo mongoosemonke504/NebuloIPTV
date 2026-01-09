@@ -1,71 +1,213 @@
 import Foundation
 import Combine
+import SwiftUI
 
+@MainActor
 class ScoreViewModel: ObservableObject {
-    // Placeholder properties and methods
-    @Published var scores: [String] = [] // Example
+    @Published var filteredGames: [SportType: [ESPNEvent]] = [:]
+    @Published var soccerSections: [SoccerGameSection] = []
+    @Published var selectedSport: SportType = .nfl
+    @Published var isLoading = false
+    @Published var errorMessage: String? = nil
     
-    // --- New properties/methods added for SportsHubView.swift ---
-    @Published var selectedSport: SportType = .mlb // Changed to .mlb
-    @Published var filteredGames: [SportType: [ESPNEvent]] = [:] // Changed to ESPNEvent
-    @Published var soccerSections: [SoccerGameSection] = [] // Placeholder for soccer sections
-    @Published var isLoading: Bool = false // Added for SportsHubView.swift
+    private var masterGames: [SportType: [ESPNEvent]] = [:]
+    private var masterSoccerSections: [SoccerGameSection] = []
+    
+    private var cancellables = Set<AnyCancellable>()
+    private var lastFetchTime = Date()
+    private var fetchTask: Task<Void, Never>?
     
     init() {
-        // Placeholder init
+        Task { await fetchScores() }
     }
     
-    // --- New methods added for SportsHubView.swift ---
     func fetchScores(forceRefresh: Bool = false, silent: Bool = false) async {
-        // Placeholder for fetching scores
-        print("Fetching scores for \(selectedSport)")
-        self.isLoading = true
-        defer { self.isLoading = false } // Ensure isLoading is reset
+        if !silent && !forceRefresh {
+            if isLoading { return }
+            if Date().timeIntervalSince(lastFetchTime) < 30 { return }
+        }
         
-        // Populate filteredGames with some dummy data
-        self.filteredGames[selectedSport] = [
-            ESPNEvent(id: "game1", shortName: "TB@NYY", status: ESPNStatus(type: ESPNStatusType(detail: "Final", state: "final")), competitions: [], date: ISO8601DateFormatter().string(from: Date()), groupings: nil, leagueLabel: "MLB"),
-            ESPNEvent(id: "game2", shortName: "BOS@TOR", status: ESPNStatus(type: ESPNStatusType(detail: "Live", state: "in")), competitions: [], date: ISO8601DateFormatter().string(from: Date()), groupings: nil, leagueLabel: "MLB")
+        fetchTask?.cancel()
+        
+        if !silent {
+            withAnimation { isLoading = true }
+        }
+        self.errorMessage = nil
+        
+        fetchTask = Task {
+            do {
+                // Fetch ALL sports concurrently
+                await withTaskGroup(of: (SportType, [ESPNEvent]?, [SoccerGameSection]?).self) { group in
+                    // 1. Add task for Soccer (special handling)
+                    group.addTask {
+                        do {
+                            let (sections, games) = try await self.fetchSoccerInternal()
+                            return (.soccer, games, sections)
+                        } catch {
+                            print("Error fetching soccer: \(error)")
+                            return (.soccer, nil, nil)
+                        }
+                    }
+                    
+                    // 2. Add tasks for all other sports
+                    for sport in SportType.allCases where sport != .soccer {
+                        group.addTask {
+                            guard let url = URL(string: sport.endpoint) else { return (sport, nil, nil) }
+                            do {
+                                let events = try await self.fetchEvents(url: url)
+                                return (sport, events, nil)
+                            } catch {
+                                print("Error fetching \(sport.rawValue): \(error)")
+                                return (sport, nil, nil)
+                            }
+                        }
+                    }
+                    
+                    // 3. Collect results
+                    for await (sport, events, soccerSections) in group {
+                        await MainActor.run {
+                            if let events = events {
+                                self.masterGames[sport] = events
+                                self.filteredGames[sport] = events
+                            }
+                            if sport == .soccer, let sections = soccerSections {
+                                self.masterSoccerSections = sections
+                                self.soccerSections = sections
+                            }
+                        }
+                    }
+                }
+                
+                await MainActor.run {
+                    self.isLoading = false
+                    self.lastFetchTime = Date()
+                }
+                
+            } catch {
+                await MainActor.run {
+                    self.isLoading = false
+                    self.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+    
+    private func fetchEvents(url: URL) async throws -> [ESPNEvent] {
+        let (data, _) = try await URLSession.shared.data(from: url)
+        let response = try JSONDecoder().decode(ESPNResponse.self, from: data)
+        var events = response.events ?? []
+        events.sort { a, b in
+            let aState = a.status.type.state
+            let bState = b.status.type.state
+            if aState == "in" && bState != "in" { return true }
+            if aState != "in" && bState == "in" { return false }
+            return a.gameDate < b.gameDate
+        }
+        return events
+    }
+    
+    // Extracted internal fetch for Soccer to return data instead of setting state directly
+    private func fetchSoccerInternal() async throws -> ([SoccerGameSection], [ESPNEvent]) {
+        let leagues = [
+            ("eng.1", "Premier League"),
+            ("esp.1", "La Liga"),
+            ("ger.1", "Bundesliga"),
+            ("ita.1", "Serie A"),
+            ("fra.1", "Ligue 1"),
+            ("usa.1", "MLS"),
+            ("uefa.champions", "Champions League"),
+            ("uefa.europa", "Europa League")
         ]
-        // Placeholder for soccerSections
-        self.soccerSections = [
-            SoccerGameSection(league: "Premier League", games: [
-                ESPNEvent(id: "sg1", shortName: "ARS vs CHE", status: ESPNStatus(type: ESPNStatusType(detail: "Final", state: "final")), competitions: [], date: ISO8601DateFormatter().string(from: Date()), groupings: nil, leagueLabel: "Premier League")
-            ])
-        ]
+        
+        var allSections: [SoccerGameSection] = []
+        var allGames: [ESPNEvent] = []
+        
+        await withTaskGroup(of: (String, [ESPNEvent]?).self) { group in
+            for (code, name) in leagues {
+                group.addTask {
+                    let urlStr = "https://site.api.espn.com/apis/site/v2/sports/soccer/\(code)/scoreboard"
+                    guard let url = URL(string: urlStr) else { return (name, nil) }
+                    do {
+                        let (data, _) = try await URLSession.shared.data(from: url)
+                        let res = try JSONDecoder().decode(ESPNResponse.self, from: data)
+                        let events = res.events ?? []
+                        let tagged = events.map { e -> ESPNEvent in
+                            var copy = e
+                            copy.leagueLabel = name
+                            return copy
+                        }
+                        return (name, tagged)
+                    } catch {
+                        return (name, nil)
+                    }
+                }
+            }
+            
+            for await (name, events) in group {
+                if let evs = events, !evs.isEmpty {
+                    allSections.append(SoccerGameSection(league: name, games: evs))
+                    allGames.append(contentsOf: evs)
+                }
+            }
+        }
+        
+        allSections.sort { a, b in
+            let idxA = leagues.firstIndex { $0.1 == a.league } ?? 999
+            let idxB = leagues.firstIndex { $0.1 == b.league } ?? 999
+            return idxA < idxB
+        }
+        
+        return (allSections, allGames)
+    }
+    
+    private func fetchSoccer() async throws {
+        // Wrapper for legacy or specific calls if needed, but fetchScores now handles it.
+        // Keeping this implementation to satisfy any other internal calls or just delegating.
+        let (sections, games) = try await fetchSoccerInternal()
+        await MainActor.run {
+            self.masterSoccerSections = sections
+            self.soccerSections = sections
+            self.masterGames[.soccer] = games
+            self.filteredGames[.soccer] = games
+            self.isLoading = false
+            self.lastFetchTime = Date()
+        }
     }
     
     func applyFilter(text: String) {
-        // Placeholder for applying filter
-        print("Applying filter: \(text)")
-        // Filter `filteredGames` based on `text`
         if text.isEmpty {
-            // Restore all games if filter is empty
-            // This logic assumes a full set of games is available somewhere.
-            // For now, it will just clear the filter.
-            self.filteredGames = [:] // Clear current filter
-            // await fetchScores(silent: true) // Re-fetch all scores without showing loading indicator - commented out as this needs implementation
+            self.filteredGames = self.masterGames
+            self.soccerSections = self.masterSoccerSections
         } else {
-            var newFilteredGames: [SportType: [ESPNEvent]] = [:]
-            for (sportType, games) in filteredGames {
-                newFilteredGames[sportType] = games.filter { game in
-                    (game.homeCompetitor?.team?.displayName ?? "").localizedCaseInsensitiveContains(text) ||
-                    (game.awayCompetitor?.team?.displayName ?? "").localizedCaseInsensitiveContains(text) ||
-                    (game.leagueLabel ?? "").localizedCaseInsensitiveContains(text) ||
-                    game.shortName.localizedCaseInsensitiveContains(text)
+            let lower = text.lowercased()
+            
+            // Filter general games
+            var newFiltered: [SportType: [ESPNEvent]] = [:]
+            for (sport, games) in masterGames {
+                newFiltered[sport] = games.filter { game in
+                    game.shortName.lowercased().contains(lower) ||
+                    (game.homeCompetitor?.team?.displayName ?? "").lowercased().contains(lower) ||
+                    (game.awayCompetitor?.team?.displayName ?? "").lowercased().contains(lower)
                 }
             }
-            self.filteredGames = newFilteredGames
+            self.filteredGames = newFiltered
+            
+            // Filter soccer sections
+            self.soccerSections = self.masterSoccerSections.compactMap { sec in
+                let matchingGames = sec.games.filter { game in
+                    game.shortName.lowercased().contains(lower) ||
+                    (game.homeCompetitor?.team?.displayName ?? "").lowercased().contains(lower) ||
+                    (game.awayCompetitor?.team?.displayName ?? "").lowercased().contains(lower)
+                }
+                if matchingGames.isEmpty { return nil }
+                return SoccerGameSection(league: sec.league, games: matchingGames)
+            }
         }
     }
 }
 
-// Placeholder for SoccerGameSection
-struct SoccerGameSection: Identifiable {
+struct SoccerGameSection: Identifiable, Sendable {
     let id = UUID()
     let league: String
-    let games: [ESPNEvent] // Changed to ESPNEvent
+    let games: [ESPNEvent]
 }
-
-// ESPNGame struct is now replaced by ESPNEvent from ESPNModels.swift
-// struct ESPNGame: Identifiable, Codable, Hashable { ... } // Removed

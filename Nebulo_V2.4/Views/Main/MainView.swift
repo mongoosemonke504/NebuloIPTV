@@ -309,17 +309,26 @@ struct StandardLayout: SwiftUI.View {
                         VStack(alignment: .leading, spacing: 24) {
                             
                             // MARK: - Header
-                            GreetingHeader()
-                                .padding(.horizontal)
-                                .padding(.top, 10)
+                            // Greeting removed as requested
                             
                             // MARK: - Recent
                             if !viewModel.recentIDs.isEmpty {
                                 VStack(alignment: .leading, spacing: 12) {
-                                    Label("Continue Watching", systemImage: "play.circle.fill")
-                                        .font(.headline)
-                                        .foregroundStyle(.white.opacity(0.8))
+                                    Button(action: {
+                                        viewModel.lastSelectedHomeID = -2; withAnimation { selectedCategory = StreamCategory(id: -2, name: "Recently Watched") }
+                                    }) {
+                                        HStack {
+                                            Label("Continue Watching", systemImage: "play.circle.fill")
+                                                .font(.headline)
+                                                .foregroundStyle(.white.opacity(0.8))
+                                            Spacer()
+                                            Image(systemName: "chevron.right")
+                                                .font(.caption)
+                                                .foregroundStyle(.white.opacity(0.5))
+                                        }
                                         .padding(.horizontal)
+                                    }
+                                    .buttonStyle(.plain)
                                     
                                     let recent = viewModel.recentIDs.compactMap { id in viewModel.channels.first(where: { $0.id == id }) }
                                     HorizontalPreviewList(channels: recent, isRecent: true, accentColor: accentColor, viewModel: viewModel, playAction: playAction, promptRenameChannel: viewModel.triggerRenameChannel, hideChannel: viewModel.hideChannel, removeFromRecent: viewModel.removeFromRecent)
@@ -333,7 +342,7 @@ struct StandardLayout: SwiftUI.View {
                                     .foregroundStyle(.white.opacity(0.8))
                                     .padding(.horizontal)
                                 
-                                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
                                     DashboardCard(title: "Sports Center", icon: "sportscourt.fill", color: .green, accentColor: accentColor) {
                                         viewModel.lastSelectedHomeID = -3; withAnimation { selectedCategory = StreamCategory(id: -3, name: "Sports Center") }
                                     }
@@ -496,28 +505,6 @@ struct StandardLayout: SwiftUI.View {
     func getChannelsToShow(for cat: StreamCategory) -> [StreamChannel] { if cat.id == -2 { return viewModel.recentIDs.compactMap { id in viewModel.channels.first(where: { $0.id == id }) } }; if cat.id == -4 { return viewModel.channels.filter { viewModel.favoriteIDs.contains($0.id) } }; if cat.id == -1 { return viewModel.channels.filter { !viewModel.hiddenIDs.contains($0.id) } }; return viewModel.channels.filter { $0.categoryID == cat.id && !viewModel.hiddenIDs.contains($0.id) } }
 }
 
-struct GreetingHeader: View {
-    var greeting: String {
-        let hour = Calendar.current.component(.hour, from: Date())
-        if hour < 12 { return "Good Morning" }
-        if hour < 18 { return "Good Afternoon" }
-        return "Good Evening"
-    }
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(greeting)
-                .font(.title3)
-                .fontWeight(.medium)
-                .foregroundColor(.white.opacity(0.7))
-            Text("Welcome Back")
-                .font(.largeTitle)
-                .fontWeight(.bold)
-                .foregroundColor(.white)
-        }
-    }
-}
-
 struct DashboardCard: View {
     let title: String
     let icon: String
@@ -527,26 +514,21 @@ struct DashboardCard: View {
     
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(color.opacity(0.2))
-                        .frame(width: 40, height: 40)
-                    Image(systemName: icon)
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundColor(color)
-                }
+            VStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 32, weight: .bold))
+                    .foregroundColor(color)
                 
                 Text(title)
-                    .font(.headline)
-                    .fontWeight(.bold)
+                    .font(.system(size: 15, weight: .bold))
                     .foregroundColor(.white)
+                    .multilineTextAlignment(.center)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
-                
-                Spacer()
             }
-            .padding(12)
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity)
+            .frame(height: 100)
             .background(Material.ultraThin)
             .cornerRadius(16)
             .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.1), lineWidth: 1))
@@ -852,12 +834,15 @@ struct SwipeBackModifier: ViewModifier {
 struct MultiViewIndicator: SwiftUI.View { 
     let count: Int; let accentColor: Color?; let action: () -> Void; 
     var body: some SwiftUI.View { 
-        Button(action: action) { 
-            HStack { Image(systemName: "square.grid.2x2.fill"); Text("Multi-View Active: \(count)/4") }
-                .font(.caption.bold()).foregroundColor(.white)
-                .padding(.horizontal, 16).padding(.vertical, 12)
-                .modifier(GlassEffect(cornerRadius: 20, isSelected: true, accentColor: accentColor)) 
+        VStack {
+            Spacer()
+            Button(action: action) { 
+                HStack { Image(systemName: "square.grid.2x2.fill"); Text("Multi-View Active: \(count)/4") }
+                    .font(.caption.bold()).foregroundColor(.white)
+                    .padding(.horizontal, 16).padding(.vertical, 12)
+                    .modifier(GlassEffect(cornerRadius: 20, isSelected: true, accentColor: accentColor)) 
+            }
+            .padding(.bottom, 40) // Position above tab bar area
         }
-        .padding(.bottom, 20)
     } 
 }
