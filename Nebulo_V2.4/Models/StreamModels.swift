@@ -16,7 +16,7 @@ struct StreamChannel: Identifiable, Codable, Hashable, Equatable, Sendable {
     var hasArchive: Bool = false
     
     // Optimization: Pre-computed search string
-    var searchNormalizedName: String { name.lowercased() }
+    nonisolated var searchNormalizedName: String { name.lowercased() }
     
     enum CodingKeys: String, CodingKey { 
         case id = "stream_id", name = "name", displayName = "stream_display_name", 

@@ -18,7 +18,7 @@ enum SportType: String, CaseIterable, Identifiable, Sendable {
     case cbb = "NCAAB", cfb = "NCAAF", nfl = "NFL", nba = "NBA", wnba = "WNBA", nhl = "NHL", mlb = "MLB"
     case f1 = "Formula 1"
     var id: String { rawValue }
-    var endpoint: String {
+    nonisolated var endpoint: String {
         switch self {
         case .nfl: return "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard"
         case .mlb: return "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard"
