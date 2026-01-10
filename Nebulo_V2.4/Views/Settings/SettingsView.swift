@@ -12,6 +12,7 @@ struct SettingsView: View {
     let accentColor: Color
     @ObservedObject var viewModel: ChannelViewModel
     @ObservedObject var scoreViewModel: ScoreViewModel // Added ScoreViewModel
+    let playAction: ((StreamChannel) -> Void)?
     let onSave: () -> Void
     
     @AppStorage("xstreamURL") private var xstreamURL = ""
@@ -68,7 +69,9 @@ struct SettingsView: View {
                             accentColor: accentColor,
                             viewModel: viewModel,
                             scoreViewModel: scoreViewModel, // Pass to subview
-                            showAddPlaylist: $showAddPlaylist
+                            showAddPlaylist: $showAddPlaylist,
+                            playAction: playAction,
+                            dismissSettings: { dismiss() }
                         )
                         
                         // MARK: - UPDATES
@@ -384,6 +387,8 @@ struct ContentManagementCard: View {
     @ObservedObject var viewModel: ChannelViewModel
     @ObservedObject var scoreViewModel: ScoreViewModel
     @Binding var showAddPlaylist: Bool
+    let playAction: ((StreamChannel) -> Void)?
+    let dismissSettings: () -> Void
     
     @ObservedObject var accountManager = AccountManager.shared
     @Environment(\.dismiss) private var dismiss
@@ -488,7 +493,10 @@ struct ContentManagementCard: View {
                         SettingsRow(icon: "list.bullet.clipboard", title: "Manage EPGs")
                     }
                     
-                    NavigationLink(destination: RecordingsView()) {
+                    NavigationLink(destination: RecordingsView(viewModel: viewModel, playAction: { channel in
+                        dismissSettings()
+                        playAction?(channel)
+                    })) {
                         SettingsRow(icon: "recordingtape", title: "Recordings", subtitle: "\(RecordingManager.shared.recordings.count) Saved")
                     }
                     

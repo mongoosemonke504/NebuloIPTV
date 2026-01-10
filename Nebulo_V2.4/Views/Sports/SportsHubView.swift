@@ -5,6 +5,7 @@ struct SportsHubView: View {
     let accentColor: Color; let playAction: (StreamChannel) -> Void; var onBack: (() -> Void)? = nil
     @ObservedObject var scoreViewModel: ScoreViewModel
     @Environment(\.scenePhase) var scenePhase
+    @State private var isRefreshingAnimation = false
     
     var body: some View {
         ZStack {
@@ -38,6 +39,7 @@ struct SportsHubView: View {
                     Text("Sports Center")
                         .font(.headline)
                         .foregroundStyle(.white)
+                        .opacity(isRefreshingAnimation ? 0.3 : 1.0)
                 }
             }
             ToolbarItem(placement: .topBarLeading) { 
@@ -54,6 +56,24 @@ struct SportsHubView: View {
         .task { 
             await scoreViewModel.fetchScores()
             scoreViewModel.applyFilter(text: viewModel.searchText)
+        }
+        .onAppear {
+            if scoreViewModel.isLoading {
+                withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+                    isRefreshingAnimation = true
+                }
+            }
+        }
+        .onChangeCompat(of: scoreViewModel.isLoading) { loading in
+            if loading {
+                withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+                    isRefreshingAnimation = true
+                }
+            } else {
+                withAnimation(.default) {
+                    isRefreshingAnimation = false
+                }
+            }
         }
         .onChangeCompat(of: scenePhase) { phase in
             if phase == .active {
