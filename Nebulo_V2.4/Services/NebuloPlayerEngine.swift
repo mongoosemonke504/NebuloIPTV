@@ -70,6 +70,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     @Published var subtitleOffset: Double = 0.0
     @Published public var activeCaption: String? = nil
     @Published public var currentResolution: String = ""
+    @Published public var activeBackendName: String = "None" // New property
     public let renderView = UIView()
     public let useNativeBridge = false
     
@@ -79,7 +80,15 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     private var ksPlayerView = NebuloKSVideoPlayerView() 
     
     private enum ActiveBackend { case none, ksplayer, vlc }
-    private var currentBackend: ActiveBackend = .none
+    private var currentBackend: ActiveBackend = .none {
+        didSet {
+            switch currentBackend {
+            case .ksplayer: activeBackendName = "KSPlayer"
+            case .vlc: activeBackendName = "VLC"
+            case .none: activeBackendName = "None"
+            }
+        }
+    }
     private var isInteractionSeeking = false
     private var pendingSeekWorkItem: DispatchWorkItem?
     private var playerConstraints: [NSLayoutConstraint] = []
@@ -354,7 +363,11 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             case .paused:
                 self.isBuffering = false
                 if !self.userPaused { self.resume() } else { self.isPlaying = false }
-            case .readyToPlay: self.isBuffering = false; self.isPlaying = true
+            case .readyToPlay: 
+                self.isBuffering = false
+                self.isPlaying = true
+                // Re-apply aspect ratio to ensure layer properties take effect
+                self.applyAspectRatio(self.currentAspectRatio)
             default: self.isBuffering = false; self.isPlaying = true
             }
         }
@@ -385,55 +398,126 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     
     private func applyAspectRatio(_ ratio: VideoAspectRatio) {
         if currentBackend == .vlc {
-            // Reset state
+            // Default: Reset state to "Fit"
             vlcMediaPlayer.scaleFactor = 0
             vlcMediaPlayer.videoCropGeometry = nil
+            vlcMediaPlayer.videoAspectRatio = nil
             
-            var ratioStr: String? = nil
+            var ratioString: String? = nil
             
             switch ratio {
-            case .sixteenNine: ratioStr = "16:9"
-            case .fourThree: ratioStr = "4:3"
+            case .sixteenNine: ratioString = "16:9"
+            case .fourThree: ratioString = "4:3"
             case .fill:
-                // Stretch to Fill Screen
-                // Must access bounds on Main Thread
-                if Thread.isMainThread {
-                    let w = Int(renderView.bounds.width)
-                    let h = Int(renderView.bounds.height)
-                    if h > 0 { ratioStr = "\(w):\(h)" }
+                // Attempt Zoom-to-Fill (Crop) first
+                let vSize = vlcMediaPlayer.videoSize
+                let rSize = renderView.bounds.size
+                
+                if vSize.width > 0 && vSize.height > 0 && rSize.width > 0 && rSize.height > 0 {
+                    let widthScale = rSize.width / vSize.width
+                    let heightScale = rSize.height / vSize.height
+                    let targetScale = max(widthScale, heightScale)
+                    vlcMediaPlayer.scaleFactor = Float(targetScale)
                 } else {
-                    DispatchQueue.main.sync {
+                    // Fallback: Stretch to Screen Ratio
+                    if Thread.isMainThread {
                         let w = Int(renderView.bounds.width)
                         let h = Int(renderView.bounds.height)
-                        if h > 0 { ratioStr = "\(w):\(h)" }
+                        if h > 0 { ratioString = "\(w):\(h)" }
+                    } else {
+                        DispatchQueue.main.sync {
+                            let w = Int(renderView.bounds.width)
+                            let h = Int(renderView.bounds.height)
+                            if h > 0 { ratioString = "\(w):\(h)" }
+                        }
                     }
                 }
             case .fit, .default:
-                ratioStr = nil
+                break
             }
             
-            if let s = ratioStr {
-                vlcMediaPlayer.videoAspectRatio = UnsafeMutablePointer<Int8>(mutating: (s as NSString).utf8String)
-            } else {
-                vlcMediaPlayer.videoAspectRatio = nil
+            if let s = ratioString {
+                // Safer pointer handling
+                s.withCString { ptr in
+                    vlcMediaPlayer.videoAspectRatio = UnsafeMutablePointer<Int8>(mutating: ptr)
+                }
             }
         } else if currentBackend == .ksplayer {
             DispatchQueue.main.async { [weak self] in
-                guard let self = self, self.ksPlayerView.superview == self.renderView else { return }
+                guard let self = self else { return }
+                
+                // Ensure view is in hierarchy
+                if self.ksPlayerView.superview != self.renderView {
+                    return
+                }
+                
                 NSLayoutConstraint.deactivate(self.playerConstraints); self.playerConstraints.removeAll()
-                let view = self.ksPlayerView; let container = self.renderView; var newConstraints: [NSLayoutConstraint] = []; var mode: UIView.ContentMode = .scaleAspectFit
+                let view = self.ksPlayerView; let container = self.renderView; var newConstraints: [NSLayoutConstraint] = []; 
+                
+                var gravityString = "AVLayerVideoGravityResizeAspect"
+                
                 switch ratio {
                 case .fill:
-                    mode = .scaleAspectFill; view.insetsLayoutMarginsFromSafeArea = false; view.layoutMargins = .zero
-                    newConstraints = [view.topAnchor.constraint(equalTo: container.topAnchor), view.bottomAnchor.constraint(equalTo: container.bottomAnchor), view.leadingAnchor.constraint(equalTo: container.leadingAnchor), view.trailingAnchor.constraint(equalTo: container.trailingAnchor)]
-                case .fit: mode = .scaleAspectFit; newConstraints = [view.topAnchor.constraint(equalTo: container.topAnchor), view.bottomAnchor.constraint(equalTo: container.bottomAnchor), view.leadingAnchor.constraint(equalTo: container.leadingAnchor), view.trailingAnchor.constraint(equalTo: container.trailingAnchor)]
-                case .default: mode = .scaleAspectFit; newConstraints = [view.topAnchor.constraint(equalTo: container.topAnchor), view.bottomAnchor.constraint(equalTo: container.bottomAnchor), view.leadingAnchor.constraint(equalTo: container.leadingAnchor), view.trailingAnchor.constraint(equalTo: container.trailingAnchor)]
-                case .sixteenNine:  mode = .scaleAspectFit;  let aspect = view.widthAnchor.constraint(equalTo: view.heightAnchor, multiplier: 16/9)
-                    newConstraints = [view.centerXAnchor.constraint(equalTo: container.centerXAnchor), view.centerYAnchor.constraint(equalTo: container.centerYAnchor), view.widthAnchor.constraint(equalTo: container.widthAnchor), aspect]
-                case .fourThree:  mode = .scaleAspectFit; let aspect = view.widthAnchor.constraint(equalTo: view.heightAnchor, multiplier: 4/3)
-                    newConstraints = [view.centerXAnchor.constraint(equalTo: container.centerXAnchor), view.centerYAnchor.constraint(equalTo: container.centerYAnchor), view.widthAnchor.constraint(equalTo: container.widthAnchor), aspect]
+                    gravityString = "AVLayerVideoGravityResizeAspectFill"
+                    newConstraints = [
+                        view.topAnchor.constraint(equalTo: container.topAnchor),
+                        view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+                        view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                        view.trailingAnchor.constraint(equalTo: container.trailingAnchor)
+                    ]
+                case .fit, .default: 
+                    gravityString = "AVLayerVideoGravityResizeAspect"
+                    newConstraints = [
+                        view.topAnchor.constraint(equalTo: container.topAnchor),
+                        view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+                        view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                        view.trailingAnchor.constraint(equalTo: container.trailingAnchor)
+                    ]
+                case .sixteenNine:  
+                    gravityString = "AVLayerVideoGravityResize"
+                    let aspect = view.widthAnchor.constraint(equalTo: view.heightAnchor, multiplier: 16/9)
+                    aspect.priority = .required
+                    
+                    newConstraints = [
+                        view.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+                        view.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+                        view.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor),
+                        view.heightAnchor.constraint(lessThanOrEqualTo: container.heightAnchor),
+                        aspect
+                    ]
+                    
+                    // Maximizing constraints (Low priority)
+                    let wMax = view.widthAnchor.constraint(equalTo: container.widthAnchor); wMax.priority = .defaultHigh
+                    let hMax = view.heightAnchor.constraint(equalTo: container.heightAnchor); hMax.priority = .defaultHigh
+                    newConstraints.append(contentsOf: [wMax, hMax])
+                    
+                case .fourThree:  
+                    gravityString = "AVLayerVideoGravityResize"
+                    let aspect = view.widthAnchor.constraint(equalTo: view.heightAnchor, multiplier: 4/3)
+                    aspect.priority = .required
+                    
+                    newConstraints = [
+                        view.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+                        view.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+                        view.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor),
+                        view.heightAnchor.constraint(lessThanOrEqualTo: container.heightAnchor),
+                        aspect
+                    ]
+                    
+                    let wMax = view.widthAnchor.constraint(equalTo: container.widthAnchor); wMax.priority = .defaultHigh
+                    let hMax = view.heightAnchor.constraint(equalTo: container.heightAnchor); hMax.priority = .defaultHigh
+                    newConstraints.append(contentsOf: [wMax, hMax])
                 }
-                view.contentMode = mode; NSLayoutConstraint.activate(newConstraints); self.playerConstraints = newConstraints
+                
+                // Apply Gravity directly to backing layer
+                view.layer.setValue(gravityString, forKey: "videoGravity")
+                
+                NSLayoutConstraint.activate(newConstraints)
+                self.playerConstraints = newConstraints
+                
+                // Force Layout Update
+                container.setNeedsLayout()
+                container.layoutIfNeeded()
             }
         }
     }

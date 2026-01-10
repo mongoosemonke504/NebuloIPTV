@@ -1,7 +1,40 @@
 import SwiftUI
 import Combine
 
-struct GlassSidebarRow: View { let title: String; var icon: String? = nil; let isSelected: Bool; let accentColor: Color; var body: some View { HStack { if let icon = icon { Image(systemName: icon) }; Text(title) }.font(.callout).fontWeight(isSelected ? .semibold : .regular).foregroundStyle(.white).padding(.horizontal, 12).padding(.vertical, 10).frame(maxWidth: .infinity, alignment: .leading).modifier(GlassEffect(cornerRadius: 10, isSelected: isSelected, accentColor: accentColor)).animation(.easeInOut(duration: 0.2), value: isSelected) } }
+struct GlassSidebarRow: View {
+    let title: String
+    let isSelected: Bool
+    let accentColor: Color
+    
+    var body: some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(isSelected ? .white : .white.opacity(0.7))
+            Spacer()
+            if isSelected {
+                Image(systemName: "chevron.right")
+                    .font(.caption.bold())
+                    .foregroundColor(.white)
+            }
+        }
+        .padding(.vertical, 12)
+        .padding(.horizontal, 16)
+        .background(
+            ZStack {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(accentColor.opacity(0.8))
+                        .shadow(color: accentColor.opacity(0.4), radius: 8)
+                } else {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.white.opacity(0.05))
+                }
+            }
+        )
+        .contentShape(Rectangle())
+    }
+}
 
 struct ClockView: View { @State private var currentTime = Date(); let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect(); var body: some View { Text(currentTime, style: .time).font(.system(size: 32, weight: .bold)).frame(maxWidth: .infinity, alignment: .leading).onReceive(timer) { input in currentTime = input }.foregroundStyle(.white) } }
 

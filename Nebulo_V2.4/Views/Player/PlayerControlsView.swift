@@ -161,587 +161,102 @@ struct PlayerControlsView: View {
                                                     
                 
                                                                                 // MARK: - Top Bar
-                
-                                                    
-                
                                                                                 HStack {
-                
-                                                    
-                
                                                                                     Button(action: {
-                
-                                                    
-                
                                                                                         timeshiftStartTime = nil
-                
-                                                    
-                
                                                                                         onDismiss()
-                
-                                                    
-                
                                                                                     }) {
-                
-                                                    
-                
                                                                                         Image(systemName: "xmark")
-                
-                                                    
-                
                                                                                             .font(.system(size: 18, weight: .bold))
-                
-                                                    
-                
                                                                                             .foregroundColor(.white)
-                
-                                                    
-                
                                                                                             .padding(12)
-                
-                                                    
-                
                                                                                             .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
-                
-                                                    
-                
                                                                                     }
-                
-                                                    
-                
                                                                                     .buttonStyle(.plain)
-                
-                                                    
-                
                                                                                     
-                
-                                                    
-                
-                                                                                                                                                                        Spacer()
-                
-                                                    
-                
+                                                                                    Spacer()
                                                                                     
-                
-                                                    
-                
-                                                                                                    
-                
-                                                    
-                
+                                                                                    Text(channel.name)
+                                                                                        .font(.headline)
+                                                                                        .foregroundColor(.white)
+                                                                                        .shadow(radius: 2)
                                                                                     
-                
-                                                    
-                
-                                                                                                                                        
-                
-                                                    
-                
+                                                                                    Spacer()
                                                                                     
-                
-                                                    
-                
-                                                                                                    
-                
-                                                    
-                
-                                                                                    
-                
-                                                    
-                
-                                                                                                                                                                        
-                
-                                                    
-                
-                                                                                    
-                
-                                                    
-                
-                                                                                                    
-                
-                                                    
-                
-                                                                                    
-                
-                                                    
-                
-                                                                                                                                        
-                
-                                                    
-                
-                                                                                    
-                
-                                                    
-                
-                                                                                                                                                                        Text(channel.name)
-                
-                                                    
-                
-                                                                                    
-                
-                                                    
-                
-                                                                                                    
-                
-                                                    
-                
-                                                                                    
-                
-                                                    
-                
-                                                                                                                                        
-                
-                                                    
-                
-                                                                                    
-                
-                                                    
-                
-                                                                                                    
-                
-                                                    
-                
-                                                                                    
-                
-                                                    
-                
-                                                                                                                                                                            .font(.headline)
-                
-                                                    
-                
-                                                                                    
-                
-                                                    
-                
-                                                                                                    
-                
-                                                    
-                
-                                                                                    
-                
-                                                    
-                
-                                                                                                                                        
-                
-                                                    
-                
-                                                                                    
-                
-                                                    
-                
-                                                                                                    
-                
-                                                    
-                
-                                                                                    
-                
-                                                    
-                
-                                                                                                                                                                            .foregroundColor(.white)
-                
-                                                    
-                
-                                                                                    
-                
-                                                    
-                
-                                                                                                    
-                
-                                                    
-                
-                                                                                    
-                
-                                                    
-                
-                                                                                                                                        
-                
-                                                    
-                
-                                                                                    
-                
-                                                    
-                
-                                                                                                    
-                
-                                                    
-                
-                                                                                    
-                
-                                                    
-                
-                                                                                                                                                                            .shadow(radius: 2)
-                
-                                                    
-                
-                                                                                    
-                
-                                                    
-                
-                                                                                                    
-                
-                                                    
-                
-                                                                                    
-                
-                                                    
-                
-                                                                                                                                        
-                
-                                                    
-                
-                                                                                    
-                
-                                                    
-                
-                                                                                                    
-                
-                                                    
-                
-                                                                                    
-                
-                                                    
-                
-                                                                                                                                                                        
-                
-                                                    
-                
-                                                                                    
-                
-                                                    
-                
-                                                                                                    
-                
-                                                    
-                
-                                                                                    
-                
-                                                    
-                
-                                                                                                                                        
-                
-                                                    
-                
-                                                                                    
-                
-                                                    
-                
-                                                                                                                                                                        Spacer()
-                
-                                                    
-                
-                                                                                    
-                
-                                                    
-                
-                                                                                    // Right Side Actions (MultiView / MiniPlayer placeholders)
-                
-                                                    
-                
+                                                                                    // Right Side Actions
                                                                                     HStack(spacing: 16) {
-                
-                                                    
-                
                                                                                         if let vm = viewModel {
-                
-                                                    
-                
                                                                                             Button(action: {
-                
-                                                    
-                
                                                                                                 vm.miniPlayerChannel = channel
-                
-                                                    
-                
                                                                                                 onDismiss()
-                
-                                                    
-                
                                                                                             }) {
-                
-                                                    
-                
                                                                                                 Image(systemName: "pip.enter")
-                
-                                                    
-                
                                                                                                     .font(.system(size: 18, weight: .bold))
-                
-                                                    
-                
                                                                                                     .foregroundColor(.white)
-                
-                                                    
-                
                                                                                                     .padding(12)
-                
-                                                    
-                
                                                                                                     .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
-                
-                                                    
-                
                                                                                             }
-                
-                                                    
-                
                                                                                             .buttonStyle(.plain)
-                
-                                                    
-                
                                                                                             
-                
-                                                    
-                
                                                                                             Button(action: {
-                
-                                                    
-                
                                                                                                 vm.triggerMultiViewFromPlayer(with: channel)
-                
-                                                    
-                
                                                                                             }) {
-                
-                                                    
-                
                                                                                                 Image(systemName: "square.grid.2x2.fill")
-                
-                                                    
-                
                                                                                                     .font(.system(size: 18, weight: .bold))
-                
-                                                    
-                
                                                                                                     .foregroundColor(.white)
-                
-                                                    
-                
                                                                                                     .padding(12)
-                
-                                                    
-                
                                                                                                     .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
-                
-                                                    
-                
                                                                                             }
-                
-                                                    
-                
                                                                                             .buttonStyle(.plain)
                                                                                             .disabled(timeshiftStartTime != nil)
                                                                                             .opacity(timeshiftStartTime != nil ? 0.5 : 1.0)
-                
-                                                    
-                
                                                                                         }
-                
-                                                    
-                
                                                                                     }
-                
-                                                    
-                
                                                                                 }
-                
-                                                    
-                
                                                                                 .padding(.top, isLandscape ? 40 : 60)
-                
-                                                    
-                
                                                                                 .padding(.horizontal)
-                
-                                                    
-                
                                                                                 
-                
-                                                    
-                
                                                                                 Spacer()
-                
-                                                    
-                
                                                                                 
-                
-                                                    
-                
                                                                                 // MARK: - Bottom Bar
-                
-                                                    
-                
                                                                                 VStack(spacing: 16) {
-                
-                                                    
-                
-                                                                                    // Program Meta (LIVE + Title)
-                
-                                                    
-                
+                                                                                    
+                                                                                    // Program Meta (EPG Only)
                                                                                     VStack(alignment: .leading, spacing: 4) {
-                
-                                                    
-                
                                                                                         HStack(spacing: 8) {
-                
-                                                    
-                
-                                                                                            
-                
-                                                    
-                
-                                                                                            Text(currentProg?.title ?? channel.name)
-                
-                                                    
-                
+                                                                                            Text(currentProg?.title ?? "No Information")
                                                                                                 .font(.subheadline.bold())
-                
-                                                    
-                
                                                                                                 .foregroundColor(.white)
-                
-                                                    
-                
                                                                                                 .lineLimit(1)
-                
-                                                    
-                
                                                                                             
-                
-                                                    
-                
+                                                                                            // Player Backend Indicator
+                                                                                            Text(playerManager.activeBackendName)
+                                                                                                .font(.caption2.bold())
+                                                                                                .foregroundColor(.white.opacity(0.6))
+                                                                                                .padding(.horizontal, 6)
+                                                                                                .padding(.vertical, 2)
+                                                                                                .background(Color.white.opacity(0.1))
+                                                                                                .clipShape(Capsule())
+                                                                                            
                                                                                             Spacer()
-                
-                                                    
-                
                                                                                         }
-                
-                                                    
-                
                                                                                         
-                
-                                                    
-                
-                                                                                                                            if let desc = currentProg?.description, !desc.isEmpty {
-                
-                                                    
-                
-                                                                                        
-                
-                                                    
-                
-                                                                                                                                Text(desc)
-                
-                                                    
-                
-                                                                                        
-                
-                                                    
-                
-                                                                                                                                    .font(.caption)
-                
-                                                    
-                
-                                                                                        
-                
-                                                    
-                
-                                                                                                                                    .foregroundColor(.white.opacity(0.8))
-                
-                                                    
-                
-                                                                                        
-                
-                                                    
-                
-                                                                                                                                    .lineLimit(isDescriptionExpanded ? nil : 1)
-                
-                                                    
-                
-                                                                                        
-                
-                                                    
-                
-                                                                                                                                    .frame(width: geo.size.width - 40, alignment: .leading)
-                
-                                                    
-                
-                                                                                        
-                
-                                                    
-                
-                                                                                                                                    .id(isDescriptionExpanded)
-                
-                                                    
-                
-                                                                                        
-                
-                                                    
-                
-                                                                                                                                    .transition(.opacity)
-                
-                                                    
-                
-                                                                                        
-                
-                                                    
-                
-                                                                                                                                    .contentShape(Rectangle())
-                
-                                                    
-                
-                                                                                        
-                
-                                                    
-                
-                                                                                                                                    .onTapGesture {
-                
-                                                    
-                
-                                                                                        
-                
-                                                    
-                
-                                                                                                                                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                
-                                                    
-                
-                                                                                        
-                
-                                                    
-                
-                                                                                                                                            isDescriptionExpanded.toggle()
-                
-                                                    
-                
-                                                                                        
-                
-                                                    
-                
-                                                                                                                                        }
-                
-                                                    
-                
-                                                                                        
-                
-                                                    
-                
-                                                                                                                                    }
-                
-                                                    
-                
-                                                                                        
-                
-                                                    
-                
-                                                                                                                            }
-                
-                                                    
-                
+                                                                                        if let desc = currentProg?.description, !desc.isEmpty {
+                                                                                            Text(desc)
+                                                                                                .font(.caption)
+                                                                                                .foregroundColor(.white.opacity(0.8))
+                                                                                                .lineLimit(isDescriptionExpanded ? nil : 1)
+                                                                                                .frame(width: geo.size.width - 40, alignment: .leading)
+                                                                                                .id(isDescriptionExpanded)
+                                                                                                .transition(.opacity)
+                                                                                                .contentShape(Rectangle())
+                                                                                                .onTapGesture {
+                                                                                                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                                                                                        isDescriptionExpanded.toggle()
+                                                                                                    }
+                                                                                                }
+                                                                                        }
                                                                                     }
-                
-                                                    
-                
                                                                                     .shadow(radius: 2)
                 
                                                     
@@ -850,7 +365,7 @@ struct PlayerControlsView: View {
                 
                                                                                 Capsule()
                 
-                                                                                    .fill(Color.white.opacity(0.2))
+                                                                                    .fill(Color.white.opacity(channel.hasArchive ? 0.2 : 0.1))
                 
                                                                                     .frame(height: 6)
                 
@@ -862,7 +377,7 @@ struct PlayerControlsView: View {
                 
                                                                                     .fill(timeshiftStartTime == nil ? Color.white : Color.yellow)
                 
-                                                                                    .opacity(channel.hasArchive ? 1.0 : 0.5)
+                                                                                    .opacity(channel.hasArchive ? 1.0 : 0.3) // Grey out if not scrollable
                 
                                                                                     .frame(width: barGeo.size.width * CGFloat(displayProgress), height: 6)
                 
@@ -870,13 +385,12 @@ struct PlayerControlsView: View {
                 
                                                                                 // Live point indicator
                 
-                                                                                Rectangle()
-                
-                                                                                    .fill(Color.white.opacity(0.3))
-                
-                                                                                    .frame(width: 1, height: 10)
-                
-                                                                                    .offset(x: barGeo.size.width * CGFloat(liveProgress))
+                                                                                if channel.hasArchive {
+                                                                                    Rectangle()
+                                                                                        .fill(Color.white.opacity(0.3))
+                                                                                        .frame(width: 1, height: 10)
+                                                                                        .offset(x: barGeo.size.width * CGFloat(liveProgress))
+                                                                                }
                 
                                                                                 
                 
@@ -902,65 +416,63 @@ struct PlayerControlsView: View {
                 
                                                                             .contentShape(Rectangle())
                 
-                                                                            .gesture(
+                                                                            .if(channel.hasArchive) { view in
+                                                                                view.gesture(
                 
-                                                                                DragGesture(minimumDistance: 0)
+                                                                                    DragGesture(minimumDistance: 0)
                 
-                                                                                    .onChanged { value in
+                                                                                        .onChanged { value in
                 
-                                                                                        guard channel.hasArchive else { return }
+                                                                                            isScrubbing = true
                 
-                                                                                        isScrubbing = true
+                                                                                            let dragPercent = max(0, min(1, value.location.x / barGeo.size.width))
                 
-                                                                                        let dragPercent = max(0, min(1, value.location.x / barGeo.size.width))
+                                                                                            // Prevent dragging past live point
                 
-                                                                                        // Prevent dragging past live point
-                
-                                                                                        draggingProgress = min(dragPercent, liveProgress)
-                
-                                                                                    }
-                
-                                                                                    .onEnded { value in
-                
-                                                                                        guard channel.hasArchive else { return }
-                
-                                                                                        let dragPercent = max(0, min(1, value.location.x / barGeo.size.width))
-                
-                                                                                        let finalPercent = min(dragPercent, liveProgress)
-                
-                                                                                        
-                
-                                                                                        // If near the live point, return to live stream
-                
-                                                                                        if finalPercent >= liveProgress - 0.01 {
-                
-                                                                                            timeshiftStartTime = nil
-                
-                                                                                            if let url = URL(string: channel.streamURL) {
-                
-                                                                                                playerManager.play(url: url)
-                
-                                                                                            }
-                
-                                                                                        } else {
-                
-                                                                                            let targetDate = prog.start.addingTimeInterval(totalDuration * Double(finalPercent))
-                
-                                                                                            handleTimeshift(to: targetDate, program: prog)
+                                                                                            draggingProgress = min(dragPercent, liveProgress)
                 
                                                                                         }
                 
-                                                                                        
+                                                                                        .onEnded { value in
                 
-                                                                                        // Cleanup drag state
+                                                                                            let dragPercent = max(0, min(1, value.location.x / barGeo.size.width))
                 
-                                                                                        isScrubbing = false
+                                                                                            let finalPercent = min(dragPercent, liveProgress)
                 
-                                                                                        draggingProgress = nil
+                                                                                            
                 
-                                                                                    }
+                                                                                            // If near the live point, return to live stream
                 
-                                                                            )
+                                                                                            if finalPercent >= liveProgress - 0.01 {
+                
+                                                                                                timeshiftStartTime = nil
+                
+                                                                                                if let url = URL(string: channel.streamURL) {
+                
+                                                                                                    playerManager.play(url: url)
+                
+                                                                                                }
+                
+                                                                                            } else {
+                
+                                                                                                let targetDate = prog.start.addingTimeInterval(totalDuration * Double(finalPercent))
+                
+                                                                                                handleTimeshift(to: targetDate, program: prog)
+                
+                                                                                            }
+                
+                                                                                            
+                
+                                                                                            // Cleanup drag state
+                
+                                                                                            isScrubbing = false
+                
+                                                                                            draggingProgress = nil
+                
+                                                                                        }
+                
+                                                                                )
+                                                                            }
                 
                                                                         }
                 

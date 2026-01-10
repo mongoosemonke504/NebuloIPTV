@@ -421,8 +421,8 @@ struct StandardLayout: SwiftUI.View {
                                             Text(cat.name)
                                                 .font(.subheadline.bold())
                                                 .foregroundStyle(.white)
-                                                .multilineTextAlignment(.leading)
-                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                                .multilineTextAlignment(.center) // Centered
+                                                .frame(maxWidth: .infinity, alignment: .center) // Centered
                                                 .padding(14)
                                                 .frame(height: 70)
                                                 .background(Color.white.opacity(0.05))
@@ -532,6 +532,7 @@ struct DashboardCard: View {
                 Image(systemName: icon)
                     .font(.system(size: 32, weight: .bold))
                     .foregroundColor(color)
+                    .shadow(color: color.opacity(0.6), radius: 8) // Added glow
                 
                 Text(title)
                     .font(.system(size: 15, weight: .bold))
@@ -543,7 +544,7 @@ struct DashboardCard: View {
             .padding(.horizontal, 8)
             .frame(maxWidth: .infinity)
             .frame(height: 100)
-            .background(Material.ultraThin)
+            .background(Material.ultraThinMaterial)
             .cornerRadius(16)
             .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.1), lineWidth: 1))
         }
