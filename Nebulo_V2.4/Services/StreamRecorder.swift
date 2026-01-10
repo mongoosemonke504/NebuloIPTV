@@ -10,6 +10,9 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
     private var urlSession: URLSession!
     private var dataTask: URLSessionDataTask?
     
+    // Dedicated queue for file writing to avoid blocking network threads
+    private let fileQueue = DispatchQueue(label: "com.nebulo.recorder.fileIO", qos: .background)
+    
     // Track downloaded segments to avoid duplicates
     private var downloadedSegments = Set<String>()
     
@@ -25,19 +28,22 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
         super.init()
         
         let config = URLSessionConfiguration.default
-        // Use a more standard User-Agent to avoid being flagged/dropped by providers
+        // Use the EXACT same User-Agent as native iOS players to prevent provider disconnection
         config.httpAdditionalHeaders = [
-            "User-Agent": "AppleCoreMedia/1.0.0.21G71 (iPhone; U; CPU OS 17_5_1 like Mac OS X; en_us)",
+            "User-Agent": "com.apple.avfoundation.videoplayer (iPhone; iOS 17.5.1; Scale/3.00)",
             "Accept": "*/*",
             "Connection": "keep-alive"
         ]
-        // Increase timeout for slow streams
-        config.timeoutIntervalForRequest = 30
-        config.timeoutIntervalForResource = 0 // Allow infinite duration for live streams
+        config.timeoutIntervalForRequest = 60
+        config.timeoutIntervalForResource = 0 
         
-        self.urlSession = URLSession(configuration: config, delegate: self, delegateQueue: .main)
+        // Use a background queue for the delegate to keep the Main thread and Player threads free
+        let delegateQueue = OperationQueue()
+        delegateQueue.name = "com.nebulo.recorder.network"
+        delegateQueue.maxConcurrentOperationCount = 1
         
-        // Create empty file if not exists
+        self.urlSession = URLSession(configuration: config, delegate: self, delegateQueue: delegateQueue)
+        
         if !FileManager.default.fileExists(atPath: outputURL.path) {
             FileManager.default.createFile(atPath: outputURL.path, contents: nil)
         }
@@ -46,26 +52,23 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
     func start() {
         guard !isRecording else { return }
         isRecording = true
-        print("🔴 [StreamRecorder] Starting recording for \(streamURL)")
+        print("🔴 [StreamRecorder] Starting optimized recording for \(streamURL)")
         
-        // Request Background Time
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Recording") {
-            print("⚠️ [StreamRecorder] Background time expired.")
             self.stop()
         }
         
         task = Task {
             do {
-                // 1. Peek at the content type or first few bytes to decide strategy
                 var request = URLRequest(url: streamURL)
                 request.cachePolicy = .reloadIgnoringLocalCacheData
                 
+                // Perform peek on a background task
                 let (data, response) = try await URLSession.shared.data(for: request)
                 let contentString = String(data: data.prefix(1024), encoding: .utf8) ?? ""
                 
                 if contentString.contains("#EXTM3U") {
-                    // Strategy: HLS Polling (Separate connections for each segment)
-                    print("ℹ️ [StreamRecorder] Strategy: HLS Manifest")
+                    print("ℹ️ [StreamRecorder] HLS Polling Mode")
                     try await processManifest(initialData: data, response: response)
                     
                     while isRecording {
@@ -74,25 +77,23 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
                         try await processManifest()
                     }
                 } else {
-                    // Strategy: Continuous Download (Chunk-based)
-                    print("ℹ️ [StreamRecorder] Strategy: Continuous Stream")
+                    print("ℹ️ [StreamRecorder] Continuous Chunk Mode")
                     
-                    // Open file handle once for the duration of the stream
-                    self.fileHandle = try? FileHandle(forWritingTo: outputURL)
-                    self.fileHandle?.seekToEndOfFile()
-                    
-                    // Write the header we already pulled during peek
-                    if !data.isEmpty {
-                        self.fileHandle?.write(data)
+                    // Open file handle on the dedicated I/O queue
+                    fileQueue.sync {
+                        self.fileHandle = try? FileHandle(forWritingTo: outputURL)
+                        self.fileHandle?.seekToEndOfFile()
+                        if !data.isEmpty {
+                            self.fileHandle?.write(data)
+                        }
                     }
                     
-                    // Start the delegate-based task
                     let streamRequest = URLRequest(url: streamURL)
                     self.dataTask = urlSession.dataTask(with: streamRequest)
                     self.dataTask?.resume()
                 }
             } catch {
-                print("❌ [StreamRecorder] Critical failure: \(error)")
+                print("❌ [StreamRecorder] Fatal: \(error)")
                 onError?(error)
             }
         }
@@ -105,26 +106,30 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
         task?.cancel()
         task = nil
         
-        try? fileHandle?.synchronize()
-        try? fileHandle?.close()
-        fileHandle = nil
-        
-        print("⏹️ [StreamRecorder] Stopped.")
-        
-        if self.backgroundTask != .invalid {
-            UIApplication.shared.endBackgroundTask(self.backgroundTask)
-            self.backgroundTask = .invalid
+        fileQueue.async {
+            try? self.fileHandle?.synchronize()
+            try? self.fileHandle?.close()
+            self.fileHandle = nil
+            
+            DispatchQueue.main.async {
+                print("⏹️ [StreamRecorder] Clean stop.")
+                if self.backgroundTask != .invalid {
+                    UIApplication.shared.endBackgroundTask(self.backgroundTask)
+                    self.backgroundTask = .invalid
+                }
+                self.onCompletion?()
+            }
         }
-        
-        onCompletion?()
     }
     
     // MARK: - URLSessionDataDelegate
     
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         guard isRecording else { return }
-        // Write chunks immediately as they arrive (Delegate handles buffering efficiently)
-        fileHandle?.write(data)
+        // Offload writing to the file queue immediately to unblock the network thread
+        fileQueue.async {
+            self.fileHandle?.write(data)
+        }
     }
     
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
