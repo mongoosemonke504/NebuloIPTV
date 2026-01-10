@@ -1,13 +1,14 @@
 import Foundation
 import UIKit
 
-class StreamRecorder: NSObject {
+class StreamRecorder: NSObject, URLSessionDataDelegate {
     private let streamURL: URL
     private let outputURL: URL
     private var isRecording = false
     private var lastSequence: Int = -1
     private var task: Task<Void, Never>?
-    private var urlSession: URLSession
+    private var urlSession: URLSession!
+    private var dataTask: URLSessionDataTask?
     
     // Track downloaded segments to avoid duplicates
     private var downloadedSegments = Set<String>()
@@ -16,17 +17,25 @@ class StreamRecorder: NSObject {
     var onError: ((Error) -> Void)?
     
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    private var fileHandle: FileHandle?
     
     init(streamURL: URL, outputURL: URL) {
         self.streamURL = streamURL
         self.outputURL = outputURL
+        super.init()
         
         let config = URLSessionConfiguration.default
-        // Mimic a browser/player to avoid blocking
-        config.httpAdditionalHeaders = ["User-Agent": "Nebulo/2.4 (iOS)"]
-        self.urlSession = URLSession(configuration: config)
+        // Use a more standard User-Agent to avoid being flagged/dropped by providers
+        config.httpAdditionalHeaders = [
+            "User-Agent": "AppleCoreMedia/1.0.0.21G71 (iPhone; U; CPU OS 17_5_1 like Mac OS X; en_us)",
+            "Accept": "*/*",
+            "Connection": "keep-alive"
+        ]
+        // Increase timeout for slow streams
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 0 // Allow infinite duration for live streams
         
-        super.init()
+        self.urlSession = URLSession(configuration: config, delegate: self, delegateQueue: .main)
         
         // Create empty file if not exists
         if !FileManager.default.fileExists(atPath: outputURL.path) {
@@ -47,39 +56,17 @@ class StreamRecorder: NSObject {
         
         task = Task {
             do {
-                // 1. Light-weight Peek at the content to decide strategy
+                // 1. Peek at the content type or first few bytes to decide strategy
                 var request = URLRequest(url: streamURL)
-                request.setValue("Nebulo/2.4 (iOS)", forHTTPHeaderField: "User-Agent")
-                // Use a short timeout for the peek to prevent hanging
-                request.timeoutInterval = 10
+                request.cachePolicy = .reloadIgnoringLocalCacheData
                 
-                let (bytes, response) = try await urlSession.bytes(for: request)
-                
-                if let httpRes = response as? HTTPURLResponse, httpRes.statusCode >= 400 {
-                    throw URLError(.badServerResponse)
-                }
-                
-                // Read just enough to check for M3U8 header
-                var headerData = Data()
-                var byteIterator = bytes.makeAsyncIterator()
-                
-                // Read first 1024 bytes or until end
-                for _ in 0..<1024 {
-                    if let byte = try await byteIterator.next() {
-                        headerData.append(byte)
-                    } else {
-                        break
-                    }
-                }
-                
-                let contentString = String(data: headerData, encoding: .utf8) ?? ""
+                let (data, response) = try await URLSession.shared.data(for: request)
+                let contentString = String(data: data.prefix(1024), encoding: .utf8) ?? ""
                 
                 if contentString.contains("#EXTM3U") {
-                    // Strategy: HLS Polling
+                    // Strategy: HLS Polling (Separate connections for each segment)
                     print("ℹ️ [StreamRecorder] Strategy: HLS Manifest")
-                    // For HLS, we need to finish this 'bytes' request and use polling
-                    // because HLS requires multiple separate requests.
-                    try await processManifest(initialData: headerData, response: response)
+                    try await processManifest(initialData: data, response: response)
                     
                     while isRecording {
                         try? await Task.sleep(nanoseconds: 5_000_000_000)
@@ -87,70 +74,71 @@ class StreamRecorder: NSObject {
                         try await processManifest()
                     }
                 } else {
-                    // Strategy: Continuous Download (TS/Direct)
+                    // Strategy: Continuous Download (Chunk-based)
                     print("ℹ️ [StreamRecorder] Strategy: Continuous Stream")
                     
-                    // Write the header we already pulled
-                    if !headerData.isEmpty {
-                        try appendToFile(data: headerData)
+                    // Open file handle once for the duration of the stream
+                    self.fileHandle = try? FileHandle(forWritingTo: outputURL)
+                    self.fileHandle?.seekToEndOfFile()
+                    
+                    // Write the header we already pulled during peek
+                    if !data.isEmpty {
+                        self.fileHandle?.write(data)
                     }
                     
-                    // Continue downloading from the EXISTING byte stream
-                    try await downloadFromByteStream(byteIterator)
+                    // Start the delegate-based task
+                    let streamRequest = URLRequest(url: streamURL)
+                    self.dataTask = urlSession.dataTask(with: streamRequest)
+                    self.dataTask?.resume()
                 }
             } catch {
                 print("❌ [StreamRecorder] Critical failure: \(error)")
                 onError?(error)
-            }
-            
-            if self.backgroundTask != .invalid {
-                UIApplication.shared.endBackgroundTask(self.backgroundTask)
-                self.backgroundTask = .invalid
             }
         }
     }
     
     func stop() {
         isRecording = false
+        dataTask?.cancel()
+        dataTask = nil
         task?.cancel()
         task = nil
+        
+        try? fileHandle?.synchronize()
+        try? fileHandle?.close()
+        fileHandle = nil
+        
         print("⏹️ [StreamRecorder] Stopped.")
+        
+        if self.backgroundTask != .invalid {
+            UIApplication.shared.endBackgroundTask(self.backgroundTask)
+            self.backgroundTask = .invalid
+        }
+        
         onCompletion?()
     }
     
-    private func appendToFile(data: Data) throws {
-        guard let handle = try? FileHandle(forWritingTo: outputURL) else {
-            throw URLError(.cannotCreateFile)
-        }
-        try handle.seekToEnd()
-        try handle.write(contentsOf: data)
-        try handle.close()
+    // MARK: - URLSessionDataDelegate
+    
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        guard isRecording else { return }
+        // Write chunks immediately as they arrive (Delegate handles buffering efficiently)
+        fileHandle?.write(data)
     }
     
-    private func downloadFromByteStream(_ iterator: URLSession.AsyncBytes.Iterator) async throws {
-        var mutableIterator = iterator
-        var buffer = Data()
-        let maxBufferSize = 1024 * 512 // 512KB Buffer
-        
-        while isRecording {
-            if let byte = try await mutableIterator.next() {
-                buffer.append(byte)
-                
-                if buffer.count >= maxBufferSize {
-                    try appendToFile(data: buffer)
-                    buffer.removeAll(keepingCapacity: true)
-                }
-            } else {
-                // End of stream
-                break
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error = error {
+            let nsError = error as NSError
+            if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {
+                return // Normal cancellation
             }
-        }
-        
-        // Final flush
-        if !buffer.isEmpty {
-            try appendToFile(data: buffer)
+            print("❌ [StreamRecorder] Stream Task failed: \(error.localizedDescription)")
+            onError?(error)
         }
     }
+    
+    // MARK: - HLS Logic
     
     private func processManifest(initialData: Data? = nil, response: URLResponse? = nil) async throws {
         let data: Data
@@ -161,8 +149,8 @@ class StreamRecorder: NSObject {
             currentResponse = ir
         } else {
             var request = URLRequest(url: streamURL)
-            request.setValue("Nebulo/2.4 (iOS)", forHTTPHeaderField: "User-Agent")
-            (data, currentResponse) = try await urlSession.data(for: request)
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            (data, currentResponse) = try await URLSession.shared.data(for: request)
         }
         
         if let httpRes = currentResponse as? HTTPURLResponse, httpRes.statusCode >= 400 {
@@ -174,7 +162,6 @@ class StreamRecorder: NSObject {
         
         let lines = content.components(separatedBy: .newlines)
         var segments: [(url: URL, sequence: Int)] = []
-        
         var currentSequence = 0
         
         for line in lines {
@@ -184,22 +171,14 @@ class StreamRecorder: NSObject {
                     currentSequence = s
                 }
             } else if !line.hasPrefix("#") && !line.isEmpty {
-                // It's a segment
-                var segmentURL: URL
-                if line.hasPrefix("http") {
-                    segmentURL = URL(string: line)!
-                } else {
-                    segmentURL = baseURL.appendingPathComponent(line)
+                if let segmentURL = URL(string: line, relativeTo: baseURL) {
+                    segments.append((segmentURL, currentSequence))
                 }
-                
-                segments.append((segmentURL, currentSequence))
                 currentSequence += 1
             }
         }
         
-        // Filter new segments
         let newSegments = segments.filter { $0.sequence > lastSequence }
-        
         if newSegments.isEmpty { return }
         
         if let maxSeq = newSegments.map({ $0.sequence }).max() {
@@ -210,15 +189,16 @@ class StreamRecorder: NSObject {
             if !isRecording { break }
             if downloadedSegments.contains(segment.url.absoluteString) { continue }
             
-            print("⬇️ [StreamRecorder] Downloading HLS seq \(segment.sequence)")
             do {
-                var request = URLRequest(url: segment.url)
-                request.setValue("Nebulo/2.4 (iOS)", forHTTPHeaderField: "User-Agent")
-                let (segData, _) = try await urlSession.data(for: request)
-                try appendToFile(data: segData)
-                downloadedSegments.insert(segment.url.absoluteString)
+                let (segData, _) = try await URLSession.shared.data(from: segment.url)
+                if let handle = try? FileHandle(forWritingTo: outputURL) {
+                    handle.seekToEndOfFile()
+                    handle.write(segData)
+                    handle.closeFile()
+                    downloadedSegments.insert(segment.url.absoluteString)
+                }
             } catch {
-                print("⚠️ [StreamRecorder] Failed to download segment: \(error)")
+                print("⚠️ [StreamRecorder] Failed to download HLS segment: \(error)")
             }
         }
     }
