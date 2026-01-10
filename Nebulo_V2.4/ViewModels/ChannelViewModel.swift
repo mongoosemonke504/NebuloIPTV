@@ -899,6 +899,7 @@ class ChannelViewModel: ObservableObject {
             
             self.visualProgress = 0
             self.epgProgress = 0
+            self.loadingStatus = "Updating TV Guide..."
             if !silent {
                 withAnimation(.spring()) { self.isUpdatingEPG = true }
             }

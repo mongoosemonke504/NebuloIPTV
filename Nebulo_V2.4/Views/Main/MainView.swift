@@ -184,16 +184,6 @@ extension MainView {
                 .zIndex(50)
         }
 
-        if viewModel.isUpdatingEPG { 
-            VStack { 
-                EPGLoadingNotification(progress: viewModel.displayEPGProgress, accentColor: accentColor, onDismiss: { withAnimation(.spring()) { viewModel.isUpdatingEPG = false } })
-                    .padding(.top, 65)
-                Spacer() 
-            }
-            .transition(.move(edge: .top).combined(with: .opacity))
-            .zIndex(30) 
-        }
-        
         if let miniChannel = viewModel.miniPlayerChannel, selectedChannel == nil { 
             VStack { 
                 Spacer()
@@ -241,10 +231,14 @@ extension MainView {
         }
         
         // General Loading Overlay
-        if viewModel.isLoading {
-            LoadingStatusOverlay(status: viewModel.loadingStatus, accentColor: accentColor)
-                .transition(.opacity)
-                .zIndex(100)
+        if viewModel.isLoading || viewModel.isUpdatingEPG {
+            LoadingStatusOverlay(
+                status: viewModel.loadingStatus,
+                progress: viewModel.isUpdatingEPG ? viewModel.displayEPGProgress : nil,
+                accentColor: accentColor
+            )
+            .transition(.opacity)
+            .zIndex(100)
         }
     }
     
@@ -877,31 +871,48 @@ struct MultiViewIndicator: SwiftUI.View {
 
 struct LoadingStatusOverlay: View {
     let status: String
+    var progress: Double? = nil
     let accentColor: Color
     
     var body: some View {
         VStack {
-            HStack(spacing: 12) {
-                ProgressView()
-                    .tint(.white)
-                    .scaleEffect(0.8)
+            VStack(spacing: 12) {
+                HStack(spacing: 12) {
+                    ProgressView()
+                        .tint(.white)
+                        .scaleEffect(0.8)
+                    
+                    Text(status)
+                        .font(.subheadline.bold())
+                        .foregroundColor(.white)
+                        .shadow(radius: 2)
+                }
                 
-                Text(status)
-                    .font(.subheadline.bold())
-                    .foregroundColor(.white)
-                    .shadow(radius: 2)
+                if let progress = progress {
+                    VStack(spacing: 4) {
+                        ProgressView(value: progress, total: 1.0)
+                            .tint(accentColor)
+                            .background(Color.white.opacity(0.1))
+                            .clipShape(Capsule())
+                            .frame(width: 150)
+                        
+                        Text("\(Int(progress * 100))%")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(.white.opacity(0.7))
+                    }
+                }
             }
             .padding(.horizontal, 20)
-            .padding(.vertical, 12)
+            .padding(.vertical, 16)
             .background(Material.ultraThin)
-            .clipShape(Capsule())
-            .overlay(Capsule().stroke(Color.white.opacity(0.2), lineWidth: 1))
+            .cornerRadius(20)
+            .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.2), lineWidth: 1))
             .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 5)
             .padding(.top, 60) // Safe area padding
             
             Spacer()
         }
         .frame(maxWidth: .infinity)
-        .background(Color.black.opacity(0.2).ignoresSafeArea()) // Dim background slightly
+        .background(Color.black.opacity(0.3).ignoresSafeArea()) // Dim background slightly more
     }
 }
