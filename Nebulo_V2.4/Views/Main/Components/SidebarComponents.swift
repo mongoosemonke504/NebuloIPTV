@@ -12,11 +12,10 @@ struct GlassSidebarRow: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(isSelected ? .white : .white.opacity(0.7))
             Spacer()
-            if isSelected {
-                Image(systemName: "chevron.right")
-                    .font(.caption.bold())
-                    .foregroundColor(.white)
-            }
+            Image(systemName: "chevron.right")
+                .font(.caption.bold())
+                .foregroundColor(accentColor)
+                .opacity(isSelected ? 1 : 0)
         }
         .padding(.vertical, 12)
         .padding(.horizontal, 16)
@@ -24,8 +23,11 @@ struct GlassSidebarRow: View {
             ZStack {
                 if isSelected {
                     RoundedRectangle(cornerRadius: 12)
-                        .fill(accentColor.opacity(0.8))
-                        .shadow(color: accentColor.opacity(0.4), radius: 8)
+                        .fill(Color.white.opacity(0.05))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(accentColor, lineWidth: 1.5)
+                        )
                 } else {
                     RoundedRectangle(cornerRadius: 12)
                         .fill(Color.white.opacity(0.05))
