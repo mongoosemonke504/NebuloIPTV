@@ -37,28 +37,38 @@ class StreamRecorder: NSObject {
     func start() {
         guard !isRecording else { return }
         isRecording = true
-        print("🔴 [StreamRecorder] Starting loop for \(streamURL)")
+        print("🔴 [StreamRecorder] Starting recording for \(streamURL)")
         
         // Request Background Time
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Recording") {
-            // Expiration handler
             print("⚠️ [StreamRecorder] Background time expired.")
             self.stop()
         }
         
         task = Task {
-            while isRecording {
-                do {
-                    try await processManifest()
-                } catch {
-                    print("⚠️ [StreamRecorder] Manifest error: \(error)")
+            do {
+                // 1. Peek at the content to decide strategy
+                let (data, response) = try await urlSession.data(from: streamURL)
+                if let content = String(data: data, encoding: .utf8), content.contains("#EXTM3U") {
+                    // Strategy: HLS Polling
+                    print("ℹ️ [StreamRecorder] Strategy: HLS Manifest")
+                    try await processManifest(initialData: data, response: response)
+                    
+                    while isRecording {
+                        try? await Task.sleep(nanoseconds: 5_000_000_000)
+                        if !isRecording { break }
+                        try await processManifest()
+                    }
+                } else {
+                    // Strategy: Continuous Download (TS/Direct)
+                    print("ℹ️ [StreamRecorder] Strategy: Continuous Stream")
+                    try await downloadContinuousStream()
                 }
-                
-                // Wait before next poll (target 5s or half segment duration usually)
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
+            } catch {
+                print("❌ [StreamRecorder] Critical failure: \(error)")
+                onError?(error)
             }
             
-            // End Background Task when loop finishes
             if self.backgroundTask != .invalid {
                 UIApplication.shared.endBackgroundTask(self.backgroundTask)
                 self.backgroundTask = .invalid
@@ -70,30 +80,62 @@ class StreamRecorder: NSObject {
         isRecording = false
         task?.cancel()
         task = nil
-        print("obs [StreamRecorder] Stopped.")
+        print("⏹️ [StreamRecorder] Stopped.")
         onCompletion?()
     }
     
-    private func processManifest() async throws {
-        let (data, response) = try await urlSession.data(from: streamURL)
+    private func downloadContinuousStream() async throws {
+        var request = URLRequest(url: streamURL)
+        request.timeoutInterval = 30
         
-        // Check for HTTP Error
+        let (bytes, response) = try await urlSession.bytes(for: request)
+        
         if let httpRes = response as? HTTPURLResponse, httpRes.statusCode >= 400 {
             throw URLError(.badServerResponse)
         }
         
-        guard let content = String(data: data, encoding: .utf8) else { return }
-        
-        // Basic M3U8 Check
-        if !content.contains("#EXTM3U") {
-            // Not a manifest? Maybe a direct TS stream? 
-            // Writing raw stream dump is complex in a polling loop (needs continuous stream).
-            // For now, assume M3U8.
-            print("⚠️ [StreamRecorder] Content is not M3U8")
-            return 
+        guard let handle = try? FileHandle(forWritingTo: outputURL) else {
+            throw URLError(.cannotCreateFile)
         }
         
-        guard let baseURL = (response.url ?? streamURL).deletingLastPathComponent() as URL? else { return }
+        defer { try? handle.close() }
+        
+        var buffer = Data()
+        let maxBufferSize = 1024 * 512 // 512KB Buffer
+        
+        for try await byte in bytes {
+            if !isRecording { break }
+            buffer.append(byte)
+            
+            if buffer.count >= maxBufferSize {
+                handle.write(buffer)
+                buffer.removeAll(keepingCapacity: true)
+            }
+        }
+        
+        // Final flush
+        if !buffer.isEmpty {
+            handle.write(buffer)
+        }
+    }
+    
+    private func processManifest(initialData: Data? = nil, response: URLResponse? = nil) async throws {
+        let data: Data
+        let currentResponse: URLResponse
+        
+        if let id = initialData, let ir = response {
+            data = id
+            currentResponse = ir
+        } else {
+            (data, currentResponse) = try await urlSession.data(from: streamURL)
+        }
+        
+        if let httpRes = currentResponse as? HTTPURLResponse, httpRes.statusCode >= 400 {
+            throw URLError(.badServerResponse)
+        }
+        
+        guard let content = String(data: data, encoding: .utf8) else { return }
+        guard let baseURL = (currentResponse.url ?? streamURL).deletingLastPathComponent() as URL? else { return }
         
         let lines = content.components(separatedBy: .newlines)
         var segments: [(url: URL, sequence: Int)] = []
