@@ -159,27 +159,27 @@ struct RecordingPlayerView: View {
             UnifiedPlayerViewBridge()
                 .ignoresSafeArea()
             
-            // Overlay controls (re-using PlayerControlsView for consistency)
-            PlayerControlsView(
-                playerManager: playerManager,
-                channel: StreamChannel(id: 0, name: recording.channelName, streamURL: recording.streamURL, icon: recording.channelIcon, categoryID: 0, originalName: nil),
-                showControls: $showControls,
-                showSubtitlePanel: $showSubtitlePanel,
-                showResolutionPanel: $showResolutionPanel,
-                showAspectRatioPanel: $showAspectRatioPanel,
-                showFullDescription: $showFullDescription,
-                isScrubbing: $isScrubbing,
-                draggingProgress: $draggingProgress,
-                onDismiss: { dismiss() },
-                togglePlay: { 
-                    if playerManager.isPlaying { playerManager.pause() } else { playerManager.resume() }
-                    resetTimer()
-                },
-                toggleControls: { toggleControls() },
-                seekForward: { playerManager.seek(to: playerManager.currentTime + 15); resetTimer() },
-                seekBackward: { playerManager.seek(to: playerManager.currentTime - 15); resetTimer() }
-            )
-            
+                            // Overlay controls (re-using PlayerControlsView for consistency)
+                            PlayerControlsView(
+                                playerManager: playerManager,
+                                channel: StreamChannel(id: 0, name: recording.channelName, streamURL: recording.streamURL, icon: recording.channelIcon, categoryID: 0, originalName: nil),
+                                isRecordingPlayback: true,
+                                showControls: $showControls,
+                                showSubtitlePanel: $showSubtitlePanel,
+                                showResolutionPanel: $showResolutionPanel,
+                                showAspectRatioPanel: $showAspectRatioPanel,
+                                showFullDescription: $showFullDescription,
+                                isScrubbing: $isScrubbing,
+                                draggingProgress: $draggingProgress,
+                                onDismiss: { dismiss() },
+                                togglePlay: { 
+                                    if playerManager.isPlaying { playerManager.pause() } else { playerManager.resume() }
+                                    resetTimer()
+                                },
+                                toggleControls: { toggleControls() },
+                                seekForward: { playerManager.seek(to: playerManager.currentTime + 15); resetTimer() },
+                                seekBackward: { playerManager.seek(to: playerManager.currentTime - 15); resetTimer() }
+                            )            
             if playerManager.isBuffering {
                 ProgressView().tint(.white).scaleEffect(1.5)
             }
