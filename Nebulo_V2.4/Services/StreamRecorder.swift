@@ -47,17 +47,39 @@ class StreamRecorder: NSObject {
         
         task = Task {
             do {
-                // 1. Peek at the content type or first few bytes to decide strategy
+                // 1. Light-weight Peek at the content to decide strategy
                 var request = URLRequest(url: streamURL)
                 request.setValue("Nebulo/2.4 (iOS)", forHTTPHeaderField: "User-Agent")
+                // Use a short timeout for the peek to prevent hanging
+                request.timeoutInterval = 10
                 
-                let (data, response) = try await urlSession.data(for: request)
-                let contentString = String(data: data.prefix(1024), encoding: .utf8) ?? ""
+                let (bytes, response) = try await urlSession.bytes(for: request)
+                
+                if let httpRes = response as? HTTPURLResponse, httpRes.statusCode >= 400 {
+                    throw URLError(.badServerResponse)
+                }
+                
+                // Read just enough to check for M3U8 header
+                var headerData = Data()
+                var byteIterator = bytes.makeAsyncIterator()
+                
+                // Read first 1024 bytes or until end
+                for _ in 0..<1024 {
+                    if let byte = try await byteIterator.next() {
+                        headerData.append(byte)
+                    } else {
+                        break
+                    }
+                }
+                
+                let contentString = String(data: headerData, encoding: .utf8) ?? ""
                 
                 if contentString.contains("#EXTM3U") {
                     // Strategy: HLS Polling
                     print("ℹ️ [StreamRecorder] Strategy: HLS Manifest")
-                    try await processManifest(initialData: data, response: response)
+                    // For HLS, we need to finish this 'bytes' request and use polling
+                    // because HLS requires multiple separate requests.
+                    try await processManifest(initialData: headerData, response: response)
                     
                     while isRecording {
                         try? await Task.sleep(nanoseconds: 5_000_000_000)
@@ -67,11 +89,14 @@ class StreamRecorder: NSObject {
                 } else {
                     // Strategy: Continuous Download (TS/Direct)
                     print("ℹ️ [StreamRecorder] Strategy: Continuous Stream")
-                    // If initial peek got data, write it first
-                    if !data.isEmpty {
-                        try appendToFile(data: data)
+                    
+                    // Write the header we already pulled
+                    if !headerData.isEmpty {
+                        try appendToFile(data: headerData)
                     }
-                    try await downloadContinuousStream()
+                    
+                    // Continue downloading from the EXISTING byte stream
+                    try await downloadFromByteStream(byteIterator)
                 }
             } catch {
                 print("❌ [StreamRecorder] Critical failure: \(error)")
@@ -102,27 +127,22 @@ class StreamRecorder: NSObject {
         try handle.close()
     }
     
-    private func downloadContinuousStream() async throws {
-        var request = URLRequest(url: streamURL)
-        request.timeoutInterval = 60
-        request.setValue("Nebulo/2.4 (iOS)", forHTTPHeaderField: "User-Agent")
-        
-        let (bytes, response) = try await urlSession.bytes(for: request)
-        
-        if let httpRes = response as? HTTPURLResponse, httpRes.statusCode >= 400 {
-            throw URLError(.badServerResponse)
-        }
-        
+    private func downloadFromByteStream(_ iterator: URLSession.AsyncBytes.Iterator) async throws {
+        var mutableIterator = iterator
         var buffer = Data()
         let maxBufferSize = 1024 * 512 // 512KB Buffer
         
-        for try await byte in bytes {
-            if !isRecording { break }
-            buffer.append(byte)
-            
-            if buffer.count >= maxBufferSize {
-                try appendToFile(data: buffer)
-                buffer.removeAll(keepingCapacity: true)
+        while isRecording {
+            if let byte = try await mutableIterator.next() {
+                buffer.append(byte)
+                
+                if buffer.count >= maxBufferSize {
+                    try appendToFile(data: buffer)
+                    buffer.removeAll(keepingCapacity: true)
+                }
+            } else {
+                // End of stream
+                break
             }
         }
         
