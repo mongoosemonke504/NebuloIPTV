@@ -5,7 +5,10 @@ import MobileVLCKit
 struct RecordingsView: View {
     @ObservedObject var manager = RecordingManager.shared
     @State private var selectedRecording: Recording?
+    var viewModel: ChannelViewModel? = nil
+    var playAction: ((StreamChannel) -> Void)? = nil
     var onBack: (() -> Void)? = nil
+    @Environment(\.dismiss) var dismiss
     
     @AppStorage("nebColor1") private var nebColor1 = "#AF52DE"; @AppStorage("nebColor2") private var nebColor2 = "#007AFF"; @AppStorage("nebColor3") private var nebColor3 = "#FF2D55"; @AppStorage("nebX1") private var nebX1 = 0.2; @AppStorage("nebY1") private var nebY1 = 0.2; @AppStorage("nebX2") private var nebX2 = 0.8; @AppStorage("nebY2") private var nebY2 = 0.3; @AppStorage("nebX3") private var nebX3 = 0.5; @AppStorage("nebY3") private var nebY3 = 0.8
 
@@ -19,7 +22,6 @@ struct RecordingsView: View {
                 .ignoresSafeArea()
 
             List {
-                // ... (rest of the list code remains same)
                 if manager.recordings.isEmpty {
                     Text("No recordings found.")
                         .foregroundColor(.white.opacity(0.7))
@@ -28,7 +30,12 @@ struct RecordingsView: View {
                 } else {
                     ForEach(manager.recordings.sorted(by: { $0.createdAt > $1.createdAt })) { recording in
                         Button(action: {
-                            if recording.status == .completed || recording.status == .recording {
+                            if recording.status == .recording {
+                                if let channel = viewModel?.channels.first(where: { $0.streamURL == recording.streamURL || $0.name == recording.channelName }) {
+                                    dismiss()
+                                    playAction?(channel)
+                                }
+                            } else if recording.status == .completed {
                                 selectedRecording = recording
                             }
                         }) {

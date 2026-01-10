@@ -100,7 +100,8 @@ struct MainView: SwiftUI.View {
                 showSupportAlert: $showSupportAlert,
                 showSupportPopup: $showSupportPopup,
                 selectedRecording: $selectedRecording,
-                accentColor: accentColor
+                accentColor: accentColor,
+                playAction: playChannel
             ))
         }
     }
@@ -127,6 +128,7 @@ struct MainViewModifiers: ViewModifier {
     @Binding var showSupportPopup: Bool
     @Binding var selectedRecording: Recording?
     let accentColor: Color
+    let playAction: (StreamChannel) -> Void
 
     func body(content: Content) -> some View {
         let showRenameAlert = Binding(get: { viewModel.showRenameAlert }, set: { viewModel.showRenameAlert = $0 })
@@ -155,7 +157,7 @@ struct MainViewModifiers: ViewModifier {
                 // Assuming it exists or will be handled
                 Text("Recording Player") 
             }
-            .sheet(isPresented: $showSettings) { SettingsView(categories: categories, accentColor: accentColor, viewModel: viewModel, scoreViewModel: scoreViewModel, onSave: { viewModel.saveCategorySettings() }) }
+            .sheet(isPresented: $showSettings) { SettingsView(categories: categories, accentColor: accentColor, viewModel: viewModel, scoreViewModel: scoreViewModel, playAction: playAction, onSave: { viewModel.saveCategorySettings() }) }
             .alert("No Streams Found", isPresented: showNoStreamsAlert) { Button("OK", role: .cancel) { } } message: { Text("No streams were found. Please search for the channel manually.") }
             .alert("Rename", isPresented: showRenameAlert) {
                 TextField("New Name", text: renameInput)
@@ -252,7 +254,10 @@ extension MainView {
             viewModel.addToRecent(channel.id)
             viewModel.lastPlayedChannelID = channel.id
             viewModel.lastSourceCategory = selectedCategory
-            withAnimation(.easeInOut(duration: 0.4)) { selectedChannel = channel } 
+            withAnimation(.easeInOut(duration: 0.4)) { 
+                selectedChannel = channel
+                selectedCategory = nil
+            } 
         } 
     }
     func shouldUseSidebar(isLandscape: Bool) -> Bool { if selectedCategory?.id == -3 { return false }; switch ViewMode(rawValue: viewMode) ?? .automatic { case .automatic: return isLandscape; case .sidebar: return true; case .standard: return false } }
@@ -280,7 +285,7 @@ struct StandardLayout: SwiftUI.View {
                         .modifier(SwipeBackModifier(onBack: { withAnimation { selectedCategory = nil } }))
                 }
                 else if cat.id == -5 { 
-                    RecordingsView(onBack: { withAnimation { selectedCategory = nil } })
+                    RecordingsView(viewModel: viewModel, playAction: playAction, onBack: { withAnimation { selectedCategory = nil } })
                         .transition(.blurFade)
                         .modifier(SwipeBackModifier(onBack: { withAnimation { selectedCategory = nil } }))
                 }
@@ -590,7 +595,7 @@ struct SidebarLayout: SwiftUI.View {
                     StandardLayout(viewModel: viewModel, scoreViewModel: scoreViewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $searchText, accentColor: accentColor, playAction: playAction, showMultiView: $showMultiView, showSettings: $showSettings, selectedRecording: .constant(nil))
                         .id("SearchOverride") // Hack to force reload if needed
                 } else if selectedCategory?.id == -3 { SportsHubView(viewModel: viewModel, accentColor: accentColor, playAction: playAction, onBack: nil, scoreViewModel: scoreViewModel).transition(.blurFade) }
-                else if selectedCategory?.id == -5 { RecordingsView(onBack: { withAnimation { selectedCategory = nil } }).transition(.blurFade) }
+                else if selectedCategory?.id == -5 { RecordingsView(viewModel: viewModel, playAction: playAction, onBack: { withAnimation { selectedCategory = nil } }).transition(.blurFade) }
                 else if viewModel.isLoading {
                     ScrollView {
                         VStack {

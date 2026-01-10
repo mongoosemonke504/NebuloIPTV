@@ -425,13 +425,20 @@ struct PlayerControlsView: View {
                                     
                                     // Record Button
                                     Button(action: {
-                                        showRecordingSheet = true
+                                        if isRecording {
+                                            // Stop recording
+                                            if let rec = recordingManager.recordings.first(where: { $0.channelName == channel.name && $0.status == .recording }) {
+                                                recordingManager.stopRecording(rec.id)
+                                            }
+                                        } else {
+                                            showRecordingSheet = true
+                                        }
                                     }) {
                                         HStack(spacing: 6) {
                                             Image(systemName: isRecording ? "record.circle.fill" : "record.circle")
                                                 .font(.caption.bold())
                                                 .foregroundColor(isRecording ? .red : .white)
-                                            Text(isRecording ? "Recording" : "Record")
+                                            Text(isRecording ? "Stop & Save" : "Record")
                                                 .font(.caption.bold())
                                                 .lineLimit(1)
                                                 .minimumScaleFactor(0.7)
@@ -446,8 +453,8 @@ struct PlayerControlsView: View {
                                         )
                                     }
                                     .buttonStyle(.plain)
-                                    .disabled(isRecording)
-                                    .opacity(isRecording ? 0.7 : 1.0)
+                                    // .disabled(isRecording)
+                                    .opacity(1.0)
                                     
                                     // Subtitles
                                     Button(action: {
