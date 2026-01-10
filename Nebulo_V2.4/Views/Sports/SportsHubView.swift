@@ -29,9 +29,17 @@ struct SportsHubView: View {
                 loadingOverlay
             }
         }
-        .navigationTitle(Text("Sports Center"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { 
+            ToolbarItem(placement: .principal) {
+                Button(action: {
+                    Task { await scoreViewModel.fetchScores(forceRefresh: true) }
+                }) {
+                    Text("Sports Center")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                }
+            }
             ToolbarItem(placement: .topBarLeading) { 
                 Group {
                     if let onBack = onBack { 

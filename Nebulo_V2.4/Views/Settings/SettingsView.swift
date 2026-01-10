@@ -12,11 +12,13 @@ struct SettingsView: View {
     @Binding var categories: [StreamCategory]
     let accentColor: Color
     @ObservedObject var viewModel: ChannelViewModel
+    @ObservedObject var scoreViewModel: ScoreViewModel // Added ScoreViewModel
     let onSave: () -> Void
     
     @AppStorage("xstreamURL") private var xstreamURL = ""
     @AppStorage("username") private var username = ""
     @AppStorage("password") private var password = ""
+    @AppStorage("loginTypeRaw") private var loginTypeRaw = LoginType.xtream.rawValue // Needed for loadData
     @AppStorage("customBackgroundVersion") private var customBackgroundVersion = 0
     @AppStorage("showSupportPopup") private var showSupportPopup = true
     
@@ -66,6 +68,7 @@ struct SettingsView: View {
                             categories: $categories,
                             accentColor: accentColor,
                             viewModel: viewModel,
+                            scoreViewModel: scoreViewModel, // Pass to subview
                             showAddPlaylist: $showAddPlaylist
                         )
                         
@@ -317,11 +320,12 @@ struct ContentManagementCard: View {
     @Binding var categories: [StreamCategory]
     let accentColor: Color
     @ObservedObject var viewModel: ChannelViewModel
+    @ObservedObject var scoreViewModel: ScoreViewModel
     @Binding var showAddPlaylist: Bool
     
     @ObservedObject var accountManager = AccountManager.shared
     @Environment(\.dismiss) private var dismiss
-    @AppStorage("xstreamURL") private var xstreamURL = ""; @AppStorage("username") private var username = ""; @AppStorage("password") private var password = ""
+    @AppStorage("xstreamURL") private var xstreamURL = ""; @AppStorage("username") private var username = ""; @AppStorage("password") private var password = ""; @AppStorage("loginTypeRaw") private var loginTypeRaw = LoginType.xtream.rawValue
     
     var body: some View {
         SettingsCard {
@@ -387,9 +391,30 @@ struct ContentManagementCard: View {
                 Group {
                     Button(action: {
                         dismiss()
-                        Task { if let url = URL(string: xstreamURL) { await viewModel.updateEPG(baseURL: url, user: username, pass: password, force: true, silent: false) } }
+                        Task { 
+                            // Get active credentials
+                            if let account = accountManager.currentAccount {
+                                // 1. Refresh Playlist Data (Channels & Icons)
+                                await viewModel.loadData(
+                                    url: account.url, 
+                                    user: account.username ?? "", 
+                                    pass: account.password ?? "", 
+                                    mac: account.macAddress,
+                                    type: account.type, 
+                                    silent: false
+                                )
+                                
+                                // 2. Refresh Sports Data (Scores & Icons)
+                                await scoreViewModel.fetchScores(forceRefresh: true)
+                                
+                                // 3. Update EPG
+                                if let url = URL(string: account.url) { 
+                                    await viewModel.updateEPG(baseURL: url, user: account.username ?? "", pass: account.password ?? "", force: true, silent: false) 
+                                }
+                            }
+                        }
                     }) {
-                        SettingsRow(icon: "arrow.clockwise.icloud", title: "Update TV Guide", subtitle: viewModel.isUpdatingEPG ? "Updating..." : nil, showChevron: false)
+                        SettingsRow(icon: "arrow.clockwise.icloud", title: "Update Content & Guide", subtitle: viewModel.isUpdatingEPG ? "Updating..." : nil, showChevron: false)
                     }
                     .disabled(viewModel.isUpdatingEPG)
                     

@@ -15,7 +15,7 @@ struct ContentView: View {
     var body: some View {
         Group {
             if accountManager.isLoggedIn {
-                MainView(viewModel: viewModel)
+                MainView(viewModel: viewModel, scoreViewModel: scoreViewModel)
             } else {
                 LoginView()
             }

@@ -5,6 +5,7 @@ import Combine
 // MARK: - MAIN VIEW
 struct MainView: SwiftUI.View {
     @ObservedObject var viewModel: ChannelViewModel
+    @ObservedObject var scoreViewModel: ScoreViewModel
     @AppStorage("xstreamURL") private var xstreamURL = ""; @AppStorage("username") private var username = ""; @AppStorage("password") private var password = ""; @AppStorage("loginTypeRaw") private var loginTypeRaw = LoginType.xtream.rawValue; @AppStorage("viewMode") private var viewMode = ViewMode.automatic.rawValue; @AppStorage("customAccentHex") private var customAccentHex = "#007AFF"; @AppStorage("nebColor1") private var nebColor1 = "#AF52DE"; @AppStorage("nebColor2") private var nebColor2 = "#007AFF"; @AppStorage("nebColor3") private var nebColor3 = "#FF2D55"; @AppStorage("nebX1") private var nebX1 = 0.2; @AppStorage("nebY1") private var nebY1 = 0.2; @AppStorage("nebX2") private var nebX2 = 0.8; @AppStorage("nebY2") private var nebY2 = 0.3; @AppStorage("nebX3") private var nebX3 = 0.5; @AppStorage("nebY3") private var nebY3 = 0.8
     @AppStorage("showSupportPopup") private var showSupportPopup = true
     @AppStorage("lastSupportPopupTime") private var lastSupportPopupTime: Double = 0
@@ -93,6 +94,7 @@ struct MainView: SwiftUI.View {
             }
             .modifier(MainViewModifiers(
                 viewModel: viewModel,
+                scoreViewModel: scoreViewModel, // Pass scoreViewModel here
                 showMultiView: $showMultiView,
                 showSettings: $showSettings,
                 showSupportAlert: $showSupportAlert,
@@ -107,9 +109,9 @@ struct MainView: SwiftUI.View {
     private func contentLayout(isL: Bool) -> some View {
         Group {
             if shouldUseSidebar(isLandscape: isL) { 
-                SidebarLayout(viewModel: viewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $viewModel.searchText, isLandscape: isL, accentColor: accentColor, playAction: playChannel, showMultiView: $showMultiView, showSettings: $showSettings) 
+                SidebarLayout(viewModel: viewModel, scoreViewModel: scoreViewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $viewModel.searchText, isLandscape: isL, accentColor: accentColor, playAction: playChannel, showMultiView: $showMultiView, showSettings: $showSettings) 
             } else { 
-                StandardLayout(viewModel: viewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $viewModel.searchText, accentColor: accentColor, playAction: playChannel, showMultiView: $showMultiView, showSettings: $showSettings, selectedRecording: $selectedRecording) 
+                StandardLayout(viewModel: viewModel, scoreViewModel: scoreViewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $viewModel.searchText, accentColor: accentColor, playAction: playChannel, showMultiView: $showMultiView, showSettings: $showSettings, selectedRecording: $selectedRecording) 
             }
         }
         .zIndex(1)
@@ -118,6 +120,7 @@ struct MainView: SwiftUI.View {
 
 struct MainViewModifiers: ViewModifier {
     @ObservedObject var viewModel: ChannelViewModel
+    @ObservedObject var scoreViewModel: ScoreViewModel // Added ScoreViewModel
     @Binding var showMultiView: Bool
     @Binding var showSettings: Bool
     @Binding var showSupportAlert: Bool
@@ -147,13 +150,12 @@ struct MainViewModifiers: ViewModifier {
                     }
                 }
             }
-            .fullScreenCover(isPresented: $showMultiView) { MultiViewScreen(viewModel: viewModel, showMultiView: $showMultiView) }
             .fullScreenCover(item: $selectedRecording) { recording in 
                 // Placeholder for RecordingPlayerView if not defined in this file
                 // Assuming it exists or will be handled
                 Text("Recording Player") 
             }
-            .sheet(isPresented: $showSettings) { SettingsView(categories: categories, accentColor: accentColor, viewModel: viewModel, onSave: { viewModel.saveCategorySettings() }) }
+            .sheet(isPresented: $showSettings) { SettingsView(categories: categories, accentColor: accentColor, viewModel: viewModel, scoreViewModel: scoreViewModel, onSave: { viewModel.saveCategorySettings() }) }
             .alert("No Streams Found", isPresented: showNoStreamsAlert) { Button("OK", role: .cancel) { } } message: { Text("No streams were found. Please search for the channel manually.") }
             .alert("Rename", isPresented: showRenameAlert) {
                 TextField("New Name", text: renameInput)
@@ -174,6 +176,12 @@ struct MainViewModifiers: ViewModifier {
 extension MainView {
     @ViewBuilder
     private func overlays(isL: Bool) -> some View {
+        if showMultiView {
+            MultiViewScreen(viewModel: viewModel, showMultiView: $showMultiView)
+                .transition(.move(edge: .bottom))
+                .zIndex(50)
+        }
+
         if viewModel.isUpdatingEPG { 
             VStack { 
                 EPGLoadingNotification(progress: viewModel.displayEPGProgress, accentColor: accentColor, onDismiss: { withAnimation(.spring()) { viewModel.isUpdatingEPG = false } })
@@ -225,6 +233,13 @@ extension MainView {
             .zIndex(20)
             .ignoresSafeArea() 
         }
+        
+        // General Loading Overlay
+        if viewModel.isLoading {
+            LoadingStatusOverlay(status: viewModel.loadingStatus, accentColor: accentColor)
+                .transition(.opacity)
+                .zIndex(100)
+        }
     }
     
     func playChannel(_ channel: StreamChannel) { 
@@ -243,11 +258,10 @@ extension MainView {
     func shouldUseSidebar(isLandscape: Bool) -> Bool { if selectedCategory?.id == -3 { return false }; switch ViewMode(rawValue: viewMode) ?? .automatic { case .automatic: return isLandscape; case .sidebar: return true; case .standard: return false } }
 }
 
-extension SwiftUI.View { @ViewBuilder func `if`<Content: SwiftUI.View>(_ condition: Bool, transform: (Self) -> Content) -> some SwiftUI.View { if condition { transform(self) } else { self } } }
-
 // MARK: - STANDARD LAYOUT (Restored)
 struct StandardLayout: SwiftUI.View {
     @ObservedObject var viewModel: ChannelViewModel
+    @ObservedObject var scoreViewModel: ScoreViewModel
     @Binding var selectedCategory: StreamCategory?; @Binding var selectedChannel: StreamChannel?; @Binding var searchText: String
     let accentColor: Color; let playAction: (StreamChannel) -> Void; @Binding var showMultiView: Bool; @Binding var showSettings: Bool
     @Binding var selectedRecording: Recording?
@@ -259,7 +273,7 @@ struct StandardLayout: SwiftUI.View {
                     .modifier(SwipeBackModifier(onBack: { withAnimation { searchText = "" } }))
             } else if let cat = selectedCategory {
                 if cat.id == -3 { 
-                    SportsHubView(viewModel: viewModel, accentColor: accentColor, playAction: playAction, onBack: { withAnimation { selectedCategory = nil } }, scoreViewModel: viewModel.scoreViewModel)
+                    SportsHubView(viewModel: viewModel, accentColor: accentColor, playAction: playAction, onBack: { withAnimation { selectedCategory = nil } }, scoreViewModel: scoreViewModel)
                         .transition(.blurFade)
                         .modifier(SwipeBackModifier(onBack: { withAnimation { selectedCategory = nil } }))
                 }
@@ -539,6 +553,7 @@ struct DashboardCard: View {
 
 struct SidebarLayout: SwiftUI.View {
     @ObservedObject var viewModel: ChannelViewModel
+    @ObservedObject var scoreViewModel: ScoreViewModel
     @Binding var selectedCategory: StreamCategory?; @Binding var selectedChannel: StreamChannel?; @Binding var searchText: String
     let isLandscape: Bool; let accentColor: Color; let playAction: (StreamChannel) -> Void; @Binding var showMultiView: Bool; @Binding var showSettings: Bool
     @State private var channelForDescription: StreamChannel?
@@ -568,9 +583,9 @@ struct SidebarLayout: SwiftUI.View {
                     // searchView is private to StandardLayout, so we need a similar view here or reuse components.
                     // For Sidebar layout, we usually reuse the same logic. 
                     // To keep it simple and safe, we can reuse the components directly.
-                    StandardLayout(viewModel: viewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $searchText, accentColor: accentColor, playAction: playAction, showMultiView: $showMultiView, showSettings: $showSettings, selectedRecording: .constant(nil))
+                    StandardLayout(viewModel: viewModel, scoreViewModel: scoreViewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $searchText, accentColor: accentColor, playAction: playAction, showMultiView: $showMultiView, showSettings: $showSettings, selectedRecording: .constant(nil))
                         .id("SearchOverride") // Hack to force reload if needed
-                } else if selectedCategory?.id == -3 { SportsHubView(viewModel: viewModel, accentColor: accentColor, playAction: playAction, onBack: nil, scoreViewModel: viewModel.scoreViewModel).transition(.blurFade) }
+                } else if selectedCategory?.id == -3 { SportsHubView(viewModel: viewModel, accentColor: accentColor, playAction: playAction, onBack: nil, scoreViewModel: scoreViewModel).transition(.blurFade) }
                 else if selectedCategory?.id == -5 { RecordingsView(onBack: { withAnimation { selectedCategory = nil } }).transition(.blurFade) }
                 else if viewModel.isLoading {
                     ScrollView {
@@ -842,7 +857,38 @@ struct MultiViewIndicator: SwiftUI.View {
                     .padding(.horizontal, 16).padding(.vertical, 12)
                     .modifier(GlassEffect(cornerRadius: 20, isSelected: true, accentColor: accentColor)) 
             }
-            .padding(.bottom, 40) // Position above tab bar area
+            .padding(.bottom, 15) // Moved lower
         }
     } 
+}
+
+struct LoadingStatusOverlay: View {
+    let status: String
+    let accentColor: Color
+    
+    var body: some View {
+        VStack {
+            HStack(spacing: 12) {
+                ProgressView()
+                    .tint(.white)
+                    .scaleEffect(0.8)
+                
+                Text(status)
+                    .font(.subheadline.bold())
+                    .foregroundColor(.white)
+                    .shadow(radius: 2)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .background(Material.ultraThin)
+            .clipShape(Capsule())
+            .overlay(Capsule().stroke(Color.white.opacity(0.2), lineWidth: 1))
+            .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 5)
+            .padding(.top, 60) // Safe area padding
+            
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+        .background(Color.black.opacity(0.2).ignoresSafeArea()) // Dim background slightly
+    }
 }

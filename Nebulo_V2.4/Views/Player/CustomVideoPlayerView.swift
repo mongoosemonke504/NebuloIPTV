@@ -424,25 +424,23 @@ struct CustomVideoPlayerView: SwiftUI.View {
     }
     
     func setupPlayer() {
-        // If the player is already active with content, try to reuse it (preserves Timeshift/Seek)
-        if let current = playerManager.currentURL, (playerManager.isPlaying || playerManager.isBuffering) {
-             // We can assume if we are opening the player view while audio/video is running, it's the intended content
-             // (especially for the Mini -> Main transition).
-             // The engine's 'play(url)' will see the match and do nothing (seamless continue).
-             playerManager.play(url: current)
-             
-             // Still update metadata
-             let prog = viewModel?.getCurrentProgram(for: channel)?.title
-             playerManager.updateNowPlayingMetadata(title: channel.name, subtitle: prog, imageURL: channel.icon)
-             return
-        }
-
         Task {
-            let resolvedURL = await viewModel?.resolveStalkerStream(channel) ?? channel.streamURL
+            let resolvedURLString = await viewModel?.resolveStalkerStream(channel) ?? channel.streamURL
+            guard let targetURL = URL(string: resolvedURLString) else { return }
+            
             await MainActor.run {
-                self.currentStreamURL = URL(string: resolvedURL)
-                if let url = self.currentStreamURL { 
-                    playerManager.play(url: url) 
+                self.currentStreamURL = targetURL
+                
+                // If the player is already active with the SAME content, reuse it (seamless)
+                if let current = playerManager.currentURL, 
+                   (playerManager.isPlaying || playerManager.isBuffering),
+                   current.absoluteString == targetURL.absoluteString {
+                    
+                    // Re-assert play to ensure UI sync, but engine will no-op if same
+                    playerManager.play(url: current)
+                } else {
+                    // Different content or stopped -> Force load
+                    playerManager.play(url: targetURL)
                 }
                 
                 // Always update metadata
