@@ -63,7 +63,15 @@ struct RecordingSetupSheet: View {
             endTime = startTime.addingTimeInterval(60)
         }
         
-        recordingManager.scheduleRecording(channel: channel, startTime: startTime, endTime: endTime)
+        let prog = ChannelViewModel.shared.getCurrentProgram(for: channel)
+        
+        recordingManager.scheduleRecording(
+            channel: channel, 
+            startTime: startTime, 
+            endTime: endTime,
+            programTitle: prog?.title,
+            programDescription: prog?.description
+        )
         onDismiss()
     }
 }
