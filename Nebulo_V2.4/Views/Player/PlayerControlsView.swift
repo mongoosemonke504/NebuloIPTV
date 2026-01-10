@@ -93,36 +93,69 @@ struct PlayerControlsView: View {
                         VStack {
                             
                             // MARK: - Top Bar
-                            HStack {
-                                Button(action: {
-                                    timeshiftStartTime = nil
-                                    onDismiss()
-                                }) {
-                                    Image(systemName: "xmark")
-                                        .font(.system(size: 18, weight: .bold))
-                                        .foregroundColor(.white)
-                                        .padding(12)
-                                        .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
-                                }
-                                .buttonStyle(.plain)
-                                
-                                Spacer()
-                                
-                                Text(channel.name)
-                                    .font(.headline)
-                                    .foregroundColor(.white)
-                                    .shadow(radius: 2)
-                                
-                                Spacer()
-                                
-                                // Right Side Actions
-                                HStack(spacing: 16) {
-                                    if let vm = viewModel {
+                            Group {
+                                if isLandscape {
+                                    ZStack {
+                                        HStack {
+                                            Button(action: {
+                                                timeshiftStartTime = nil
+                                                onDismiss()
+                                            }) {
+                                                Image(systemName: "xmark")
+                                                    .font(.system(size: 18, weight: .bold))
+                                                    .foregroundColor(.white)
+                                                    .padding(12)
+                                                    .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
+                                            }
+                                            .buttonStyle(.plain)
+                                            
+                                            Spacer()
+                                            
+                                            // Right Side Actions
+                                            HStack(spacing: 16) {
+                                                if let vm = viewModel {
+                                                    Button(action: {
+                                                        vm.miniPlayerChannel = channel
+                                                        onDismiss()
+                                                    }) {
+                                                        Image(systemName: "pip.enter")
+                                                            .font(.system(size: 18, weight: .bold))
+                                                            .foregroundColor(.white)
+                                                            .padding(12)
+                                                            .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
+                                                    }
+                                                    .buttonStyle(.plain)
+                                                    
+                                                    Button(action: {
+                                                        vm.triggerMultiViewFromPlayer(with: channel)
+                                                    }) {
+                                                        Image(systemName: "square.grid.2x2.fill")
+                                                            .font(.system(size: 18, weight: .bold))
+                                                            .foregroundColor(.white)
+                                                            .padding(12)
+                                                            .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
+                                                    }
+                                                    .buttonStyle(.plain)
+                                                    .disabled(timeshiftStartTime != nil)
+                                                    .opacity(timeshiftStartTime != nil ? 0.5 : 1.0)
+                                                }
+                                            }
+                                        }
+                                        
+                                        Text(channel.name)
+                                            .font(.headline)
+                                            .foregroundColor(.white)
+                                            .shadow(radius: 2)
+                                            .lineLimit(1)
+                                            .frame(maxWidth: geo.size.width * 0.5)
+                                    }
+                                } else {
+                                    HStack {
                                         Button(action: {
-                                            vm.miniPlayerChannel = channel
+                                            timeshiftStartTime = nil
                                             onDismiss()
                                         }) {
-                                            Image(systemName: "pip.enter")
+                                            Image(systemName: "xmark")
                                                 .font(.system(size: 18, weight: .bold))
                                                 .foregroundColor(.white)
                                                 .padding(12)
@@ -130,18 +163,44 @@ struct PlayerControlsView: View {
                                         }
                                         .buttonStyle(.plain)
                                         
-                                        Button(action: {
-                                            vm.triggerMultiViewFromPlayer(with: channel)
-                                        }) {
-                                            Image(systemName: "square.grid.2x2.fill")
-                                                .font(.system(size: 18, weight: .bold))
-                                                .foregroundColor(.white)
-                                                .padding(12)
-                                                .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
+                                        Spacer()
+                                        
+                                        Text(channel.name)
+                                            .font(.headline)
+                                            .foregroundColor(.white)
+                                            .shadow(radius: 2)
+                                        
+                                        Spacer()
+                                        
+                                        // Right Side Actions
+                                        HStack(spacing: 16) {
+                                            if let vm = viewModel {
+                                                Button(action: {
+                                                    vm.miniPlayerChannel = channel
+                                                    onDismiss()
+                                                }) {
+                                                    Image(systemName: "pip.enter")
+                                                        .font(.system(size: 18, weight: .bold))
+                                                        .foregroundColor(.white)
+                                                        .padding(12)
+                                                        .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
+                                                }
+                                                .buttonStyle(.plain)
+                                                
+                                                Button(action: {
+                                                    vm.triggerMultiViewFromPlayer(with: channel)
+                                                }) {
+                                                    Image(systemName: "square.grid.2x2.fill")
+                                                        .font(.system(size: 18, weight: .bold))
+                                                        .foregroundColor(.white)
+                                                        .padding(12)
+                                                        .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
+                                                }
+                                                .buttonStyle(.plain)
+                                                .disabled(timeshiftStartTime != nil)
+                                                .opacity(timeshiftStartTime != nil ? 0.5 : 1.0)
+                                            }
                                         }
-                                        .buttonStyle(.plain)
-                                        .disabled(timeshiftStartTime != nil)
-                                        .opacity(timeshiftStartTime != nil ? 0.5 : 1.0)
                                     }
                                 }
                             }
