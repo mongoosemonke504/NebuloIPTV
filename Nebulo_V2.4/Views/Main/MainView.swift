@@ -299,7 +299,7 @@ struct StandardLayout: SwiftUI.View {
                         }.padding(.horizontal)
                         
                         ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 16) {
+                            LazyHStack(spacing: 16) {
                                 ForEach(0..<4, id: \.self) { _ in
                                     SkeletonBox(height: 112).frame(width: 200).cornerRadius(12)
                                 }

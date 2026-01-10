@@ -14,6 +14,10 @@ struct StreamChannel: Identifiable, Codable, Hashable, Equatable, Sendable {
     let id: Int; var name: String; var streamURL: String; let icon: String?; let categoryID: Int; var originalName: String? = nil
     var epgID: String? = nil
     var hasArchive: Bool = false
+    
+    // Optimization: Pre-computed search string
+    var searchNormalizedName: String { name.lowercased() }
+    
     enum CodingKeys: String, CodingKey { 
         case id = "stream_id", name = "name", displayName = "stream_display_name", 
              streamURL = "stream_url", icon = "stream_icon", categoryID = "category_id", 

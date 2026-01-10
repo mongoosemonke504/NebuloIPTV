@@ -109,7 +109,49 @@ class ChannelViewModel: ObservableObject {
     func loadCurrentAccount() async {
         guard let account = AccountManager.shared.currentAccount else { return }
         self.reset()
+        
+        // 1. Instant Load from Cache
+        if let (cachedChannels, cachedCategories) = loadFromCache() {
+            self.channels = cachedChannels
+            self.categories = cachedCategories
+            self.categorizeSports()
+            print("🚀 [ChannelViewModel] Instant loaded \(channels.count) channels from disk cache.")
+        }
+        
+        // 2. Network Refresh
         await loadData(url: account.url, user: account.username ?? "", pass: account.password ?? "", mac: account.macAddress, type: account.type)
+    }
+    
+    private func saveToCache() {
+        let prefix = self.settingsPrefix
+        let channelsToCache = self.channels
+        let categoriesToCache = self.categories
+        
+        Task.detached(priority: .background) {
+            let channelsData = try? JSONEncoder().encode(channelsToCache)
+            let categoriesData = try? JSONEncoder().encode(categoriesToCache)
+            
+            if let data = channelsData {
+                UserDefaults.standard.set(data, forKey: prefix + "cached_channels_v2")
+            }
+            if let data = categoriesData {
+                UserDefaults.standard.set(data, forKey: prefix + "cached_categories_v2")
+            }
+        }
+    }
+    
+    private func loadFromCache() -> ([StreamChannel], [StreamCategory])? {
+        let prefix = self.settingsPrefix
+        guard let channelsData = UserDefaults.standard.data(forKey: prefix + "cached_channels_v2"),
+              let categoriesData = UserDefaults.standard.data(forKey: prefix + "cached_categories_v2") else {
+            return nil
+        }
+        
+        let channels = (try? JSONDecoder().decode([StreamChannel].self, from: channelsData)) ?? []
+        let categories = (try? JSONDecoder().decode([StreamCategory].self, from: categoriesData)) ?? []
+        
+        if channels.isEmpty { return nil }
+        return (channels, categories)
     }
     
     func reset() {
@@ -200,15 +242,15 @@ class ChannelViewModel: ObservableObject {
             for channel in allChannels {
                 if hidden.contains(channel.id) { continue }
                 
-                var currentProgramTitle = ""
+                var currentProgramTitleLower = ""
                 if let eID = channel.epgID, let schedule = epg[eID] {
                     if let program = schedule.first(where: { now >= $0.start && now <= $0.stop }) {
-                        currentProgramTitle = program.title
+                        currentProgramTitleLower = program.title.lowercased()
                     }
                 }
                 
-                let lowerName = channel.name.lowercased()
-                let lowerGuide = currentProgramTitle.lowercased()
+                let lowerName = channel.searchNormalizedName
+                let lowerGuide = currentProgramTitleLower
                 
                 let guideMatch = tokens.allSatisfy { lowerGuide.contains($0) }
                 let nameMatch = tokens.allSatisfy { lowerName.contains($0) }
@@ -720,6 +762,7 @@ class ChannelViewModel: ObservableObject {
                         await MainActor.run { [weak self] in 
                             self?.channels = processed; 
                             self?.categorizeSports()
+                            self?.saveToCache()
                         }
                         // Await image preloading to ensure cache is hot
                         await self.preloadImages()
@@ -737,6 +780,7 @@ class ChannelViewModel: ObservableObject {
                     self.stalkerToken = token
                     self.stalkerPortalURL = baseURL
                     self.categorizeSports()
+                    self.saveToCache()
                 }
                 await self.preloadImages()
             } else {
@@ -746,6 +790,7 @@ class ChannelViewModel: ObservableObject {
                     await MainActor.run { self.loadingStatus = "Parsing Channels..." }
                     let (pChannels, pCategories, epgUrl) = await ChannelViewModel.parseM3U(content: content)
                     self.channels = pChannels; self.categories = pCategories; self.categorizeSports()
+                    self.saveToCache()
                     await self.preloadImages()
                     if let eURL = epgUrl, let xmlURL = URL(string: eURL) {
                         await MainActor.run { self.loadingStatus = "Updating TV Guide..." }

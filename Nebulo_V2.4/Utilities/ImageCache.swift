@@ -5,12 +5,17 @@ import Combine
 class ImageCache {
     static let shared = ImageCache()
     
-    private let cache = NSCache<NSString, UIImage>()
+    private let cache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 200 // Max 200 images in memory
+        cache.totalCostLimit = 100 * 1024 * 1024 // Max 100MB in memory
+        return cache
+    }()
+    
     private let fileManager = FileManager.default
     private let cacheDirectory: URL
     
     init() {
-        // Create a dedicated subdirectory in Caches
         let paths = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)
         cacheDirectory = paths[0].appendingPathComponent("NebuloImageCache", isDirectory: true)
         
@@ -19,20 +24,20 @@ class ImageCache {
         }
     }
     
-    func get(forKey key: String) -> UIImage? {
-        let cacheKey = key as NSString
+    func get(forKey key: String, size: CGSize? = nil) -> UIImage? {
+        let cacheKey = (key + (size != nil ? "_\(Int(size!.width))x\(Int(size!.height))" : "")) as NSString
         
-        // 1. Memory Cache
         if let image = cache.object(forKey: cacheKey) {
             return image
         }
         
-        // 2. Disk Cache
         let safeName = key.hashValueStr
         let fileURL = cacheDirectory.appendingPathComponent(safeName)
         
-        if let data = try? Data(contentsOf: fileURL), let image = UIImage(data: data) {
-            // Restore to memory
+        guard fileManager.fileExists(atPath: fileURL.path) else { return nil }
+        
+        // Use downsampling for disk images to save memory
+        if let image = downsample(imageAt: fileURL, to: size ?? CGSize(width: 300, height: 300)) {
             cache.setObject(image, forKey: cacheKey)
             return image
         }
@@ -41,50 +46,58 @@ class ImageCache {
     }
     
     func hasImage(forKey key: String) -> Bool {
-        if cache.object(forKey: key as NSString) != nil { return true }
         let safeName = key.hashValueStr
         let fileURL = cacheDirectory.appendingPathComponent(safeName)
         return fileManager.fileExists(atPath: fileURL.path)
     }
     
-    func set(_ image: UIImage, forKey key: String) {
-        let cacheKey = key as NSString
-        
-        // 1. Memory
+    func set(_ image: UIImage, forKey key: String, size: CGSize? = nil) {
+        let cacheKey = (key + (size != nil ? "_\(Int(size!.width))x\(Int(size!.height))" : "")) as NSString
         cache.setObject(image, forKey: cacheKey)
         
-        // 2. Disk (Async)
         let safeName = key.hashValueStr
         let fileURL = cacheDirectory.appendingPathComponent(safeName)
         
-        DispatchQueue.global(qos: .background).async {
-            // Prefer PNG for quality, or JPEG
-            if let data = image.pngData() {
-                try? data.write(to: fileURL)
+        if !fileManager.fileExists(atPath: fileURL.path) {
+            DispatchQueue.global(qos: .background).async {
+                if let data = image.pngData() {
+                    try? data.write(to: fileURL)
+                }
             }
         }
     }
     
-    // Legacy support for ChannelViewModel
-    static func prefetchAndWait(urlString: String, size: CGSize? = nil) async {
-        if shared.get(forKey: urlString) != nil { return }
+    // High-performance downsampling logic
+    private func downsample(imageAt imageURL: URL, to pointSize: CGSize, scale: CGFloat = UIScreen.main.scale) -> UIImage? {
+        let imageSourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let imageSource = CGImageSourceCreateWithURL(imageURL as CFURL, imageSourceOptions) else { return nil }
         
+        let maxDimensionInPixels = max(pointSize.width, pointSize.height) * scale
+        let downsampleOptions = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxDimensionInPixels
+        ] as CFDictionary
+        
+        guard let downsampledImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, downsampleOptions) else { return nil }
+        return UIImage(cgImage: downsampledImage)
+    }
+    
+    static func prefetchAndWait(urlString: String, size: CGSize? = nil) async {
+        if shared.hasImage(forKey: urlString) { return }
         guard let url = URL(string: urlString) else { return }
         
-        // Use a simple URLSession request
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             if let image = UIImage(data: data) {
-                shared.set(image, forKey: urlString)
+                shared.set(image, forKey: urlString, size: size)
             }
-        } catch {
-            // Ignore errors for prefetch
-        }
+        } catch {}
     }
     
-    // Instance method
-    func prefetch(urlString: String) {
-        Task { await ImageCache.prefetchAndWait(urlString: urlString) }
+    func prefetch(urlString: String, size: CGSize? = nil) {
+        Task { await ImageCache.prefetchAndWait(urlString: urlString, size: size) }
     }
 }
 
