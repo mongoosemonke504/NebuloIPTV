@@ -67,7 +67,15 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     @Published public var progress: Double = 0
     @Published public var availableSubtitles: [VideoSubtitle] = []
     @Published public var currentSubtitle: VideoSubtitle? = nil
-    @Published var subtitleOffset: Double = 0.0
+    @Published public var subtitleOffset: Double = 0.0 {
+        didSet {
+            if currentBackend == .vlc {
+                vlcMediaPlayer.currentVideoSubTitleDelay = Int(subtitleOffset * 1000)
+            } else if currentBackend == .ksplayer {
+                ksPlayerView.player.subtitleDelay = subtitleOffset
+            }
+        }
+    }
     @Published public var activeCaption: String? = nil
     @Published public var currentResolution: String = ""
     @Published public var activeBackendName: String = "None" // New property
@@ -413,9 +421,19 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             if availableSubtitles.isEmpty, let tracks = vlcMediaPlayer.videoSubTitlesNames as? [String] {
                 if let indexes = vlcMediaPlayer.videoSubTitlesIndexes as? [Int], tracks.count == indexes.count {
                     var subs: [VideoSubtitle] = []
-                    for (i, name) in tracks.enumerated() { subs.append(VideoSubtitle(id: "\(indexes[i])", name: name, index: indexes[i])) }
+                    for (i, name) in tracks.enumerated() { subs.append(VideoSubtitle(id: "vlc_\(indexes[i])", name: name, index: indexes[i])) }
                     self.availableSubtitles = subs
                 }
+            }
+        } else if currentBackend == .ksplayer {
+            // KSPlayer track detection
+            let tracks = ksPlayerView.player.tracks(type: KSPlayer.MediaPlayerTrackType.subtitle)
+            if !tracks.isEmpty && availableSubtitles.count != tracks.count {
+                var subs: [VideoSubtitle] = []
+                for (i, track) in tracks.enumerated() {
+                    subs.append(VideoSubtitle(id: "ks_\(i)", name: track.name, index: i))
+                }
+                self.availableSubtitles = subs
             }
         }
     }
@@ -460,7 +478,14 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     
     public func selectSubtitle(_ subtitle: VideoSubtitle) {
         currentSubtitle = subtitle
-         if currentBackend == .vlc { vlcMediaPlayer.currentVideoSubTitleIndex = Int32(subtitle.index) }
+        if currentBackend == .vlc {
+            vlcMediaPlayer.currentVideoSubTitleIndex = Int32(subtitle.index)
+        } else if currentBackend == .ksplayer {
+            let tracks = ksPlayerView.player.tracks(type: KSPlayer.MediaPlayerTrackType.subtitle)
+            if subtitle.index < tracks.count {
+                ksPlayerView.player.select(track: tracks[subtitle.index])
+            }
+        }
     }
     
     public func setQuality(_ quality: VideoQuality) { currentQuality = quality }
