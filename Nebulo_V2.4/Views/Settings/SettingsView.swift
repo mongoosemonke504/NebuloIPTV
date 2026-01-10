@@ -198,7 +198,7 @@ struct AppearanceCard: View {
                             .overlay(Capsule().stroke(Color.white.opacity(0.1), lineWidth: 1))
                             
                             Circle()
-                                .fill(accentColor)
+                                .fill(Color(white: glassShade).opacity(glassOpacity))
                                 .frame(width: 22, height: 22)
                                 .overlay(Circle().stroke(Color.white, lineWidth: 2))
                                 .shadow(color: .black.opacity(0.3), radius: 3, x: 0, y: 2)
