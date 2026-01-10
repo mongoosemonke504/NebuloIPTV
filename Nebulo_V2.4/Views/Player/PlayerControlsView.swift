@@ -5,6 +5,7 @@ struct PlayerControlsView: View {
     @ObservedObject var recordingManager = RecordingManager.shared
     let channel: StreamChannel
     var viewModel: ChannelViewModel?
+    var isRecordingPlayback: Bool = false
     
     @Binding var showControls: Bool
     @Binding var showSubtitlePanel: Bool
@@ -255,7 +256,56 @@ struct PlayerControlsView: View {
                                 
                                 // Program Progress Bar & Drag/Seek
                                 VStack(spacing: 4) {
-                                    if let prog = currentProg {
+                                    if isRecordingPlayback {
+                                        // Recorded Playback Scrubber (Relative Time)
+                                        let currentPos = draggingProgress ?? (playerManager.duration > 0 ? playerManager.currentTime / playerManager.duration : 0)
+                                        
+                                        VStack(spacing: 8) {
+                                            HStack {
+                                                Text(formatTime(draggingProgress != nil ? draggingProgress! * playerManager.duration : playerManager.currentTime))
+                                                    .font(.caption2.monospacedDigit())
+                                                    .foregroundColor(.white.opacity(0.7))
+                                                Spacer()
+                                                Text(formatTime(playerManager.duration))
+                                                    .font(.caption2.monospacedDigit())
+                                                    .foregroundColor(.white.opacity(0.7))
+                                            }
+                                            
+                                            GeometryReader { barGeo in
+                                                ZStack(alignment: .leading) {
+                                                    Capsule()
+                                                        .fill(Color.white.opacity(0.2))
+                                                        .frame(height: 6)
+                                                    
+                                                    Capsule()
+                                                        .fill(Color.white)
+                                                        .frame(width: barGeo.size.width * CGFloat(currentPos), height: 6)
+                                                    
+                                                    Circle()
+                                                        .fill(Color.white)
+                                                        .frame(width: 14, height: 14)
+                                                        .shadow(radius: 2)
+                                                        .offset(x: barGeo.size.width * CGFloat(currentPos) - 7)
+                                                }
+                                                .frame(height: 20)
+                                                .contentShape(Rectangle())
+                                                .gesture(
+                                                    DragGesture(minimumDistance: 0)
+                                                        .onChanged { value in
+                                                            isScrubbing = true
+                                                            draggingProgress = max(0, min(1, value.location.x / barGeo.size.width))
+                                                        }
+                                                        .onEnded { value in
+                                                            let dragPercent = max(0, min(1, value.location.x / barGeo.size.width))
+                                                            playerManager.seek(to: playerManager.duration * dragPercent)
+                                                            isScrubbing = false
+                                                            draggingProgress = nil
+                                                        }
+                                                )
+                                            }
+                                            .frame(height: 20)
+                                        }
+                                    } else if let prog = currentProg {
                                         let totalDuration = prog.stop.timeIntervalSince(prog.start)
                                         
                                         // Calculate where we are visually
