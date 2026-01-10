@@ -18,13 +18,101 @@ class ScoreViewModel: ObservableObject {
     private var fetchTask: Task<Void, Never>?
     
     init() {
+        loadCachedData()
         Task { await fetchScores() }
+    }
+    
+    private func loadCachedData() {
+        if let data = UserDefaults.standard.data(forKey: "cachedSportsData"),
+           let cached = try? JSONDecoder().decode([String: [ESPNEvent]].self, from: data) {
+            // Convert string keys back to SportType
+            var loadedGames: [SportType: [ESPNEvent]] = [:]
+            for (key, value) in cached {
+                if let sport = SportType(rawValue: key) {
+                    loadedGames[sport] = value
+                }
+            }
+            self.masterGames = loadedGames
+            self.filteredGames = loadedGames
+        }
+        
+        if let data = UserDefaults.standard.data(forKey: "cachedSoccerSections"),
+           let cached = try? JSONDecoder().decode([SoccerGameSection].self, from: data) {
+            self.masterSoccerSections = cached
+            self.soccerSections = cached
+        }
+        
+        // Preload images from cache immediately
+        Task { await self.preloadImages() }
+    }
+    
+    private func saveToCache() {
+        // Convert SportType keys to String for Codable
+        var cacheableGames: [String: [ESPNEvent]] = [:]
+        for (key, value) in masterGames {
+            cacheableGames[key.rawValue] = value
+        }
+        
+        if let encoded = try? JSONEncoder().encode(cacheableGames) {
+            UserDefaults.standard.set(encoded, forKey: "cachedSportsData")
+        }
+        
+        if let encoded = try? JSONEncoder().encode(masterSoccerSections) {
+            UserDefaults.standard.set(encoded, forKey: "cachedSoccerSections")
+        }
+    }
+    
+    private func preloadImages() async {
+        print("🚀 [ScoreViewModel] Starting sports image preload...")
+        // Collect all unique URLs
+        var urls = Set<String>()
+        
+        let games = masterGames.values.flatMap { $0 }
+        for game in games {
+            if let url = game.homeCompetitor?.team?.logo ?? game.homeCompetitor?.athlete?.flag?.href ?? game.homeCompetitor?.athlete?.headshot, !url.isEmpty {
+                urls.insert(url)
+            }
+            if let url = game.awayCompetitor?.team?.logo ?? game.awayCompetitor?.athlete?.flag?.href ?? game.awayCompetitor?.athlete?.headshot, !url.isEmpty {
+                urls.insert(url)
+            }
+        }
+        
+        // Also soccer sections
+        let soccerGames = masterSoccerSections.flatMap { $0.games }
+        for game in soccerGames {
+            if let url = game.homeCompetitor?.team?.logo ?? game.homeCompetitor?.athlete?.flag?.href ?? game.homeCompetitor?.athlete?.headshot, !url.isEmpty {
+                urls.insert(url)
+            }
+            if let url = game.awayCompetitor?.team?.logo ?? game.awayCompetitor?.athlete?.flag?.href ?? game.awayCompetitor?.athlete?.headshot, !url.isEmpty {
+                urls.insert(url)
+            }
+        }
+        
+        await withTaskGroup(of: Void.self) { group in
+            var active = 0
+            let limit = 50
+            
+            for url in urls {
+                // FAST CHECK: Skip if already on disk
+                if ImageCache.shared.hasImage(forKey: url) { continue }
+                
+                if active >= limit { await group.next(); active -= 1 }
+                group.addTask {
+                    await ImageCache.prefetchAndWait(urlString: url)
+                }
+                active += 1
+            }
+        }
+        print("✅ [ScoreViewModel] Sports image preload complete.")
     }
     
     func fetchScores(forceRefresh: Bool = false, silent: Bool = false) async {
         if !silent && !forceRefresh {
+            // If we have data (from cache or previous fetch) and it's fresh enough (e.g., 5 mins), skip loading
+            if !masterGames.isEmpty {
+                 if Date().timeIntervalSince(lastFetchTime) < 300 { return }
+            }
             if isLoading { return }
-            if Date().timeIntervalSince(lastFetchTime) < 30 { return }
         }
         
         fetchTask?.cancel()
@@ -79,8 +167,15 @@ class ScoreViewModel: ObservableObject {
                 }
                 
                 await MainActor.run {
-                    self.isLoading = false
+                    self.saveToCache()
                     self.lastFetchTime = Date()
+                }
+                
+                // Wait for images to load before hiding spinner
+                await self.preloadImages()
+                
+                await MainActor.run {
+                    self.isLoading = false
                 }
                 
             } catch {
@@ -206,8 +301,14 @@ class ScoreViewModel: ObservableObject {
     }
 }
 
-struct SoccerGameSection: Identifiable, Sendable {
-    let id = UUID()
+struct SoccerGameSection: Identifiable, Sendable, Codable {
+    let id: UUID
     let league: String
     let games: [ESPNEvent]
+    
+    init(id: UUID = UUID(), league: String, games: [ESPNEvent]) {
+        self.id = id
+        self.league = league
+        self.games = games
+    }
 }

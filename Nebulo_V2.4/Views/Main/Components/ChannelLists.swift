@@ -103,6 +103,7 @@ struct HorizontalPreviewList: View {
                                         .lineLimit(1)
                                 }
                             }
+                            .frame(width: 192, alignment: .leading) // Constrain text width to image width
                             .padding(.horizontal, 4)
                         }
                     }.buttonStyle(.plain)

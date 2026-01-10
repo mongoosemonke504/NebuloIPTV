@@ -50,14 +50,12 @@ class ChannelViewModel: ObservableObject {
     // Manual Sort Order
     @Published var manualChannelOrder: [Int] = []
     
-    // Shared ScoreViewModel for pre-loading
-    @Published var scoreViewModel = ScoreViewModel()
-    
     // EPG State
     @Published var epgData: [String: [EPGProgram]] = [:]
     @Published var currentTime = Date()
     @Published var epgProgress: Double = 0
     @Published var isUpdatingEPG: Bool = false
+    @Published var loadingStatus: String = "Loading..." // New status property
     
     private var lastEPGUpdateTime: Date? {
         get {
@@ -682,10 +680,21 @@ class ChannelViewModel: ObservableObject {
         self.settingsPrefix = prefixKey.isEmpty ? "" : prefixKey + "_"
         self.loadSettings()
         
-        if channels.isEmpty { isLoading = true; errorMessage = nil }
+        // Show loading state if not silent (force refresh) or if empty
+        if !silent || channels.isEmpty { 
+            await MainActor.run { 
+                isLoading = true
+                loadingStatus = "Connecting to Server..."
+                errorMessage = nil 
+            }
+        }
+        
         var safeURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
         if !safeURL.lowercased().hasPrefix("http") { safeURL = "http://" + safeURL }
-        guard let baseURL = URL(string: safeURL) else { isLoading = false; return }
+        guard let baseURL = URL(string: safeURL) else { 
+            await MainActor.run { isLoading = false }
+            return 
+        }
         
         let prefix = self.settingsPrefix
         
@@ -694,6 +703,7 @@ class ChannelViewModel: ObservableObject {
                 await withThrowingTaskGroup(of: Void.self) { group in
                     group.addTask { [weak self, baseURL, user, pass, prefix] in
                         guard let self = self else { return }
+                        await MainActor.run { self.loadingStatus = "Fetching Categories..." }
                         let catUrl = try await ChannelViewModel.buildApiUrl(base: baseURL, user: user, pass: pass, action: "get_live_categories")
                         let (data, _) = try await URLSession.shared.data(from: catUrl)
                         let cats = try JSONDecoder().decode([StreamCategory].self, from: data)
@@ -702,6 +712,7 @@ class ChannelViewModel: ObservableObject {
                     }
                     group.addTask { [weak self, baseURL, user, pass, safeURL, prefix] in
                         guard let self = self else { return }
+                        await MainActor.run { self.loadingStatus = "Fetching Channels..." }
                         let streamUrl = try await ChannelViewModel.buildApiUrl(base: baseURL, user: user, pass: pass, action: "get_live_streams")
                         let (data, _) = try await URLSession.shared.data(from: streamUrl)
                         let raw = try JSONDecoder().decode([StreamChannel].self, from: data)
@@ -709,16 +720,16 @@ class ChannelViewModel: ObservableObject {
                         await MainActor.run { [weak self] in 
                             self?.channels = processed; 
                             self?.categorizeSports()
-                            // Trigger background preload
-                            self?.preloadImages()
                         }
+                        // Await image preloading to ensure cache is hot
+                        await self.preloadImages()
+                        await MainActor.run { self.loadingStatus = "Updating TV Guide..." }
                         await self.updateEPG(baseURL: baseURL, user: user, pass: pass, force: false, silent: silent)
-                        // Pre-load scores
-                        await self.scoreViewModel.fetchScores()
                     }
                 }
             } else if type == .mac, let macAddress = mac {
                 // Stalker / MAC Portal Logic
+                await MainActor.run { self.loadingStatus = "Authenticating Portal..." }
                 let (channels, categories, token) = try await ChannelViewModel.fetchStalkerData(portalURL: baseURL, mac: macAddress, prefix: prefix)
                 await MainActor.run {
                     self.channels = channels
@@ -727,53 +738,70 @@ class ChannelViewModel: ObservableObject {
                     self.stalkerPortalURL = baseURL
                     self.categorizeSports()
                 }
-                await self.scoreViewModel.fetchScores()
+                await self.preloadImages()
             } else {
+                await MainActor.run { self.loadingStatus = "Downloading Playlist..." }
                 let (data, _) = try await URLSession.shared.data(from: baseURL)
                 if let content = String(data: data, encoding: .utf8) {
+                    await MainActor.run { self.loadingStatus = "Parsing Channels..." }
                     let (pChannels, pCategories, epgUrl) = await ChannelViewModel.parseM3U(content: content)
                     self.channels = pChannels; self.categories = pCategories; self.categorizeSports()
-                    // Pre-load scores
-                    await self.scoreViewModel.fetchScores()
+                    await self.preloadImages()
                     if let eURL = epgUrl, let xmlURL = URL(string: eURL) {
+                        await MainActor.run { self.loadingStatus = "Updating TV Guide..." }
                         await self.updateEPGFromURL(xmlURL, silent: silent)
                     }
                 }
             }
-        } catch { self.errorMessage = "Error: " + error.localizedDescription }
-        self.isLoading = false
+        } catch { 
+            await MainActor.run { self.errorMessage = "Error: " + error.localizedDescription }
+        }
+        await MainActor.run { self.isLoading = false }
     }
     
-    func preloadImages() {
-        // Only run if we haven't done a full preload recently (e.g. once per app install/clear)
-        // Or if the user wants "first time the app launches". We can use a flag.
-        if UserDefaults.standard.bool(forKey: settingsPrefix + "hasDoneInitialPreload") { return }
+    func preloadImages() async {
+        await MainActor.run { self.loadingStatus = "Smart Caching Images..." }
         
+        // Capture data on MainActor to avoid isolation issues
         let allChannels = self.channels
-        Task.detached(priority: .background) { [weak self] in
-            guard let self = self else { return }
-            print("🚀 [ChannelViewModel] Starting background image preload...")
+        let favorites = self.favoriteIDs
+        let recents = self.recentIDs
+        
+        // Build Priority Set (Smart Cache Strategy)
+        var targetIDs = Set<Int>()
+        
+        // 1. Favorites & Recents (High Priority)
+        targetIDs.formUnion(favorites)
+        targetIDs.formUnion(recents)
+        
+        // 2. Top 100 Channels (Buffer for initial lists)
+        targetIDs.formUnion(allChannels.prefix(100).map { $0.id })
+        
+        print("🚀 [ChannelViewModel] Starting Smart Cache for \(targetIDs.count) priority channels...")
+        
+        await withTaskGroup(of: Void.self) { group in
+            var active = 0
+            let limit = 50 
             
-            await withTaskGroup(of: Void.self) { group in
-                var active = 0
-                let limit = 12 // Concurrent download limit
+            for channel in allChannels {
+                // FILTER: Only process priority channels
+                if !targetIDs.contains(channel.id) { continue }
                 
-                for channel in allChannels {
-                    if let icon = channel.icon, !icon.isEmpty {
-                        if active >= limit { await group.next(); active -= 1 }
-                        
-                        group.addTask {
-                            // Standard size for lists
-                            await ImageCache.prefetchAndWait(urlString: icon, size: CGSize(width: 50, height: 50))
-                        }
-                        active += 1
+                if let icon = channel.icon, !icon.isEmpty {
+                    // FAST CHECK: Skip if already on disk
+                    if ImageCache.shared.hasImage(forKey: icon) { continue }
+                    
+                    if active >= limit { await group.next(); active -= 1 }
+                    
+                    group.addTask {
+                        await ImageCache.prefetchAndWait(urlString: icon, size: CGSize(width: 50, height: 50))
                     }
+                    active += 1
                 }
             }
-            
-            print("✅ [ChannelViewModel] Background image preload complete.")
-            await UserDefaults.standard.set(true, forKey: self.settingsPrefix + "hasDoneInitialPreload")
         }
+        
+        print("✅ [ChannelViewModel] Smart Cache complete.")
     }
 
     func updateEPG(baseURL: URL, user: String, pass: String, force: Bool = false, silent: Bool = false) async {

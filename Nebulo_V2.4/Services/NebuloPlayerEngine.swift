@@ -385,15 +385,38 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     
     private func applyAspectRatio(_ ratio: VideoAspectRatio) {
         if currentBackend == .vlc {
-            let ratioStr: String? = {
-                switch ratio {
-                case .sixteenNine: return "16:9"
-                case .fourThree: return "4:3"
-                default: return nil
+            // Reset state
+            vlcMediaPlayer.scaleFactor = 0
+            vlcMediaPlayer.videoCropGeometry = nil
+            
+            var ratioStr: String? = nil
+            
+            switch ratio {
+            case .sixteenNine: ratioStr = "16:9"
+            case .fourThree: ratioStr = "4:3"
+            case .fill:
+                // Stretch to Fill Screen
+                // Must access bounds on Main Thread
+                if Thread.isMainThread {
+                    let w = Int(renderView.bounds.width)
+                    let h = Int(renderView.bounds.height)
+                    if h > 0 { ratioStr = "\(w):\(h)" }
+                } else {
+                    DispatchQueue.main.sync {
+                        let w = Int(renderView.bounds.width)
+                        let h = Int(renderView.bounds.height)
+                        if h > 0 { ratioStr = "\(w):\(h)" }
+                    }
                 }
-            }()
-            if let s = ratioStr { vlcMediaPlayer.videoAspectRatio = UnsafeMutablePointer<Int8>(mutating: (s as NSString).utf8String) } 
-             else { vlcMediaPlayer.videoAspectRatio = nil }
+            case .fit, .default:
+                ratioStr = nil
+            }
+            
+            if let s = ratioStr {
+                vlcMediaPlayer.videoAspectRatio = UnsafeMutablePointer<Int8>(mutating: (s as NSString).utf8String)
+            } else {
+                vlcMediaPlayer.videoAspectRatio = nil
+            }
         } else if currentBackend == .ksplayer {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self, self.ksPlayerView.superview == self.renderView else { return }
