@@ -71,6 +71,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     @Published public var activeCaption: String? = nil
     @Published public var currentResolution: String = ""
     @Published public var activeBackendName: String = "None" // New property
+    @Published public var playbackFailed: Bool = false
     public let renderView = UIView()
     public let useNativeBridge = false
     
@@ -93,6 +94,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     private var pendingSeekWorkItem: DispatchWorkItem?
     private var playerConstraints: [NSLayoutConstraint] = []
     private var userPaused = false
+    private var triedFallback = false
     
     public private(set) var currentURL: URL?
     public var onRequestTimeshiftURL: ((Date) async -> URL?)?
@@ -225,6 +227,8 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         stop()
         self.isBuffering = true
         self.userPaused = false
+        self.playbackFailed = false
+        self.triedFallback = false
         if url.isFileURL { playVLC(url: url); return }
         if attemptKSPlayerPlayback(url: url) { currentBackend = .ksplayer; return }
         playVLC(url: url)
@@ -379,6 +383,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     
     private func handleKSPlayerError() {
          guard currentBackend == .ksplayer, let url = currentURL else { return }
+        triedFallback = true
         ksPlayerView.pause(); ksPlayerView.removeFromSuperview(); playVLC(url: url)
     }
     
@@ -597,6 +602,9 @@ extension NebuloPlayerEngine: VLCMediaPlayerDelegate {
         case .error:
             self.isBuffering = false
             print("❌ [NebuloEngine] VLC Error")
+            if triedFallback || currentURL?.isFileURL == true {
+                self.playbackFailed = true
+            }
         case .ended, .stopped:
             self.isPlaying = false
         default:

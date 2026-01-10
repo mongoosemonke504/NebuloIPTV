@@ -74,9 +74,11 @@ struct PlayerControlsView: View {
                         HStack(spacing: 60) {
                             
                             Button(action: {
-                                togglePlay()
+                                if !playerManager.playbackFailed {
+                                    togglePlay()
+                                }
                             }) {
-                                Image(systemName: playerManager.isPlaying ? "pause.fill" : "play.fill")
+                                Image(systemName: playerManager.playbackFailed ? "xmark" : (playerManager.isPlaying ? "pause.fill" : "play.fill"))
                                     .font(.system(size: 34, weight: .bold))
                                     .foregroundColor(.white)
                                     .frame(width: 82, height: 82)
@@ -84,7 +86,7 @@ struct PlayerControlsView: View {
                             }
                             .buttonStyle(.plain)
                             .opacity(playerManager.isBuffering ? 0 : 1)
-                            .disabled(playerManager.isBuffering)
+                            .disabled(playerManager.isBuffering || playerManager.playbackFailed)
                         }
                         .allowsHitTesting(!playerManager.isBuffering)
                         
