@@ -179,11 +179,23 @@ struct AppearanceCard: View {
                     // Custom Opacity Slider
                     GeometryReader { geo in
                         ZStack(alignment: .leading) {
-                            // Track with transparency-to-accent gradient
-                            LinearGradient(colors: [accentColor.opacity(0), accentColor], startPoint: .leading, endPoint: .trailing)
-                                .frame(height: 8)
+                            // Track with Checkerboard to White gradient
+                            ZStack {
+                                TransparencyCheckerboardView()
+                                    .clipShape(Capsule())
+                                
+                                LinearGradient(
+                                    stops: [
+                                        .init(color: .white.opacity(0), location: 0),
+                                        .init(color: .white, location: 1)
+                                    ],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
                                 .clipShape(Capsule())
-                                .overlay(Capsule().stroke(Color.white.opacity(0.1), lineWidth: 1))
+                            }
+                            .frame(height: 8)
+                            .overlay(Capsule().stroke(Color.white.opacity(0.1), lineWidth: 1))
                             
                             Circle()
                                 .fill(accentColor)
@@ -794,6 +806,34 @@ struct FilePicker: UIViewControllerRepresentable {
                 }
             }
             parent.presentationMode.wrappedValue.dismiss()
+        }
+    }
+}
+
+struct TransparencyCheckerboardView: View {
+    var body: some View {
+        GeometryReader { geo in
+            let size: CGFloat = 4
+            let cols = Int(geo.size.width / size) + 1
+            let rows = Int(geo.size.height / size) + 1
+            
+            Canvas { context, _ in
+                for row in 0..<rows {
+                    for col in 0..<cols {
+                        if (row + col) % 2 == 0 {
+                            context.fill(
+                                Path(CGRect(x: CGFloat(col) * size, y: CGFloat(row) * size, width: size, height: size)),
+                                with: .color(.white)
+                            )
+                        } else {
+                            context.fill(
+                                Path(CGRect(x: CGFloat(col) * size, y: CGFloat(row) * size, width: size, height: size)),
+                                with: .color(.gray.opacity(0.5))
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
