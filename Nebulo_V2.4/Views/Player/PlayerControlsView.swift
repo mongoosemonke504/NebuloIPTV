@@ -212,10 +212,10 @@ struct PlayerControlsView: View {
                             Spacer()
                             
                             // MARK: - Bottom Bar
-                            VStack(spacing: 16) {
+                            VStack(spacing: 8) {
                                 
                                 // Program Meta (EPG Only)
-                                VStack(alignment: .leading, spacing: 4) {
+                                VStack(alignment: .leading, spacing: 2) {
                                     HStack(spacing: 8) {
                                         Text(currentProg?.title ?? "No Information")
                                             .font(.subheadline.bold())
@@ -224,20 +224,20 @@ struct PlayerControlsView: View {
                                         
                                         // Player Backend Indicator
                                         Text(playerManager.activeBackendName)
-                                            .font(.caption2.bold())
+                                            .font(.system(size: 9, weight: .black))
                                             .foregroundColor(.white.opacity(0.6))
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 2)
-                                            .background(Color.white.opacity(0.1))
-                                            .clipShape(Capsule())
+                                            .padding(.horizontal, 5)
+                                            .padding(.vertical, 1)
+                                            .background(Color.white.opacity(0.12))
+                                            .clipShape(RoundedRectangle(cornerRadius: 4))
                                         
                                         Spacer()
                                     }
                                     
                                     if let desc = currentProg?.description, !desc.isEmpty {
                                         Text(desc)
-                                            .font(.caption)
-                                            .foregroundColor(.white.opacity(0.8))
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.white.opacity(0.7))
                                             .lineLimit(isDescriptionExpanded ? nil : 1)
                                             .frame(width: geo.size.width - 40, alignment: .leading)
                                             .id(isDescriptionExpanded)
@@ -251,9 +251,10 @@ struct PlayerControlsView: View {
                                     }
                                 }
                                 .shadow(radius: 2)
+                                .padding(.bottom, -4) // Pull closer to scrubber
                                 
                                 // Program Progress Bar & Drag/Seek
-                                VStack(spacing: 8) {
+                                VStack(spacing: 4) {
                                     if let prog = currentProg {
                                         let totalDuration = prog.stop.timeIntervalSince(prog.start)
                                         
