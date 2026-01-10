@@ -72,7 +72,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             if currentBackend == .vlc {
                 vlcMediaPlayer.currentVideoSubTitleDelay = Int(subtitleOffset * 1000)
             } else if currentBackend == .ksplayer {
-                ksPlayerView.player.subtitleDelay = subtitleOffset
+                // ksPlayerView.player.subtitleDelay = subtitleOffset
             }
         }
     }
@@ -427,7 +427,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             }
         } else if currentBackend == .ksplayer {
             // KSPlayer track detection
-            let tracks = ksPlayerView.player.tracks(type: KSPlayer.MediaPlayerTrackType.subtitle)
+            let tracks = ksPlayerView.player.tracks(type: .subtitle)
             if !tracks.isEmpty && availableSubtitles.count != tracks.count {
                 var subs: [VideoSubtitle] = []
                 for (i, track) in tracks.enumerated() {
@@ -481,7 +481,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         if currentBackend == .vlc {
             vlcMediaPlayer.currentVideoSubTitleIndex = Int32(subtitle.index)
         } else if currentBackend == .ksplayer {
-            let tracks = ksPlayerView.player.tracks(type: KSPlayer.MediaPlayerTrackType.subtitle)
+            let tracks = ksPlayerView.player.tracks(type: .subtitle)
             if subtitle.index < tracks.count {
                 ksPlayerView.player.select(track: tracks[subtitle.index])
             }
