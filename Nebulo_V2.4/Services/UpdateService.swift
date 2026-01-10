@@ -10,6 +10,7 @@ class UpdateService: ObservableObject {
     @Published var currentVersion: String = "V2.2(13)"
     @Published var checkingForUpdate: Bool = false
     @Published var isUpdateAvailable: Bool = false
+    @Published var showUpToDate: Bool = false
     @Published var latestRelease: UpdateRelease? = nil
     @Published var errorMessage: String? = nil
     
@@ -24,6 +25,7 @@ class UpdateService: ObservableObject {
         
         await MainActor.run {
             checkingForUpdate = true
+            showUpToDate = false
             errorMessage = nil
         }
         
@@ -37,8 +39,11 @@ class UpdateService: ObservableObject {
             checkingForUpdate = false
             
             if manual {
-                // If manual check, we can show a "No updates found" message or similar via a temporary state if needed
-                // but the UI handles the absence of isUpdateAvailable nicely.
+                showUpToDate = true
+                // Auto-hide after 3 seconds
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                    self.showUpToDate = false
+                }
             }
         }
     }

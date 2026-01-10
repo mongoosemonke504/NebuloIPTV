@@ -631,9 +631,10 @@ struct UpdatesCard: View {
                         Task { await updateService.checkForUpdates(manual: true) }
                     }) {
                         SettingsRow(
-                            icon: "arrow.triangle.2.circlepath",
-                            title: "Check for Updates",
+                            icon: updateService.showUpToDate ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath",
+                            title: updateService.showUpToDate ? "System Up to Date" : "Check for Updates",
                             subtitle: updateService.errorMessage,
+                            iconColor: updateService.showUpToDate ? .green : .white,
                             showChevron: false
                         )
                     }
