@@ -265,6 +265,8 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         ksPlayerView.onFinish = { [weak self] error in if error != nil { self?.handleKSPlayerError() } }
         KSOptions.isAutoPlay = true
         KSOptions.isSecondOpen = false
+        KSOptions.maxBufferDuration = 30.0 // 30s buffer for stability
+        KSOptions.preferredForwardBufferDuration = 5.0 // Buffer at least 5s before start
         ksPlayerView.allowNativeControls = useNativeBridge
     }
     
@@ -443,8 +445,8 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         if ksPlayerRetryCount < maxKSPlayerRetries {
             ksPlayerRetryCount += 1
             print("⚠️ [NebuloEngine] KSPlayer error, retrying (\(ksPlayerRetryCount)/\(maxKSPlayerRetries))...")
-            // Try to play again
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            // Increased delay to 2.0s for better stability/recovery
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
                 guard let self = self, self.currentBackend == .ksplayer else { return }
                 self.ksPlayerView.play()
             }
