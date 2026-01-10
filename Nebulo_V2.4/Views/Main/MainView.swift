@@ -224,6 +224,10 @@ extension MainView {
                         selectedChannel = nil
                         showQuickSwitcher = false 
                     }
+                    // Stop engine if NOT going to mini player
+                    if viewModel.miniPlayerChannel == nil {
+                        playerManager.stop()
+                    }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { 
                         viewModel.scrollRestoreTrigger = UUID() 
                     } 
