@@ -95,6 +95,8 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     private var playerConstraints: [NSLayoutConstraint] = []
     private var userPaused = false
     private var triedFallback = false
+    private var ksPlayerRetryCount = 0
+    private let maxKSPlayerRetries = 3
     
     public private(set) var currentURL: URL?
     public var onRequestTimeshiftURL: ((Date) async -> URL?)?
@@ -275,6 +277,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         setupAudioSession() // Re-assert session on every play
         if let current = currentURL, current == url, (isPlaying || isBuffering) { return }
         self.currentURL = url
+        self.ksPlayerRetryCount = 0 // Reset on new URL
         stop()
         self.isBuffering = true
         self.userPaused = false
@@ -426,6 +429,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             case .readyToPlay: 
                 self.isBuffering = false
                 self.isPlaying = true
+                self.ksPlayerRetryCount = 0 // Reset on success
                 // Re-apply aspect ratio to ensure layer properties take effect
                 self.applyAspectRatio(self.currentAspectRatio)
             default: self.isBuffering = false; self.isPlaying = true
@@ -434,9 +438,22 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     }
     
     private func handleKSPlayerError() {
-         guard currentBackend == .ksplayer, let url = currentURL else { return }
-        triedFallback = true
-        ksPlayerView.pause(); ksPlayerView.removeFromSuperview(); playVLC(url: url)
+        guard currentBackend == .ksplayer, let url = currentURL else { return }
+        
+        if ksPlayerRetryCount < maxKSPlayerRetries {
+            ksPlayerRetryCount += 1
+            print("⚠️ [NebuloEngine] KSPlayer error, retrying (\(ksPlayerRetryCount)/\(maxKSPlayerRetries))...")
+            // Try to play again
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                guard let self = self, self.currentBackend == .ksplayer else { return }
+                self.ksPlayerView.play()
+            }
+        } else {
+            print("❌ [NebuloEngine] KSPlayer failed after \(maxKSPlayerRetries) retries, falling back to VLC.")
+            triedFallback = true
+            ksPlayerRetryCount = 0
+            ksPlayerView.pause(); ksPlayerView.removeFromSuperview(); playVLC(url: url)
+        }
     }
     
     public func selectSubtitle(_ subtitle: VideoSubtitle) {
