@@ -171,9 +171,11 @@ struct CachedAsyncImage: View {
                 }
             }
         }
-        .if(size != nil) { view in
-            view.frame(width: size!.width, height: size!.height)
-        }
+        content
+            .resizable()
+            .applyIf(size != nil) { view in
+                view.frame(width: size!.width, height: size!.height)
+            }
         .onAppear {
             loader.load()
         }

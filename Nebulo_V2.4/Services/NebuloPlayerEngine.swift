@@ -158,20 +158,39 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     
     private func setupRemoteTransportControls() {
         let commandCenter = MPRemoteCommandCenter.shared()
-        commandCenter.playCommand.addTarget { [weak self] _ in self?.resume(); return .success }
-        commandCenter.pauseCommand.addTarget { [weak self] _ in self?.pause(); return .success }
+        
+        // Play
+        commandCenter.playCommand.isEnabled = true
+        commandCenter.playCommand.addTarget { [weak self] _ in 
+            self?.resume()
+            return .success 
+        }
+        
+        // Pause
+        commandCenter.pauseCommand.isEnabled = true
+        commandCenter.pauseCommand.addTarget { [weak self] _ in 
+            self?.pause()
+            return .success 
+        }
+        
+        // Toggle
+        commandCenter.togglePlayPauseCommand.isEnabled = true
         commandCenter.togglePlayPauseCommand.addTarget { [weak self] _ in
             guard let self = self else { return .commandFailed }
             if self.isPlaying { self.pause() } else { self.resume() }
             return .success
         }
         
+        // Backward
+        commandCenter.seekBackwardCommand.isEnabled = true
         commandCenter.seekBackwardCommand.addTarget { [weak self] _ in
             guard let self = self else { return .commandFailed }
             self.seek(to: self.currentTime - 15)
             return .success
         }
         
+        // Forward
+        commandCenter.seekForwardCommand.isEnabled = true
         commandCenter.seekForwardCommand.addTarget { [weak self] _ in
             guard let self = self else { return .commandFailed }
             self.seek(to: self.currentTime + 15)
@@ -180,9 +199,14 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     }
      
     public func updateNowPlayingMetadata(title: String, subtitle: String?, imageURL: String?) {
-        var nowPlayingInfo = [String: Any]()
+        var nowPlayingInfo = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [String: Any]()
         nowPlayingInfo[MPMediaItemPropertyTitle] = title
-        if let sub = subtitle { nowPlayingInfo[MPMediaItemPropertyArtist] = sub } 
+        if let sub = subtitle { 
+            nowPlayingInfo[MPMediaItemPropertyArtist] = sub 
+        } else {
+            nowPlayingInfo.removeValue(forKey: MPMediaItemPropertyArtist)
+        }
+        
         if let urlStr = imageURL, let url = URL(string: urlStr) {
             URLSession.shared.dataTask(with: url) { data, _, _ in
                 if let data = data, let image = UIImage(data: data) {
@@ -195,21 +219,25 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                 }
             }.resume()
         }
+        
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
         updatePlaybackState()
     }
     
     private func updatePlaybackState() {
         var info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [String: Any]()
+        
         info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
-        info[MPMediaItemPropertyPlaybackDuration] = duration
         info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
+        info[MPNowPlayingInfoPropertyMediaType] = MPNowPlayingInfoMediaType.video.rawValue
         
         // If duration is 0 or very large, it's likely a live stream
         if duration <= 0 || duration > 86400 {
             info[MPNowPlayingInfoPropertyIsLiveStream] = true
+            info[MPMediaItemPropertyPlaybackDuration] = 0
         } else {
             info[MPNowPlayingInfoPropertyIsLiveStream] = false
+            info[MPMediaItemPropertyPlaybackDuration] = duration
         }
         
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
@@ -239,11 +267,12 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     }
     
     private func setupAudioSession() {
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [.allowAirPlay, .allowBluetoothA2DP, .mixWithOthers])
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [.allowAirPlay, .allowBluetoothA2DP])
         try? AVAudioSession.sharedInstance().setActive(true)
     }
     
     public func play(url: URL) {
+        setupAudioSession() // Re-assert session on every play
         if let current = currentURL, current == url, (isPlaying || isBuffering) { return }
         self.currentURL = url
         stop()

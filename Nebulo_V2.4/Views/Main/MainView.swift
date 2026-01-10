@@ -138,7 +138,7 @@ struct MainViewModifiers: ViewModifier {
         let searchText = Binding(get: { viewModel.searchText }, set: { viewModel.searchText = $0 })
 
         content
-            .if(!showMultiView) { view in
+            .applyIf(!showMultiView) { view in
                 view.searchable(text: searchText, prompt: "Search").toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         HStack {

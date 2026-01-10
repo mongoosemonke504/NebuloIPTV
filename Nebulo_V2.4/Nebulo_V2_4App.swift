@@ -24,6 +24,9 @@ struct Nebulo_V2_4App: App {
             ContentView(viewModel: channelViewModel, scoreViewModel: scoreViewModel)
                 .environmentObject(channelViewModel)
                 .environmentObject(scoreViewModel)
+                .onAppear {
+                    UIApplication.shared.beginReceivingRemoteControlEvents()
+                }
                 .onReceive(timer) { _ in
                     // Periodically refresh scores
                     Task {
