@@ -72,6 +72,17 @@ struct PlayerControlsView: View {
                         // MARK: - Center Controls (Play Button) - Layer 1
                         
                         HStack(spacing: 60) {
+                            Button(action: {
+                                seekBackward()
+                            }) {
+                                Image(systemName: "gobackward.15")
+                                    .font(.system(size: 30, weight: .bold))
+                                    .foregroundColor(.white)
+                                    .frame(width: 64, height: 64)
+                                    .modifier(GlassEffect(cornerRadius: 32, isSelected: true, accentColor: nil))
+                            }
+                            .buttonStyle(.plain)
+                            .opacity(showControls ? 1 : 0)
                             
                             Button(action: {
                                 if !playerManager.playbackFailed {
@@ -85,10 +96,22 @@ struct PlayerControlsView: View {
                                     .modifier(GlassEffect(cornerRadius: 42, isSelected: true, accentColor: nil))
                             }
                             .buttonStyle(.plain)
-                            .opacity(playerManager.isBuffering ? 0 : 1)
+                            .opacity((playerManager.isBuffering && !playerManager.playbackFailed) ? 0.3 : 1)
                             .disabled(playerManager.isBuffering || playerManager.playbackFailed)
+                            
+                            Button(action: {
+                                seekForward()
+                            }) {
+                                Image(systemName: "goforward.15")
+                                    .font(.system(size: 30, weight: .bold))
+                                    .foregroundColor(.white)
+                                    .frame(width: 64, height: 64)
+                                    .modifier(GlassEffect(cornerRadius: 32, isSelected: true, accentColor: nil))
+                            }
+                            .buttonStyle(.plain)
+                            .opacity(showControls ? 1 : 0)
                         }
-                        .allowsHitTesting(!playerManager.isBuffering)
+                        .allowsHitTesting(true)
                         
                         // MARK: - Top & Bottom Bars - Layer 2
                         
