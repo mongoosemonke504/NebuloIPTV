@@ -292,10 +292,15 @@ struct CustomVideoPlayerView: SwiftUI.View {
         .offset(y: offset.height)
         .gesture(DragGesture().onChanged { val in
             if showQuickSwitcher { return }
+            // Safe area for Notification Center (ignore swipes starting at the very top)
+            if val.startLocation.y < 60 { return }
+            
             if val.translation.height > 0 && abs(val.translation.height) > abs(val.translation.width) { offset = val.translation }
         }
         .onEnded { val in 
             if showQuickSwitcher { return }
+            if val.startLocation.y < 60 { return }
+            
             if val.translation.height > 100 && abs(val.translation.height) > abs(val.translation.width) { 
                 // Instead of full dismissal, trigger the mini-player
                 withAnimation(.easeInOut(duration: 0.35)) {
