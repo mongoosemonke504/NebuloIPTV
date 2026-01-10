@@ -177,12 +177,6 @@ class ScoreViewModel: ObservableObject {
                 await MainActor.run {
                     self.isLoading = false
                 }
-                
-            } catch {
-                await MainActor.run {
-                    self.isLoading = false
-                    self.errorMessage = error.localizedDescription
-                }
             }
         }
     }

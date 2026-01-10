@@ -584,8 +584,9 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
 
 // MARK: - VLC Delegate
 extension NebuloPlayerEngine: VLCMediaPlayerDelegate {
-    public func mediaPlayerStateChanged(_ aNotification: Notification?) {
-        guard let notification = aNotification, let player = notification.object as? VLCMediaPlayer, currentBackend == .vlc else { return }
+    public func mediaPlayerStateChanged(_ aNotification: Notification) {
+        guard let player = aNotification.object as? VLCMediaPlayer,
+              currentBackend == .vlc else { return }
         
         switch player.state {
         case .buffering:
