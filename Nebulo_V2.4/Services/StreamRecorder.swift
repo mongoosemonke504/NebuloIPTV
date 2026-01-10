@@ -47,9 +47,14 @@ class StreamRecorder: NSObject {
         
         task = Task {
             do {
-                // 1. Peek at the content to decide strategy
-                let (data, response) = try await urlSession.data(from: streamURL)
-                if let content = String(data: data, encoding: .utf8), content.contains("#EXTM3U") {
+                // 1. Peek at the content type or first few bytes to decide strategy
+                var request = URLRequest(url: streamURL)
+                request.setValue("Nebulo/2.4 (iOS)", forHTTPHeaderField: "User-Agent")
+                
+                let (data, response) = try await urlSession.data(for: request)
+                let contentString = String(data: data.prefix(1024), encoding: .utf8) ?? ""
+                
+                if contentString.contains("#EXTM3U") {
                     // Strategy: HLS Polling
                     print("ℹ️ [StreamRecorder] Strategy: HLS Manifest")
                     try await processManifest(initialData: data, response: response)
@@ -62,6 +67,10 @@ class StreamRecorder: NSObject {
                 } else {
                     // Strategy: Continuous Download (TS/Direct)
                     print("ℹ️ [StreamRecorder] Strategy: Continuous Stream")
+                    // If initial peek got data, write it first
+                    if !data.isEmpty {
+                        try appendToFile(data: data)
+                    }
                     try await downloadContinuousStream()
                 }
             } catch {
@@ -84,21 +93,25 @@ class StreamRecorder: NSObject {
         onCompletion?()
     }
     
+    private func appendToFile(data: Data) throws {
+        guard let handle = try? FileHandle(forWritingTo: outputURL) else {
+            throw URLError(.cannotCreateFile)
+        }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: data)
+        try handle.close()
+    }
+    
     private func downloadContinuousStream() async throws {
         var request = URLRequest(url: streamURL)
-        request.timeoutInterval = 30
+        request.timeoutInterval = 60
+        request.setValue("Nebulo/2.4 (iOS)", forHTTPHeaderField: "User-Agent")
         
         let (bytes, response) = try await urlSession.bytes(for: request)
         
         if let httpRes = response as? HTTPURLResponse, httpRes.statusCode >= 400 {
             throw URLError(.badServerResponse)
         }
-        
-        guard let handle = try? FileHandle(forWritingTo: outputURL) else {
-            throw URLError(.cannotCreateFile)
-        }
-        
-        defer { try? handle.close() }
         
         var buffer = Data()
         let maxBufferSize = 1024 * 512 // 512KB Buffer
@@ -108,14 +121,14 @@ class StreamRecorder: NSObject {
             buffer.append(byte)
             
             if buffer.count >= maxBufferSize {
-                handle.write(buffer)
+                try appendToFile(data: buffer)
                 buffer.removeAll(keepingCapacity: true)
             }
         }
         
         // Final flush
         if !buffer.isEmpty {
-            handle.write(buffer)
+            try appendToFile(data: buffer)
         }
     }
     
@@ -127,7 +140,9 @@ class StreamRecorder: NSObject {
             data = id
             currentResponse = ir
         } else {
-            (data, currentResponse) = try await urlSession.data(from: streamURL)
+            var request = URLRequest(url: streamURL)
+            request.setValue("Nebulo/2.4 (iOS)", forHTTPHeaderField: "User-Agent")
+            (data, currentResponse) = try await urlSession.data(for: request)
         }
         
         if let httpRes = currentResponse as? HTTPURLResponse, httpRes.statusCode >= 400 {
@@ -162,33 +177,26 @@ class StreamRecorder: NSObject {
             }
         }
         
-        // Filter new segments (only those we haven't seen, by sequence OR unique URL)
-        // Note: Some servers reset sequence on restart, so URL check is backup.
+        // Filter new segments
         let newSegments = segments.filter { $0.sequence > lastSequence }
         
         if newSegments.isEmpty { return }
         
-        // Update last sequence
         if let maxSeq = newSegments.map({ $0.sequence }).max() {
             lastSequence = maxSeq
         }
         
         for segment in newSegments {
             if !isRecording { break }
-            
-            // Double check duplicate download
             if downloadedSegments.contains(segment.url.absoluteString) { continue }
             
-            print("⬇️ [StreamRecorder] Downloading seq \(segment.sequence)")
+            print("⬇️ [StreamRecorder] Downloading HLS seq \(segment.sequence)")
             do {
-                let (segData, _) = try await urlSession.data(from: segment.url)
-                if let handle = try? FileHandle(forWritingTo: outputURL) {
-                    handle.seekToEndOfFile()
-                    handle.write(segData)
-                    handle.closeFile()
-                    
-                    downloadedSegments.insert(segment.url.absoluteString)
-                }
+                var request = URLRequest(url: segment.url)
+                request.setValue("Nebulo/2.4 (iOS)", forHTTPHeaderField: "User-Agent")
+                let (segData, _) = try await urlSession.data(for: request)
+                try appendToFile(data: segData)
+                downloadedSegments.insert(segment.url.absoluteString)
             } catch {
                 print("⚠️ [StreamRecorder] Failed to download segment: \(error)")
             }
