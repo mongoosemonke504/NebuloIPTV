@@ -73,12 +73,13 @@ class RecordingManager: NSObject, ObservableObject {
                 let url = self.getDocumentsDirectory().appendingPathComponent(filename)
                 let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
                 
-                if size > 1024 {
+                // Require at least 1MB for a valid recording
+                if size > 1024 * 1024 {
                     self.recordings[idx].status = .completed
                     self.recordings[idx].localFileName = filename
                 } else {
+                    print("⚠️ Recording too small (\(size) bytes), marking as failed.")
                     self.recordings[idx].status = .failed
-                    // Clean up empty file
                     try? FileManager.default.removeItem(at: url)
                 }
                 

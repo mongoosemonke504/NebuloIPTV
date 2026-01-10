@@ -1,6 +1,7 @@
 import SwiftUI
 import AVKit
 import MobileVLCKit
+import Combine
 
 struct RecordingsView: View {
     @ObservedObject var manager = RecordingManager.shared
@@ -137,181 +138,73 @@ struct RecordingsView: View {
 struct RecordingPlayerView: View {
     let recording: Recording
     @Environment(\.dismiss) var dismiss
-    @State private var playbackURL: URL?
-    @State private var playbackError = false
     
-    // VLC State
-    @State private var isPlaying = true
-    @State private var progress: Float = 0.0
-    @State private var duration: Double = 0.0
+    @ObservedObject var playerManager = NebuloPlayerEngine.shared
     @State private var showControls = true
-    @State private var isScrubbing = false
-    @State private var controlsTimer: Timer?
+    @State private var timer: AnyCancellable?
     
+    // UI state for bridge
+    @State private var isScrubbing = false
+    @State private var draggingProgress: Double? = nil
+    @State private var showSubtitlePanel = false
+    @State private var showResolutionPanel = false
+    @State private var showAspectRatioPanel = false
+    @State private var showFullDescription = false
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             
-            if let url = playbackURL {
-                VLCPlayerView(
-                    url: url,
-                    isPlaying: $isPlaying,
-                    progress: $progress,
-                    duration: $duration,
-                    isScrubbing: $isScrubbing
-                )
+            // Re-use the main bridge
+            UnifiedPlayerViewBridge()
                 .ignoresSafeArea()
-            } else if playbackError {
-                VStack(spacing: 12) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.largeTitle)
-                        .foregroundColor(.orange)
-                    Text("Recording Not Available")
-                        .foregroundColor(.white)
-                    Text("The file could not be found.")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                }
-            } else {
-                ProgressView()
-            }
             
-            Color.black.opacity(0.001)
-                .ignoresSafeArea()
-                .onTapGesture {
-                    if !showControls {
-                        withAnimation { showControls = true }
-                        resetTimer()
-                    }
-                }
+            // Overlay controls (re-using PlayerControlsView for consistency)
+            PlayerControlsView(
+                playerManager: playerManager,
+                channel: StreamChannel(id: 0, name: recording.channelName, streamURL: recording.streamURL, icon: recording.channelIcon, categoryID: 0, originalName: nil),
+                showControls: $showControls,
+                showSubtitlePanel: $showSubtitlePanel,
+                showResolutionPanel: $showResolutionPanel,
+                showAspectRatioPanel: $showAspectRatioPanel,
+                showFullDescription: $showFullDescription,
+                isScrubbing: $isScrubbing,
+                draggingProgress: $draggingProgress,
+                onDismiss: { dismiss() },
+                togglePlay: { 
+                    if playerManager.isPlaying { playerManager.pause() } else { playerManager.resume() }
+                    resetTimer()
+                },
+                toggleControls: { toggleControls() },
+                seekForward: { playerManager.seek(to: playerManager.currentTime + 15); resetTimer() },
+                seekBackward: { playerManager.seek(to: playerManager.currentTime - 15); resetTimer() }
+            )
             
-            if showControls && !playbackError {
-                VLCControlsView(
-                    isPlaying: $isPlaying,
-                    progress: $progress,
-                    isScrubbing: $isScrubbing,
-                    duration: duration,
-                    onSeek: { _ in resetTimer() },
-                    onClose: { dismiss() },
-                    onInteraction: { resetTimer() },
-                    onTapBackground: {
-                        showControls = false
-                        controlsTimer?.invalidate()
-                    }
-                )
-                .transition(.opacity)
+            if playerManager.isBuffering {
+                ProgressView().tint(.white).scaleEffect(1.5)
             }
         }
         .onAppear {
             if let url = RecordingManager.shared.getPlaybackURL(for: recording) {
-                playbackURL = url
+                playerManager.play(url: url)
                 resetTimer()
-            } else {
-                playbackError = true
             }
         }
         .onDisappear {
-            controlsTimer?.invalidate()
+            playerManager.stop()
+            timer?.cancel()
         }
+    }
+    
+    func toggleControls() {
+        withAnimation { showControls.toggle() }
+        if showControls { resetTimer() }
     }
     
     func resetTimer() {
-        controlsTimer?.invalidate()
-        controlsTimer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: false) { _ in
+        timer?.cancel()
+        timer = Just(()).delay(for: 4.0, scheduler: RunLoop.main).sink { _ in
             withAnimation { showControls = false }
-        }
-    }
-}
-
-struct VLCPlayerView: UIViewRepresentable {
-    let url: URL
-    @Binding var isPlaying: Bool
-    @Binding var progress: Float
-    @Binding var duration: Double
-    @Binding var isScrubbing: Bool
-    
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView()
-        view.backgroundColor = .black
-        
-        let player = VLCMediaPlayer()
-        player.drawable = view
-        
-        // Configure media
-        let media = VLCMedia(url: url)
-        // Add options to ensure hardware decoding and better format support
-        media.addOptions([
-            "network-caching": 1500,
-            "clock-jitter": 0,
-            "clock-synchro": 0
-        ])
-        player.media = media
-        player.delegate = context.coordinator
-        
-        context.coordinator.player = player
-        
-        // Start playback with a slight delay to ensure the view is ready
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            player.play()
-        }
-        
-        return view
-    }
-    
-    func updateUIView(_ uiView: UIView, context: Context) {
-        guard let player = context.coordinator.player else { return }
-        
-        if isPlaying && !player.isPlaying {
-            player.play()
-        } else if !isPlaying && player.isPlaying {
-            player.pause()
-        }
-        
-        if !isScrubbing && duration > 0 {
-            let playerTime = Double(player.time.intValue)
-            let bindingTime = Double(progress) * duration
-            
-            // If Binding is far from Player Time, it means a Seek happened (User released slider)
-            if abs(bindingTime - playerTime) > 1000 {
-                player.time = VLCTime(int: Int32(bindingTime))
-            }
-        }
-    }
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
-    }
-    
-    class Coordinator: NSObject, VLCMediaPlayerDelegate {
-        var parent: VLCPlayerView
-        var player: VLCMediaPlayer?
-        
-        init(_ parent: VLCPlayerView) {
-            self.parent = parent
-        }
-        
-        deinit {
-            player?.stop()
-            player?.drawable = nil
-        }
-        
-        func mediaPlayerStateChanged(_ aNotification: Notification) {
-            guard let player = aNotification.object as? VLCMediaPlayer else { return }
-            if player.state == .ended || player.state == .stopped {
-                parent.isPlaying = false
-            }
-        }
-        
-        func mediaPlayerTimeChanged(_ aNotification: Notification) {
-            guard let player = aNotification.object as? VLCMediaPlayer, !parent.isScrubbing else { return }
-            
-            let time = Double(player.time.intValue)
-            let len = Double(player.media?.length.intValue ?? 0)
-            
-            if len > 0 {
-                parent.duration = len
-                parent.progress = Float(time / len)
-            }
         }
     }
 }
