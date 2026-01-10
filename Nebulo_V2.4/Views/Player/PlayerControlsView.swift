@@ -218,7 +218,7 @@ struct PlayerControlsView: View {
                                 // Program Meta (EPG Only)
                                 VStack(alignment: .leading, spacing: 2) {
                                     HStack(spacing: 8) {
-                                        Text(currentProg?.title ?? "No Information")
+                                        Text(isRecordingPlayback ? (channel.originalName ?? channel.name) : (currentProg?.title ?? "No Information"))
                                             .font(.subheadline.bold())
                                             .foregroundColor(.white)
                                             .lineLimit(1)
@@ -235,8 +235,10 @@ struct PlayerControlsView: View {
                                         Spacer()
                                     }
                                     
-                                    if let desc = currentProg?.description, !desc.isEmpty {
-                                        Text(desc)
+                                    let displayDesc = isRecordingPlayback ? channel.streamURL : (currentProg?.description ?? "")
+                                    
+                                    if !displayDesc.isEmpty {
+                                        Text(displayDesc)
                                             .font(.system(size: 11))
                                             .foregroundColor(.white.opacity(0.7))
                                             .lineLimit(isDescriptionExpanded ? nil : 1)
@@ -445,67 +447,69 @@ struct PlayerControlsView: View {
                                 
                                 // Bottom Action Row
                                 HStack(spacing: 8) {
-                                    // LIVE Button
-                                    Button(action: {
-                                        if !isTrulyLive {
-                                            withAnimation {
-                                                if timeshiftStartTime != nil {
-                                                    timeshiftStartTime = nil
-                                                    if let url = URL(string: channel.streamURL) {
-                                                        playerManager.play(url: url)
+                                    if !isRecordingPlayback {
+                                        // LIVE Button
+                                        Button(action: {
+                                            if !isTrulyLive {
+                                                withAnimation {
+                                                    if timeshiftStartTime != nil {
+                                                        timeshiftStartTime = nil
+                                                        if let url = URL(string: channel.streamURL) {
+                                                            playerManager.play(url: url)
+                                                        }
+                                                    } else {
+                                                        playerManager.seek(to: playerManager.duration)
                                                     }
-                                                } else {
-                                                    playerManager.seek(to: playerManager.duration)
                                                 }
                                             }
-                                        }
-                                    }) {
-                                        HStack(spacing: 6) {
-                                            Circle()
-                                                .fill(isTrulyLive ? Color.red : Color.gray)
-                                                .frame(width: 6, height: 6)
-                                            Text("LIVE")
-                                                .font(.caption.bold())
-                                                .foregroundColor(isTrulyLive ? .red : .gray)
-                                        }
-                                        .frame(maxWidth: .infinity)
-                                        .frame(height: 40)
-                                        .modifier(GlassEffect(cornerRadius: 20, isSelected: true, accentColor: nil))
-                                    }
-                                    .buttonStyle(.plain)
-                                    
-                                    // Record Button
-                                    Button(action: {
-                                        if isRecording {
-                                            // Stop recording
-                                            if let rec = recordingManager.recordings.first(where: { $0.channelName == channel.name && $0.status == .recording }) {
-                                                recordingManager.stopRecording(rec.id)
+                                        }) {
+                                            HStack(spacing: 6) {
+                                                Circle()
+                                                    .fill(isTrulyLive ? Color.red : Color.gray)
+                                                    .frame(width: 6, height: 6)
+                                                Text("LIVE")
+                                                    .font(.caption.bold())
+                                                    .foregroundColor(isTrulyLive ? .red : .gray)
                                             }
-                                        } else {
-                                            showRecordingSheet = true
+                                            .frame(maxWidth: .infinity)
+                                            .frame(height: 40)
+                                            .modifier(GlassEffect(cornerRadius: 20, isSelected: true, accentColor: nil))
                                         }
-                                    }) {
-                                        HStack(spacing: 6) {
-                                            Image(systemName: isRecording ? "record.circle.fill" : "record.circle")
-                                                .font(.caption.bold())
-                                                .foregroundColor(isRecording ? .red : .white)
-                                            Text(isRecording ? "Stop & Save" : "Record")
-                                                .font(.caption.bold())
-                                                .lineLimit(1)
-                                                .minimumScaleFactor(0.7)
+                                        .buttonStyle(.plain)
+                                        
+                                        // Record Button
+                                        Button(action: {
+                                            if isRecording {
+                                                // Stop recording
+                                                if let rec = recordingManager.recordings.first(where: { $0.channelName == channel.name && $0.status == .recording }) {
+                                                    recordingManager.stopRecording(rec.id)
+                                                }
+                                            } else {
+                                                showRecordingSheet = true
+                                            }
+                                        }) {
+                                            HStack(spacing: 6) {
+                                                Image(systemName: isRecording ? "record.circle.fill" : "record.circle")
+                                                    .font(.caption.bold())
+                                                    .foregroundColor(isRecording ? .red : .white)
+                                                Text(isRecording ? "Stop & Save" : "Record")
+                                                    .font(.caption.bold())
+                                                    .lineLimit(1)
+                                                    .minimumScaleFactor(0.7)
+                                            }
+                                            .padding(.horizontal, 4)
+                                            .frame(maxWidth: .infinity)
+                                            .frame(height: 40)
+                                            .modifier(GlassEffect(cornerRadius: 20, isSelected: true, accentColor: isRecording ? .red : nil))
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 20)
+                                                    .stroke(Color.red, lineWidth: isRecording ? 2 : 0)
+                                            )
                                         }
-                                        .padding(.horizontal, 4)
-                                        .frame(maxWidth: .infinity)
-                                        .frame(height: 40)
-                                        .modifier(GlassEffect(cornerRadius: 20, isSelected: true, accentColor: isRecording ? .red : nil))
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 20)
-                                                .stroke(Color.red, lineWidth: isRecording ? 2 : 0)
-                                        )
+                                        .buttonStyle(.plain)
+                                        // .disabled(isRecording)
+                                        .opacity(1.0)
                                     }
-                                    .buttonStyle(.plain)
-                                    // .disabled(isRecording)
-                                    .opacity(1.0)
                                     
                                     // Subtitles
                                     Button(action: {

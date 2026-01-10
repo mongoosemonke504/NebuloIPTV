@@ -159,12 +159,18 @@ struct RecordingPlayerView: View {
             UnifiedPlayerViewBridge()
                 .ignoresSafeArea()
             
-                            // Overlay controls (re-using PlayerControlsView for consistency)
-                            PlayerControlsView(
-                                playerManager: playerManager,
-                                channel: StreamChannel(id: 0, name: recording.channelName, streamURL: recording.streamURL, icon: recording.channelIcon, categoryID: 0, originalName: nil),
-                                isRecordingPlayback: true,
-                                showControls: $showControls,
+                                            // Overlay controls (re-using PlayerControlsView for consistency)
+                                            PlayerControlsView(
+                                                playerManager: playerManager,
+                                                channel: StreamChannel(
+                                                    id: 0, 
+                                                    name: recording.channelName, 
+                                                    streamURL: recording.programDescription ?? "", // Hack: Pass desc here if needed or use originalName
+                                                    icon: recording.channelIcon, 
+                                                    categoryID: 0, 
+                                                    originalName: recording.programTitle // Pass title here
+                                                ),
+                                                isRecordingPlayback: true,                                showControls: $showControls,
                                 showSubtitlePanel: $showSubtitlePanel,
                                 showResolutionPanel: $showResolutionPanel,
                                 showAspectRatioPanel: $showAspectRatioPanel,

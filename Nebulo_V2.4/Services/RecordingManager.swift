@@ -16,7 +16,7 @@ class RecordingManager: NSObject, ObservableObject {
         loadRecordings()
     }
     
-    func scheduleRecording(channel: StreamChannel, startTime: Date, endTime: Date) {
+    func scheduleRecording(channel: StreamChannel, startTime: Date, endTime: Date, programTitle: String? = nil, programDescription: String? = nil) {
         let recording = Recording(
             id: UUID(),
             channelName: channel.name,
@@ -26,6 +26,8 @@ class RecordingManager: NSObject, ObservableObject {
             startTime: startTime,
             endTime: endTime,
             createdAt: Date(),
+            programTitle: programTitle,
+            programDescription: programDescription,
             status: .scheduled,
             localFileName: nil
         )
