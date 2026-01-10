@@ -165,6 +165,18 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             if self.isPlaying { self.pause() } else { self.resume() }
             return .success
         }
+        
+        commandCenter.seekBackwardCommand.addTarget { [weak self] _ in
+            guard let self = self else { return .commandFailed }
+            self.seek(to: self.currentTime - 15)
+            return .success
+        }
+        
+        commandCenter.seekForwardCommand.addTarget { [weak self] _ in
+            guard let self = self else { return .commandFailed }
+            self.seek(to: self.currentTime + 15)
+            return .success
+        }
     }
      
     public func updateNowPlayingMetadata(title: String, subtitle: String?, imageURL: String?) {
@@ -190,7 +202,16 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     private func updatePlaybackState() {
         var info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [String: Any]()
         info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
+        info[MPMediaItemPropertyPlaybackDuration] = duration
         info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
+        
+        // If duration is 0 or very large, it's likely a live stream
+        if duration <= 0 || duration > 86400 {
+            info[MPNowPlayingInfoPropertyIsLiveStream] = true
+        } else {
+            info[MPNowPlayingInfoPropertyIsLiveStream] = false
+        }
+        
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
     
@@ -208,11 +229,14 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                 }
                 self.currentTime = current
                 self.duration = total
+                self.updatePlaybackState()
             }
         }
         ksPlayerView.onFinish = { [weak self] error in if error != nil { self?.handleKSPlayerError() } }
         KSOptions.isAutoPlay = true
         KSOptions.isSecondOpen = false
+        KSOptions.canPlayInBackground = true
+        ksPlayerView.player.pauseInBackground = false
         ksPlayerView.allowNativeControls = useNativeBridge
     }
     
@@ -353,6 +377,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                 if let val = length.value { self.duration = Double(truncating: val) / 1000.0 }
             }
             self.isPlaying = vlcMediaPlayer.isPlaying
+            self.updatePlaybackState()
             if availableSubtitles.isEmpty, let tracks = vlcMediaPlayer.videoSubTitlesNames as? [String] {
                 if let indexes = vlcMediaPlayer.videoSubTitlesIndexes as? [Int], tracks.count == indexes.count {
                     var subs: [VideoSubtitle] = []

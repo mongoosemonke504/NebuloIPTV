@@ -327,9 +327,8 @@ struct CustomVideoPlayerView: SwiftUI.View {
         }
         .onDisappear {
             dismissalTask?.cancel()
-            let isGoingToMini = viewModel?.miniPlayerChannel != nil
-            let isGoingToMulti = viewModel?.triggerMultiView == true
-            if !isGoingToMini && !isGoingToMulti { playerManager.pause() }
+            // We NO LONGER pause here because onDisappear is triggered when the app is backgrounded
+            // or the screen is turned off. Background playback handles this via AVAudioSession.
             timer?.cancel()
         }
         .onChangeCompat(of: channel) { _ in 
