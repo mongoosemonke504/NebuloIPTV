@@ -46,13 +46,14 @@ class ChannelViewModel: ObservableObject {
     @Published var scrollRestoreTrigger = UUID()
     @Published var draggingChannel: StreamChannel? = nil
     @Published var miniPlayerChannel: StreamChannel? = nil
+    @Published var currentTime: Date = Date()
     
     // Manual Sort Order
     @Published var manualChannelOrder: [Int] = []
     
     // EPG State
     @Published var epgData: [String: [EPGProgram]] = [:]
-    @Published var currentTime = Date()
+    private var epgNameMap: [String: String] = [:] // Channel Name -> EPG ID
     @Published var epgProgress: Double = 0
     @Published var isUpdatingEPG: Bool = false
     @Published var loadingStatus: String = "Loading..." // New status property
@@ -186,18 +187,26 @@ class ChannelViewModel: ObservableObject {
     }
 
     func getCurrentProgram(for channel: StreamChannel) -> EPGProgram? {
-        guard let eID = channel.epgID, let schedule = epgData[eID] else { return nil }
+        let eID: String? = {
+            if let id = channel.epgID, epgData[id] != nil { return id }
+            // Fallback: Check name map
+            return epgNameMap[channel.name.lowercased()]
+        }()
+        
+        guard let id = eID, let schedule = epgData[id] else { return nil }
         return schedule.first { currentTime >= $0.start && currentTime <= $0.stop }
     }
 
     func getNextProgram(for channel: StreamChannel) -> EPGProgram? {
-        guard let eID = channel.epgID, let schedule = epgData[eID] else { return nil }
-        // Find the current program first
+        let eID: String? = {
+            if let id = channel.epgID, epgData[id] != nil { return id }
+            return epgNameMap[channel.name.lowercased()]
+        }()
+        
+        guard let id = eID, let schedule = epgData[id] else { return nil }
         guard let current = schedule.first(where: { currentTime >= $0.start && currentTime <= $0.stop }) else {
-            // If no current, find the first one starting after now
             return schedule.filter { $0.start > currentTime }.sorted { $0.start < $1.start }.first
         }
-        // Find the one that starts when current ends (or closest after)
         return schedule.filter { $0.start >= current.stop }.sorted { $0.start < $1.start }.first
     }
 
@@ -851,16 +860,16 @@ class ChannelViewModel: ObservableObject {
 
     func updateEPG(baseURL: URL, user: String, pass: String, force: Bool = false, silent: Bool = false) async {
         let now = Date()
-        // 4 hours = 14400 seconds
         let isStale = lastEPGUpdateTime == nil || now.timeIntervalSince(lastEPGUpdateTime!) >= 14400
         
-        // If not forced and not stale, try loading from cache
         if !force && !isStale {
-            if let cached = EPGService().loadFromDisk(), !cached.isEmpty {
-                await MainActor.run { self.epgData = cached }
+            if let cached = EPGService().loadFromDisk(), !cached.epg.isEmpty {
+                await MainActor.run { 
+                    self.epgData = cached.epg
+                    self.epgNameMap = cached.map
+                }
                 return
             }
-            // Cache missing or empty? Fall through to fetch.
         }
 
         // Primary EPG
@@ -870,12 +879,9 @@ class ChannelViewModel: ObservableObject {
         c?.queryItems = [URLQueryItem(name: "username", value: user), URLQueryItem(name: "password", value: pass)]
         if let finalEPG = c?.url { urls.append(finalEPG) }
         
-        // External EPGs from Current Account
         if let current = AccountManager.shared.currentAccount {
             for ext in current.externalEPGUrls {
-                if let u = URL(string: ext) {
-                    urls.append(u)
-                }
+                if let u = URL(string: ext) { urls.append(u) }
             }
         }
         
@@ -897,45 +903,28 @@ class ChannelViewModel: ObservableObject {
                 withAnimation(.spring()) { self.isUpdatingEPG = true }
             }
             
-            // Start a randomized 'jerky' timer that ticks up progress visually
             self.smoothingTimer?.cancel()
             self.smoothingTimer = Timer.publish(every: 0.04, on: .main, in: .common)
                 .autoconnect()
                 .sink { [weak self] _ in
                     guard let self = self else { return }
-                    
                     let real = self.epgProgress
                     let current = self.visualProgress
-                    
-                    // 60% chance to "stall" this frame to create randomness
                     if Double.random(in: 0...1) < 0.6 { return }
                     
                     if current < real {
-                        // Catch up mode: Random jump (1% to 8%)
                         let jump = Double.random(in: 0.01...0.08)
                         self.visualProgress += min(real - current, jump)
                     } else if current < 0.92 {
-                        // Fake progress mode: Small random creep (0.1% to 0.5%)
-                        // Only go up to 92% to leave a satisfying final jump
                         let creep = Double.random(in: 0.001...0.005)
                         self.visualProgress += creep
                     }
                     
-                    // Cap at 0.95 if real is not done
-                    if real < 1.0 && self.visualProgress > 0.95 {
-                        self.visualProgress = 0.95
-                    } 
+                    if real < 1.0 && self.visualProgress > 0.95 { self.visualProgress = 0.95 } 
                     
-                    // Completion check
                     if real >= 1.0 {
-                        // If real is done, jump to 100% quickly
-                        if self.visualProgress < 1.0 {
-                             self.visualProgress = 1.0
-                        }
-                        
-                        // Trigger dismissal
+                        if self.visualProgress < 1.0 { self.visualProgress = 1.0 }
                         self.smoothingTimer?.cancel()
-                        // Delay slightly to show 100% for a moment
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                             withAnimation(.spring()) { self.isUpdatingEPG = false }
                         }
@@ -943,20 +932,17 @@ class ChannelViewModel: ObservableObject {
                 }
         }
         
-        let epgMap = await EPGService().fetchAndMergeEPGs(urls: urls) { progress in
+        let result = await EPGService().fetchAndMergeEPGs(urls: urls) { progress in
             self.epgProgress = progress
         }
         
         await MainActor.run {
-            self.lastEPGUpdateTime = Date() // Save successful update time
-            
-            // Once finished, set real progress to 100%. 
+            self.lastEPGUpdateTime = Date()
             self.epgProgress = 1.0
-            self.epgData = epgMap
+            self.epgData = result.epg
+            self.epgNameMap = result.map
             
-            if shouldManageLoading {
-                self.isLoading = false
-            }
+            if shouldManageLoading { self.isLoading = false }
         }
     }
     
