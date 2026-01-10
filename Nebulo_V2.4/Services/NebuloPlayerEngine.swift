@@ -72,7 +72,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             if currentBackend == .vlc {
                 vlcMediaPlayer.currentVideoSubTitleDelay = Int(subtitleOffset * 1000)
             } else if currentBackend == .ksplayer {
-                if let player = ksPlayerView.player as? any MediaPlayerProtocol {
+                if let player = ksPlayerView.playerLayer?.player {
                     let tracks = player.tracks(mediaType: AVMediaType.subtitle)
                     for track in tracks {
                         if track.isEnabled, let ffmpegTrack = track as? FFmpegAssetTrack {
@@ -434,7 +434,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             }
         } else if currentBackend == .ksplayer {
             // KSPlayer track detection using AVMediaType
-            if let player = ksPlayerView.player as? any MediaPlayerProtocol {
+            if let player = ksPlayerView.playerLayer?.player {
                 let tracks = player.tracks(mediaType: AVMediaType.subtitle)
                 if !tracks.isEmpty && availableSubtitles.count != tracks.count {
                     var subs: [VideoSubtitle] = []
@@ -490,7 +490,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         if currentBackend == .vlc {
             vlcMediaPlayer.currentVideoSubTitleIndex = Int32(subtitle.index)
         } else if currentBackend == .ksplayer {
-            if let player = ksPlayerView.player as? any MediaPlayerProtocol {
+            if let player = ksPlayerView.playerLayer?.player {
                 let tracks = player.tracks(mediaType: AVMediaType.subtitle)
                 if subtitle.index < tracks.count {
                     let selectedTrack = tracks[subtitle.index]
