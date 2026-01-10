@@ -226,7 +226,7 @@ extension MainView {
                     }
                     // Stop engine if NOT going to mini player
                     if viewModel.miniPlayerChannel == nil {
-                        playerManager.stop()
+                        NebuloPlayerEngine.shared.stop()
                     }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { 
                         viewModel.scrollRestoreTrigger = UUID() 
