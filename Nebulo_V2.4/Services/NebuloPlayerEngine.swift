@@ -53,13 +53,27 @@ public class NebuloKSVideoPlayerView: IOSVideoPlayerView {
 public class NebuloPlayerEngine: NSObject, ObservableObject {
     public static let shared = NebuloPlayerEngine()
     
-    @Published public var isBuffering = false
+    @Published public var isBuffering = false {
+        didSet {
+            if isBuffering {
+                startBufferWatchdog()
+            } else {
+                stopBufferWatchdog()
+            }
+        }
+    }
     @Published public var isPlaying = false {
         didSet {
-            if isPlaying { isBuffering = false }
+            if isPlaying { 
+                isBuffering = false
+                stopBufferWatchdog()
+            }
             updatePlaybackState()
         }
     }
+    
+    private var bufferWatchdogTimer: Timer?
+    private var bufferStartTime: Date?
     @Published public var currentQuality: VideoQuality = .auto
     @Published public var availableQualities: [VideoQuality] = VideoQuality.allCases
     @Published public var currentTime: Double = 0
@@ -336,6 +350,39 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
              if !vlcMediaPlayer.isPlaying { vlcMediaPlayer.play() }
              isPlaying = true
          } else if currentBackend == .ksplayer { ksPlayerView.play() }
+    }
+    
+    // MARK: - Watchdog Logic
+    
+    private func startBufferWatchdog() {
+        stopBufferWatchdog()
+        bufferStartTime = Date()
+        bufferWatchdogTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            guard let self = self, self.isBuffering, let start = self.bufferStartTime else { return }
+            let duration = Date().timeIntervalSince(start)
+            
+            // If buffering for more than 7 seconds, it's likely stuck
+            if duration > 7.0 {
+                self.handleStuckBuffer()
+            }
+        }
+    }
+    
+    private func stopBufferWatchdog() {
+        bufferWatchdogTimer?.invalidate()
+        bufferWatchdogTimer = nil
+        bufferStartTime = nil
+    }
+    
+    private func handleStuckBuffer() {
+        guard let url = currentURL, !userPaused else { return }
+        print("🚨 [NebuloEngine] Buffer stuck for >7s, triggering automatic re-sync...")
+        stopBufferWatchdog()
+        
+        // Re-play the current URL to force a fresh connection
+        DispatchQueue.main.async {
+            self.play(url: url)
+        }
     }
     
     public func stop() {
