@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import KSPlayer
 
 // MARK: - UI COMPONENTS
 
@@ -21,6 +22,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
     @State private var showFullDescription = false
     @State private var descriptionHeight: CGFloat = 0
     @State private var currentStreamURL: URL?
+    @Environment(\.scenePhase) var scenePhase
     
     // Quick Switcher
     @State private var quickSwitcherOffset: CGFloat = 200
@@ -52,7 +54,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
             
             // THE PLAYER VIEW (Bridge to KSPlayer/VLC)
             UnifiedPlayerViewBridge()
-                .if(namespace != nil) { $0.matchedGeometryEffect(id: "videoPlayer", in: namespace!) }
+                .applyIf(namespace != nil) { $0.matchedGeometryEffect(id: "videoPlayer", in: namespace!) }
                 .ignoresSafeArea()
                 .persistentSystemOverlays(.hidden)
             
@@ -327,8 +329,11 @@ struct CustomVideoPlayerView: SwiftUI.View {
         }
         .onDisappear {
             dismissalTask?.cancel()
-            // We NO LONGER pause here because onDisappear is triggered when the app is backgrounded
-            // or the screen is turned off. Background playback handles this via AVAudioSession.
+            // Stop ONLY if app is active (meaning user navigated away)
+            // If backgrounded, phase is not .active
+            if scenePhase == .active && viewModel?.miniPlayerChannel == nil && viewModel?.triggerMultiView != true {
+                playerManager.stop()
+            }
             timer?.cancel()
         }
         .onChangeCompat(of: channel) { _ in 
@@ -423,6 +428,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
     }
     
     func setupPlayer() {
+        KSOptions.isAutoPlay = true
         Task {
             let resolvedURLString = await viewModel?.resolveStalkerStream(channel) ?? channel.streamURL
             guard let targetURL = URL(string: resolvedURLString) else { return }

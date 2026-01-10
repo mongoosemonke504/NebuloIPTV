@@ -72,17 +72,6 @@ struct PlayerControlsView: View {
                         // MARK: - Center Controls (Play Button) - Layer 1
                         
                         HStack(spacing: 60) {
-                            Button(action: {
-                                seekBackward()
-                            }) {
-                                Image(systemName: "gobackward.15")
-                                    .font(.system(size: 30, weight: .bold))
-                                    .foregroundColor(.white)
-                                    .frame(width: 64, height: 64)
-                                    .modifier(GlassEffect(cornerRadius: 32, isSelected: true, accentColor: nil))
-                            }
-                            .buttonStyle(.plain)
-                            .opacity(showControls ? 1 : 0)
                             
                             Button(action: {
                                 if !playerManager.playbackFailed {
@@ -96,22 +85,10 @@ struct PlayerControlsView: View {
                                     .modifier(GlassEffect(cornerRadius: 42, isSelected: true, accentColor: nil))
                             }
                             .buttonStyle(.plain)
-                            .opacity((playerManager.isBuffering && !playerManager.playbackFailed) ? 0.3 : 1)
+                            .opacity(playerManager.isBuffering ? 0 : 1)
                             .disabled(playerManager.isBuffering || playerManager.playbackFailed)
-                            
-                            Button(action: {
-                                seekForward()
-                            }) {
-                                Image(systemName: "goforward.15")
-                                    .font(.system(size: 30, weight: .bold))
-                                    .foregroundColor(.white)
-                                    .frame(width: 64, height: 64)
-                                    .modifier(GlassEffect(cornerRadius: 32, isSelected: true, accentColor: nil))
-                            }
-                            .buttonStyle(.plain)
-                            .opacity(showControls ? 1 : 0)
                         }
-                        .allowsHitTesting(true)
+                        .allowsHitTesting(!playerManager.isBuffering)
                         
                         // MARK: - Top & Bottom Bars - Layer 2
                         
@@ -352,7 +329,7 @@ struct PlayerControlsView: View {
                                             }
                                             .frame(height: 20) // Larger hit area
                                             .contentShape(Rectangle())
-                                            .if(channel.hasArchive) { view in
+                                            .applyIf(channel.hasArchive) { view in
                                                 view.gesture(
                                                     DragGesture(minimumDistance: 0)
                                                         .onChanged { value in
