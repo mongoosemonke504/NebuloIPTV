@@ -260,6 +260,8 @@ extension MainView {
 
 // MARK: - STANDARD LAYOUT (Restored)
 struct StandardLayout: SwiftUI.View {
+    @AppStorage("glassOpacity") private var glassOpacity = 0.15
+    @AppStorage("glassShade") private var glassShade = 1.0
     @ObservedObject var viewModel: ChannelViewModel
     @ObservedObject var scoreViewModel: ScoreViewModel
     @Binding var selectedCategory: StreamCategory?; @Binding var selectedChannel: StreamChannel?; @Binding var searchText: String
@@ -399,9 +401,9 @@ struct StandardLayout: SwiftUI.View {
                                         .foregroundColor(.white.opacity(0.3))
                                 }
                                 .padding(16)
-                                .background(Material.ultraThin)
-                                .cornerRadius(16)
-                                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.1), lineWidth: 1))
+                                .background(Color(white: glassShade).opacity(glassOpacity))
+                                .cornerRadius(12)
+                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1))
                             }
                             .buttonStyle(.plain)
                             .padding(.horizontal)
@@ -425,7 +427,7 @@ struct StandardLayout: SwiftUI.View {
                                                 .frame(maxWidth: .infinity, alignment: .center) // Centered
                                                 .padding(14)
                                                 .frame(height: 70)
-                                                .background(Color.white.opacity(0.05))
+                                                .background(Color(white: glassShade).opacity(glassOpacity))
                                                 .cornerRadius(12)
                                                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1))
                                         }
@@ -520,6 +522,8 @@ struct StandardLayout: SwiftUI.View {
 }
 
 struct DashboardCard: View {
+    @AppStorage("glassOpacity") private var glassOpacity = 0.15
+    @AppStorage("glassShade") private var glassShade = 1.0
     let title: String
     let icon: String
     let color: Color
@@ -530,12 +534,11 @@ struct DashboardCard: View {
         Button(action: action) {
             VStack(spacing: 10) {
                 Image(systemName: icon)
-                    .font(.system(size: 32, weight: .bold))
+                    .font(.system(size: 36, weight: .bold))
                     .foregroundColor(color)
-                    .shadow(color: color.opacity(0.6), radius: 8) // Added glow
                 
                 Text(title)
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.system(size: 16, weight: .bold))
                     .foregroundColor(.white)
                     .multilineTextAlignment(.center)
                     .lineLimit(1)
@@ -543,10 +546,10 @@ struct DashboardCard: View {
             }
             .padding(.horizontal, 8)
             .frame(maxWidth: .infinity)
-            .frame(height: 100)
-            .background(Material.ultraThinMaterial)
-            .cornerRadius(16)
-            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.1), lineWidth: 1))
+            .frame(height: 120)
+            .background(Color(white: glassShade).opacity(glassOpacity))
+            .cornerRadius(12)
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1))
         }
         .buttonStyle(.plain)
     }

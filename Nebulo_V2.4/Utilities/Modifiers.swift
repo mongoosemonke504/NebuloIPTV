@@ -71,18 +71,19 @@ extension AnyTransition {
 }
 
 struct GlassEffect: ViewModifier {
+    @AppStorage("glassOpacity") private var glassOpacity = 0.15
+    @AppStorage("glassShade") private var glassShade = 1.0
     let cornerRadius: CGFloat
     let isSelected: Bool
     let accentColor: Color?
     func body(content: Content) -> some View {
         content
-            .background(isSelected ? AnyShapeStyle(Material.ultraThinMaterial) : AnyShapeStyle(Material.thinMaterial.opacity(0.2)))
+            .background(isSelected ? AnyShapeStyle(Color(white: glassShade).opacity(glassOpacity + 0.1)) : AnyShapeStyle(Color(white: glassShade).opacity(glassOpacity)))
             .cornerRadius(cornerRadius)
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius)
-                    .stroke(isSelected && accentColor != nil ? accentColor!.opacity(0.8) : Color.white.opacity(0.1), lineWidth: isSelected ? 1.5 : 0.5)
+                    .stroke(isSelected && accentColor != nil ? accentColor!.opacity(0.8) : Color.white.opacity(0.1), lineWidth: isSelected ? 1.5 : 1)
             )
-            .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
             .compositingGroup()
     }
 }

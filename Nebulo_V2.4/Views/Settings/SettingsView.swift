@@ -7,7 +7,6 @@ struct SettingsView: View {
     @AppStorage("isLoggedIn") private var isLoggedIn = false
     @AppStorage("viewMode") private var viewMode = ViewMode.automatic.rawValue
     @AppStorage("customAccentHex") private var customAccentHex = "#007AFF"
-    @AppStorage("appTheme") private var appTheme = AppTheme.system.rawValue
     
     @Binding var categories: [StreamCategory]
     let accentColor: Color
@@ -134,11 +133,12 @@ struct SettingsView: View {
 
 // MARK: - SUBVIEWS
 struct AppearanceCard: View {
-    @AppStorage("appTheme") private var appTheme = AppTheme.system.rawValue
     @AppStorage("viewMode") private var viewMode = ViewMode.automatic.rawValue
     @AppStorage("customAccentHex") private var customAccentHex = "#007AFF"
     @AppStorage("useCustomBackground") private var useCustomBackground = false
     @AppStorage("customBackgroundBlur") private var customBackgroundBlur = 0.0
+    @AppStorage("glassOpacity") private var glassOpacity = 0.15
+    @AppStorage("glassShade") private var glassShade = 1.0 // 1.0 = White, 0.0 = Black
     
     @Binding var showSourceSelection: Bool
     @Binding var showImagePicker: Bool
@@ -149,16 +149,7 @@ struct AppearanceCard: View {
     var body: some View {
         SettingsCard {
             VStack(spacing: 16) {
-                // Theme & Layout
-                HStack {
-                    Text("Theme").font(.body).foregroundColor(.white)
-                    Spacer()
-                    Picker("Theme", selection: $appTheme) {
-                        ForEach(AppTheme.allCases) { t in Text(t.rawValue).tag(t.rawValue) }
-                    }.pickerStyle(.menu).tint(.white.opacity(0.7))
-                }
-                Divider().background(Color.white.opacity(0.1))
-                
+                // Layout Mode
                 HStack {
                     Text("Layout Mode").font(.body).foregroundColor(.white)
                     Spacer()
@@ -172,6 +163,77 @@ struct AppearanceCard: View {
                     Text("Accent Color").font(.body).foregroundColor(.white)
                     Spacer()
                     ColorPicker("", selection: Binding(get: { Color(hex: customAccentHex) ?? .blue }, set: { if let h = $0.toHex() { customAccentHex = h } }))
+                }
+                Divider().background(Color.white.opacity(0.1))
+                
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("Button Transparency").font(.body).foregroundColor(.white)
+                        Spacer()
+                        Text("\(Int(glassOpacity * 100))%").font(.caption).foregroundColor(.white.opacity(0.7))
+                    }
+                    
+                    // Custom Opacity Slider
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            // Track with transparency-to-accent gradient
+                            LinearGradient(colors: [accentColor.opacity(0), accentColor], startPoint: .leading, endPoint: .trailing)
+                                .frame(height: 8)
+                                .clipShape(Capsule())
+                                .overlay(Capsule().stroke(Color.white.opacity(0.1), lineWidth: 1))
+                            
+                            Circle()
+                                .fill(accentColor)
+                                .frame(width: 22, height: 22)
+                                .overlay(Circle().stroke(Color.white, lineWidth: 2))
+                                .shadow(color: .black.opacity(0.3), radius: 3, x: 0, y: 2)
+                                .offset(x: CGFloat(glassOpacity) * (geo.size.width - 22))
+                                .gesture(
+                                    DragGesture(minimumDistance: 0)
+                                        .onChanged { v in
+                                            let newValue = v.location.x / geo.size.width
+                                            glassOpacity = max(0, min(1, Double(newValue)))
+                                        }
+                                )
+                        }
+                    }
+                    .frame(height: 22)
+                }
+                
+                Divider().background(Color.white.opacity(0.1))
+                
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("Button Color (Grayscale)").font(.body).foregroundColor(.white)
+                        Spacer()
+                        Text(glassShade == 1.0 ? "White" : (glassShade == 0.0 ? "Black" : String(format: "%.0f%% Gray", (1.0 - glassShade) * 100))).font(.caption).foregroundColor(.white.opacity(0.7))
+                    }
+                    
+                    // Premium Grayscale Slider
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            // Gradient Track
+                            LinearGradient(colors: [.black, .white], startPoint: .leading, endPoint: .trailing)
+                                .frame(height: 8)
+                                .clipShape(Capsule())
+                                .overlay(Capsule().stroke(Color.white.opacity(0.2), lineWidth: 1))
+                            
+                            Circle()
+                                .fill(Color(white: glassShade))
+                                .frame(width: 22, height: 22)
+                                .overlay(Circle().stroke(Color.white, lineWidth: 2))
+                                .shadow(color: .black.opacity(0.3), radius: 3, x: 0, y: 2)
+                                .offset(x: CGFloat(glassShade) * (geo.size.width - 22))
+                                .gesture(
+                                    DragGesture(minimumDistance: 0)
+                                        .onChanged { v in
+                                            let newValue = v.location.x / geo.size.width
+                                            glassShade = max(0, min(1, Double(newValue)))
+                                        }
+                                )
+                        }
+                    }
+                    .frame(height: 22)
                 }
             }
             .padding()
