@@ -235,8 +235,6 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         ksPlayerView.onFinish = { [weak self] error in if error != nil { self?.handleKSPlayerError() } }
         KSOptions.isAutoPlay = true
         KSOptions.isSecondOpen = false
-        KSOptions.canPlayInBackground = true
-        ksPlayerView.player.pauseInBackground = false
         ksPlayerView.allowNativeControls = useNativeBridge
     }
     
