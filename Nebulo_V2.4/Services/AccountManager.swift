@@ -49,11 +49,21 @@ class AccountManager: ObservableObject {
         if let index = accounts.firstIndex(where: { $0.id == account.id }) {
             accounts[index] = account
         } else {
-            accounts.append(account)
-        }
-        
-        if makeActive {
-            switchToAccount(account)
+            var newAccount = account
+            // Assign unique stableID
+            let maxID = accounts.map { $0.stableID }.max() ?? 0
+            // If it's the very first account (and maxID is 0), we can keep it 0.
+            // But if 0 exists, increment.
+            // Actually, for migration safety:
+            // If accounts is empty, 0.
+            // If not empty, max + 1.
+            if !accounts.isEmpty {
+                newAccount.stableID = maxID + 1
+            }
+            accounts.append(newAccount)
+            if makeActive {
+                switchToAccount(newAccount)
+            }
         }
     }
     
