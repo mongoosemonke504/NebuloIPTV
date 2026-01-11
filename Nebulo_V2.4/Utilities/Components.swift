@@ -59,8 +59,20 @@ struct SquareCardSkeleton: View {
     }
 }
 
+struct DashboardCardSkeleton: View {
+    var body: some View {
+        SkeletonBox(height: 120).frame(maxWidth: .infinity).cornerRadius(12)
+    }
+}
+
+struct FullWidthCardSkeleton: View {
+    var body: some View {
+        SkeletonBox(height: 70).frame(maxWidth: .infinity).cornerRadius(12)
+    }
+}
+
 struct CategoryCardSkeleton: View {
     var body: some View {
-        SkeletonBox(height: 80).frame(maxWidth: .infinity).cornerRadius(16).padding(.horizontal)
+        SkeletonBox(height: 70).frame(maxWidth: .infinity).cornerRadius(12)
     }
 }
