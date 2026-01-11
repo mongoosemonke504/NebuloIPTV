@@ -189,6 +189,111 @@ struct RecordingPlayerView: View {
             if playerManager.isBuffering {
                 ProgressView().tint(.white).scaleEffect(1.5)
             }
+            
+            // SUBTITLE SETTINGS PANEL
+            if showSubtitlePanel {
+                settingsPanelOverlay {
+                    VStack(spacing: 0) {
+                        Text("Subtitles").font(.headline).foregroundColor(.white).padding()
+                        Divider().background(Color.white.opacity(0.3))
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 10) {
+                                ForEach(playerManager.availableSubtitles, id: \.id) { sub in
+                                    Button(action: {
+                                        playerManager.selectSubtitle(sub)
+                                    }) {
+                                        HStack {
+                                            Text(sub.name)
+                                            Spacer()
+                                            if playerManager.currentSubtitle?.id == sub.id { Image(systemName: "checkmark") }
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+                                    .foregroundColor(playerManager.currentSubtitle?.id == sub.id ? .yellow : .white)
+                                    .padding(.vertical, 4).padding(.horizontal)
+                                }
+                            }.padding(.top)
+                        }.frame(maxHeight: 200)
+                        
+                        Divider().background(Color.white.opacity(0.3))
+                        
+                        VStack(spacing: 10) {
+                            Text("Offset (Delay)").font(.caption).foregroundColor(.white.opacity(0.7))
+                            HStack(spacing: 20) {
+                                Button(action: { playerManager.subtitleOffset -= 0.1 }) {
+                                    Image(systemName: "minus").font(.system(size: 14, weight: .bold)).padding(8).modifier(GlassEffect(cornerRadius: 15, isSelected: true, accentColor: nil))
+                                }.buttonStyle(.plain).foregroundStyle(.white)
+                                
+                                Text(String(format: "%+.1fs", playerManager.subtitleOffset)).font(.headline).foregroundColor(.yellow).frame(minWidth: 60)
+                                
+                                Button(action: { playerManager.subtitleOffset += 0.1 }) {
+                                    Image(systemName: "plus").font(.system(size: 14, weight: .bold)).padding(8).modifier(GlassEffect(cornerRadius: 15, isSelected: true, accentColor: nil))
+                                }.buttonStyle(.plain).foregroundStyle(.white)
+                            }
+                        }.padding().background(Color.white.opacity(0.1))
+                    }
+                } onClose: { showSubtitlePanel = false }
+            }
+            
+            // RESOLUTION SETTINGS PANEL
+            if showResolutionPanel {
+                settingsPanelOverlay {
+                    VStack(spacing: 0) {
+                        Text("Quality").font(.headline).foregroundColor(.white).padding()
+                        Divider().background(Color.white.opacity(0.3))
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 10) {
+                                ForEach(playerManager.availableQualities) { q in
+                                    Button(action: {
+                                        playerManager.setQuality(q)
+                                        withAnimation { showResolutionPanel = false }
+                                        resetTimer()
+                                    }) {
+                                        HStack {
+                                            Text(q.rawValue)
+                                            Spacer()
+                                            if playerManager.currentQuality == q { Image(systemName: "checkmark") }
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+                                    .foregroundColor(playerManager.currentQuality == q ? .yellow : .white)
+                                    .padding(.vertical, 4).padding(.horizontal)
+                                }
+                            }.padding(.top)
+                        }.frame(maxHeight: 200)
+                    }
+                } onClose: { showResolutionPanel = false }
+            }
+            
+            // ASPECT RATIO PANEL
+            if showAspectRatioPanel {
+                settingsPanelOverlay {
+                    VStack(spacing: 0) {
+                        Text("Aspect Ratio").font(.headline).foregroundColor(.white).padding()
+                        Divider().background(Color.white.opacity(0.3))
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 10) {
+                                ForEach(NebuloPlayerEngine.VideoAspectRatio.allCases) { ratio in
+                                    Button(action: {
+                                        playerManager.setAspectRatio(ratio)
+                                        withAnimation { showAspectRatioPanel = false }
+                                        resetTimer()
+                                    }) {
+                                        HStack {
+                                            Text(ratio.rawValue)
+                                            Spacer()
+                                            if playerManager.currentAspectRatio == ratio { Image(systemName: "checkmark") }
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+                                    .foregroundColor(playerManager.currentAspectRatio == ratio ? .white : .white.opacity(0.5))
+                                    .padding(.vertical, 4).padding(.horizontal)
+                                }
+                            }.padding(.top)
+                        }.frame(maxHeight: 200)
+                    }
+                } onClose: { showAspectRatioPanel = false }
+            }
         }
         .onAppear {
             if let url = RecordingManager.shared.getPlaybackURL(for: recording) {
@@ -202,13 +307,35 @@ struct RecordingPlayerView: View {
         }
     }
     
+    @ViewBuilder
+    private func settingsPanelOverlay<Content: View>(@ViewBuilder content: () -> Content, onClose: @escaping () -> Void) -> some View {
+        ZStack {
+            Color.black.opacity(0.4).ignoresSafeArea().onTapGesture {
+                withAnimation { onClose() }
+                resetTimer()
+            }
+            content()
+                .frame(width: 300)
+                .background(Material.ultraThinMaterial)
+                .cornerRadius(16)
+                .shadow(radius: 20)
+                .transition(.scale.combined(with: .opacity))
+                .zIndex(100)
+        }
+    }
+    
     func toggleControls() {
+        if showSubtitlePanel { withAnimation { showSubtitlePanel = false }; resetTimer(); return }
+        if showResolutionPanel { withAnimation { showResolutionPanel = false }; resetTimer(); return }
+        if showAspectRatioPanel { withAnimation { showAspectRatioPanel = false }; resetTimer(); return }
+        
         withAnimation { showControls.toggle() }
         if showControls { resetTimer() }
     }
     
     func resetTimer() {
         timer?.cancel()
+        if showSubtitlePanel || showResolutionPanel || showAspectRatioPanel { return }
         timer = Just(()).delay(for: 4.0, scheduler: RunLoop.main).sink { _ in
             withAnimation { showControls = false }
         }
