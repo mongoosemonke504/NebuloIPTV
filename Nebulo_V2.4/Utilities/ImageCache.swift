@@ -45,6 +45,11 @@ class ImageCache {
         return nil
     }
     
+    func getMemoryCache(forKey key: String, size: CGSize? = nil) -> UIImage? {
+        let cacheKey = (key + (size != nil ? "_\(Int(size!.width))x\(Int(size!.height))" : "")) as NSString
+        return cache.object(forKey: cacheKey)
+    }
+    
     func hasImage(forKey key: String) -> Bool {
         let safeName = key.hashValueStr
         let fileURL = cacheDirectory.appendingPathComponent(safeName)
@@ -109,8 +114,8 @@ class ImageLoader: ObservableObject {
     
     init(urlString: String) {
         self.urlString = urlString
-        // Synchronous check for immediate display if cached
-        if let cached = ImageCache.shared.get(forKey: urlString) {
+        // Synchronous check for immediate display ONLY if in memory cache
+        if let cached = ImageCache.shared.getMemoryCache(forKey: urlString) {
             self.image = cached
             return
         }
@@ -121,7 +126,7 @@ class ImageLoader: ObservableObject {
         if image != nil { return }
         
         task = Task {
-            // Double check cache in task
+            // Check full cache (Disk + Memory) in background task
             if let cached = ImageCache.shared.get(forKey: urlString) {
                 await MainActor.run { self.image = cached }
                 return
