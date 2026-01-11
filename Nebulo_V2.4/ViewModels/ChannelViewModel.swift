@@ -418,18 +418,6 @@ class ChannelViewModel: ObservableObject {
         UserDefaults.standard.removeObject(forKey: settingsPrefix + "recentQueries")
     }
 
-    nonisolated static func qualityScore(for name: String) -> Int {
-        var score = 0
-        let lower = name.lowercased()
-        if lower.contains("4k") || lower.contains("uhd") { score += 100 }
-        if lower.contains("fhd") || lower.contains("1080") { score += 80 }
-        if lower.contains("720") || lower.contains("hd") { score += 50 }
-        if lower.contains("usa") || lower.contains("(us)") || lower.contains("uk") || lower.contains("english") { score += 150 }
-        let intTags = ["(es)", "(fr)", "(it)", "(pl)", "(ar)", "spanish", "french", "latino"]
-        if intTags.contains(where: { lower.contains($0) }) { score -= 300 }
-        return score
-    }
-
     nonisolated static func prioritySort(_ channels: [StreamChannel], order: [Int], precomputedOrderMap: [Int: Int]? = nil) -> [StreamChannel] {
         // Optimally use a lookup
         let orderMap: [Int: Int]
@@ -452,9 +440,7 @@ class ChannelViewModel: ObservableObject {
             if idxB != nil { return false }
             
             // Fallback to quality score
-            let scoreA = qualityScore(for: a.name)
-            let scoreB = qualityScore(for: b.name)
-            if scoreA != scoreB { return scoreA > scoreB }
+            if a.qualityScore != b.qualityScore { return a.qualityScore > b.qualityScore }
             return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
         }
     }
@@ -552,7 +538,7 @@ class ChannelViewModel: ObservableObject {
             let totalA = nameA + titleA + descA
             if totalH > 0 && totalA > 0 { score += 300 }
             
-            score += ChannelViewModel.qualityScore(for: channel.name)
+            score += channel.qualityScore
             
             if score > bestScore {
                 bestScore = score
@@ -657,7 +643,7 @@ class ChannelViewModel: ObservableObject {
                 if totalH > 0 && totalA > 0 { score += 300 }
                 
                 // Quality & Language Adjustments
-                score += ChannelViewModel.qualityScore(for: channel.name)
+                score += channel.qualityScore
                 
                 if score > 0 || isNetMatch {
                     scoredChannels.append(ChannelScore(channel: channel, score: score, isNetworkMatch: isNetMatch, isContentMatch: isContMatch))

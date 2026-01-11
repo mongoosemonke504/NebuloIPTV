@@ -13,6 +13,45 @@ struct ESPNEvent: Codable, Identifiable, Hashable, Sendable {
     let groupings: [ESPNGrouping]?
     var leagueLabel: String? = nil
     
+    // Cache the parsed date to avoid repeated formatter creation and actor isolation issues
+    private let _dateParsed: Date?
+    
+    enum CodingKeys: String, CodingKey {
+        case id, shortName, status, competitions, date, groupings, leagueLabel
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(String.self, forKey: .id)
+        self.shortName = try container.decode(String.self, forKey: .shortName)
+        self.status = try container.decode(ESPNStatus.self, forKey: .status)
+        self.competitions = try container.decode([ESPNCompetition].self, forKey: .competitions)
+        self.date = try container.decode(String.self, forKey: .date)
+        self.groupings = try container.decodeIfPresent([ESPNGrouping].self, forKey: .groupings)
+        self.leagueLabel = try container.decodeIfPresent(String.self, forKey: .leagueLabel)
+        
+        // Parse date once
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = formatter.date(from: self.date) {
+            self._dateParsed = d
+        } else {
+            formatter.formatOptions = [.withInternetDateTime]
+            self._dateParsed = formatter.date(from: self.date)
+        }
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(shortName, forKey: .shortName)
+        try container.encode(status, forKey: .status)
+        try container.encode(competitions, forKey: .competitions)
+        try container.encode(date, forKey: .date)
+        try container.encode(groupings, forKey: .groupings)
+        try container.encode(leagueLabel, forKey: .leagueLabel)
+    }
+    
     var allCompetitions: [ESPNCompetition] {
         if !competitions.isEmpty { return competitions }
         return groupings?.flatMap { $0.competitions } ?? []
@@ -29,13 +68,11 @@ struct ESPNEvent: Codable, Identifiable, Hashable, Sendable {
         ?? allCompetitions.first?.competitors?.first
     }
     var broadcastName: String? { allCompetitions.first?.broadcasts?.first?.names.first }
-    var gameDate: Date {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = formatter.date(from: date) { return d }
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: date) ?? Date()
+    
+    nonisolated var gameDate: Date {
+        return _dateParsed ?? Date()
     }
+    
     static func == (lhs: ESPNEvent, rhs: ESPNEvent) -> Bool { lhs.id == rhs.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }

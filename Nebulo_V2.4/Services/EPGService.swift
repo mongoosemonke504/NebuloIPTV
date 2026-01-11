@@ -98,7 +98,7 @@ class EPGService: NSObject, XMLParserDelegate {
     private func parseEPGData(_ data: Data) async -> (epg: [String: [EPGProgram]], map: [String: String]) {
         return await Task.detached(priority: .userInitiated) {
             let parser = XMLParser(data: data)
-            let delegate = EPGParserDelegate(dateFormatter: self.dateFormatter)
+            let delegate = EPGParserDelegate()
             parser.delegate = delegate
             parser.parse()
             return (delegate.epgData, delegate.channelNameMap)
@@ -107,10 +107,28 @@ class EPGService: NSObject, XMLParserDelegate {
 }
 
 // Separate delegate class to avoid state pollution during concurrent merges if any
-class EPGParserDelegate: NSObject, XMLParserDelegate {
+nonisolated class EPGParserDelegate: NSObject, XMLParserDelegate {
     var epgData: [String: [EPGProgram]] = [:]
     var channelNameMap: [String: String] = [:] // Name -> ID
-    private let dateFormatter: DateFormatter
+    
+    private static let fallbackFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.dateFormat = "yyyyMMddHHmmss"
+        return df
+    }()
+    
+    private static let isoFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return df
+    }()
+    
+    // Default XMLTV formatter
+    private static let xmltvFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.dateFormat = "yyyyMMddHHmmss Z"
+        return df
+    }()
     
     private var currentElement = ""
     private var currentChannelID = ""
@@ -120,8 +138,8 @@ class EPGParserDelegate: NSObject, XMLParserDelegate {
     private var currentDesc = ""
     private var currentDisplayName = ""
     
-    init(dateFormatter: DateFormatter) {
-        self.dateFormatter = dateFormatter
+    override init() {
+        super.init()
     }
     
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String : String] = [:]) {
@@ -179,27 +197,17 @@ class EPGParserDelegate: NSObject, XMLParserDelegate {
     }
     
     private func parseDate(_ string: String) -> Date? {
-        // Remove non-numeric characters for simple formats if needed, 
-        // but typically XMLTV looks like "20231027120000 +0000" or "20231027120000"
-        
         let cleaned = string.trimmingCharacters(in: .whitespaces)
         
-        // Try standard format: 20231027120000 +0000
-        if let date = dateFormatter.date(from: cleaned) {
+        if let date = EPGParserDelegate.xmltvFormatter.date(from: cleaned) {
             return date
         }
         
-        // Try fallback format: 20231027120000
-        let fallbackFormatter = DateFormatter()
-        fallbackFormatter.dateFormat = "yyyyMMddHHmmss"
-        if let date = fallbackFormatter.date(from: cleaned) {
+        if let date = EPGParserDelegate.fallbackFormatter.date(from: cleaned) {
             return date
         }
         
-        // Try another common variant: 2023-10-27 12:00:00
-        let isoFormatter = DateFormatter()
-        isoFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        if let date = isoFormatter.date(from: cleaned) {
+        if let date = EPGParserDelegate.isoFormatter.date(from: cleaned) {
             return date
         }
 

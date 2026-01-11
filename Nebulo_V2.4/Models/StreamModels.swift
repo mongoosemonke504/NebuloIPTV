@@ -11,14 +11,21 @@ struct EPGProgram: Identifiable, Codable, Sendable {
 }
 
 struct StreamChannel: Identifiable, Codable, Hashable, Equatable, Sendable {
-    var id: Int; var name: String; var streamURL: String; let icon: String?; var categoryID: Int; var originalName: String? = nil
+    var id: Int; 
+    var name: String {
+        didSet {
+            updateComputedProperties()
+        }
+    }
+    var streamURL: String; let icon: String?; var categoryID: Int; var originalName: String? = nil
     var epgID: String? = nil
     var hasArchive: Bool = false
     var originalID: Int? = nil // The ID from the provider (for API calls)
     var accountID: UUID? = nil // The source account
     
-    // Optimization: Pre-computed search string
-    nonisolated var searchNormalizedName: String { name.lowercased() }
+    // Optimization: Pre-computed search string and quality score
+    var searchNormalizedName: String = ""
+    var qualityScore: Int = 0
     
     enum CodingKeys: String, CodingKey { 
         case id = "stream_id", name = "name", displayName = "stream_display_name", 
@@ -42,6 +49,8 @@ struct StreamChannel: Identifiable, Codable, Hashable, Equatable, Sendable {
         } else if let archiveInt = try? c.decodeIfPresent(Int.self, forKey: .tvArchive) {
             self.hasArchive = archiveInt == 1
         }
+        
+        updateComputedProperties()
     }
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -58,10 +67,29 @@ struct StreamChannel: Identifiable, Codable, Hashable, Equatable, Sendable {
     nonisolated init(id: Int, name: String, streamURL: String, icon: String?, categoryID: Int, originalName: String?, epgID: String? = nil, hasArchive: Bool = false, originalID: Int? = nil, accountID: UUID? = nil) {
         self.id = id; self.name = name; self.streamURL = streamURL; self.icon = icon; self.categoryID = categoryID; self.originalName = originalName; self.epgID = epgID; self.hasArchive = hasArchive
         self.originalID = originalID; self.accountID = accountID
+        updateComputedProperties()
     }
     // Backward compatibility for linker
     nonisolated init(id: Int, name: String, streamURL: String, icon: String?, categoryID: Int, originalName: String?, epgID: String?) {
         self.id = id; self.name = name; self.streamURL = streamURL; self.icon = icon; self.categoryID = categoryID; self.originalName = originalName; self.epgID = epgID; self.hasArchive = false
+        updateComputedProperties()
+    }
+    
+    nonisolated private mutating func updateComputedProperties() {
+        let lower = name.lowercased()
+        self.searchNormalizedName = lower
+        self.qualityScore = StreamChannel.computeQualityScore(lowerName: lower)
+    }
+    
+    nonisolated private static func computeQualityScore(lowerName: String) -> Int {
+        var score = 0
+        if lowerName.contains("4k") || lowerName.contains("uhd") { score += 100 }
+        if lowerName.contains("fhd") || lowerName.contains("1080") { score += 80 }
+        if lowerName.contains("720") || lowerName.contains("hd") { score += 50 }
+        if lowerName.contains("usa") || lowerName.contains("(us)") || lowerName.contains("uk") || lowerName.contains("english") { score += 150 }
+        let intTags = ["(es)", "(fr)", "(it)", "(pl)", "(ar)", "spanish", "french", "latino"]
+        if intTags.contains(where: { lowerName.contains($0) }) { score -= 300 }
+        return score
     }
 }
 
