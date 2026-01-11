@@ -185,12 +185,35 @@ class ScoreViewModel: ObservableObject {
         let (data, _) = try await URLSession.shared.data(from: url)
         let response = try JSONDecoder().decode(ESPNResponse.self, from: data)
         var events = response.events ?? []
+        // Sort: Live (Recent Start First) > Upcoming (Soonest First) > Finished (Recent Finish First)
         events.sort { a, b in
             let aState = a.status.type.state
             let bState = b.status.type.state
+            
+            // 1. Live games always at the very top
             if aState == "in" && bState != "in" { return true }
             if aState != "in" && bState == "in" { return false }
-            return a.gameDate < b.gameDate
+            
+            // 2. Both live? Closest to current time at top (Descending Start Date)
+            if aState == "in" && bState == "in" {
+                return a.gameDate > b.gameDate
+            }
+            
+            // 3. Upcoming games (pre) before finished games (post)
+            if aState == "pre" && bState == "post" { return true }
+            if aState == "post" && bState == "pre" { return false }
+            
+            // 4. Both upcoming? Soonest games at top (Ascending Start Date)
+            if aState == "pre" && bState == "pre" {
+                return a.gameDate > b.gameDate
+            }
+            
+            // 5. Both finished? Most recently finished at top of finished section (Descending Start Date)
+            if aState == "post" && bState == "post" {
+                return a.gameDate > b.gameDate
+            }
+            
+            return a.gameDate > b.gameDate
         }
         return events
     }
@@ -219,7 +242,22 @@ class ScoreViewModel: ObservableObject {
                     do {
                         let (data, _) = try await URLSession.shared.data(from: url)
                         let res = try JSONDecoder().decode(ESPNResponse.self, from: data)
-                        let events = res.events ?? []
+                        var events = res.events ?? []
+                        
+                        // Sort: Live (Recent Start First) > Upcoming (Soonest First) > Finished (Recent Finish First)
+                        events.sort { a, b in
+                            let aState = a.status.type.state
+                            let bState = b.status.type.state
+                            if aState == "in" && bState != "in" { return true }
+                            if aState != "in" && bState == "in" { return false }
+                            if aState == "in" && bState == "in" { return a.gameDate > b.gameDate }
+                            if aState == "pre" && bState == "post" { return true }
+                            if aState == "post" && bState == "pre" { return false }
+                            if aState == "pre" && bState == "pre" { return a.gameDate < b.gameDate }
+                            if aState == "post" && bState == "post" { return a.gameDate > b.gameDate }
+                            return a.gameDate < b.gameDate
+                        }
+                        
                         let tagged = events.map { e -> ESPNEvent in
                             var copy = e
                             copy.leagueLabel = name
