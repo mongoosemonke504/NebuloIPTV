@@ -294,30 +294,41 @@ struct StandardLayout: SwiftUI.View {
                 }
             } else if viewModel.isLoading {
                 ScrollView(showsIndicators: false) {
-                    LazyVStack(spacing: 16) {
-                        HStack {
-                            SkeletonBox(width: 180, height: 24).cornerRadius(4)
-                            Spacer()
-                            SkeletonBox(width: 14, height: 14).cornerRadius(2)
-                        }.padding(.horizontal)
+                    VStack(alignment: .leading, spacing: 24) {
+                        // 1. Recent Preview Skeleton
+                        VStack(alignment: .leading, spacing: 12) {
+                            SkeletonBox(width: 180, height: 20).padding(.horizontal)
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 16) {
+                                    ForEach(0..<4, id: \.self) { _ in
+                                        HorizontalCardSkeleton()
+                                    }
+                                }.padding(.horizontal)
+                            }
+                        }
                         
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            LazyHStack(spacing: 16) {
+                        // 2. Quick Access Skeleton
+                        VStack(alignment: .leading, spacing: 12) {
+                            SkeletonBox(width: 140, height: 20).padding(.horizontal)
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
                                 ForEach(0..<4, id: \.self) { _ in
-                                    SkeletonBox(height: 112).frame(width: 200).cornerRadius(12)
+                                    DashboardCardSkeleton()
                                 }
                             }.padding(.horizontal)
-                        }.frame(height: 150)
+                        }
                         
-                        HStack(spacing: 16) {
-                            SquareCardSkeleton()
-                            SquareCardSkeleton()
-                        }.padding(.horizontal).padding(.vertical, 8)
+                        // 3. Browse All Skeleton
+                        FullWidthCardSkeleton()
+                            .padding(.horizontal)
                         
-                        CategoryCardSkeleton()
-                        CategoryCardSkeleton()
-                        ForEach(0..<10, id: \.self) { _ in
-                            CategoryCardSkeleton()
+                        // 4. Categories Skeleton
+                        VStack(alignment: .leading, spacing: 12) {
+                            SkeletonBox(width: 120, height: 20).padding(.horizontal)
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
+                                ForEach(0..<12, id: \.self) { _ in
+                                    CategoryCardSkeleton()
+                                }
+                            }.padding(.horizontal)
                         }
                     }
                     .padding(.vertical)
