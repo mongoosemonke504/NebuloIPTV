@@ -295,7 +295,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         KSOptions.isAutoPlay = true
         KSOptions.isSecondOpen = false
         KSOptions.maxBufferDuration = 30.0 // 30s buffer for stability
-        KSOptions.preferredForwardBufferDuration = 5.0 // Buffer at least 5s before start
+        KSOptions.preferredForwardBufferDuration = 15.0 // Buffer at least 15s before start
         ksPlayerView.allowNativeControls = useNativeBridge
     }
     
@@ -361,8 +361,8 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             guard let self = self, self.isBuffering, let start = self.bufferStartTime else { return }
             let duration = Date().timeIntervalSince(start)
             
-            // If buffering for more than 7 seconds, it's likely stuck
-            if duration > 7.0 {
+            // If buffering for more than 15 seconds, it's likely stuck
+            if duration > 15.0 {
                 self.handleStuckBuffer()
             }
         }
