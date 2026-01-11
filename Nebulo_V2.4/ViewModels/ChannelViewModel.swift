@@ -1095,7 +1095,7 @@ class ChannelViewModel: ObservableObject {
                 if let lo = line.range(of: "tvg-logo=\"(.*?)\"", options: .regularExpression) { logo = String(line[lo]).replacingOccurrences(of: "tvg-logo=\"", with: "").replacingOccurrences(of: "\"", with: "") }
                 if let tid = line.range(of: "tvg-id=\"(.*?)\"", options: .regularExpression) { eID = String(line[tid]).replacingOccurrences(of: "tvg-id=\"", with: "").replacingOccurrences(of: "\"", with: "") }
                 let catID = abs(group.hashValue)
-                if !catNames.contains(group) { categories.append(StreamCategory(id: catID + idOffset, name: group)); catNames.insert(group) }
+                if !catNames.contains(group) { categories.append(StreamCategory(id: catID, name: group)); catNames.insert(group) }
                 
                 // M3U original ID is essentially the index or a hash
                 let originalID = i 
