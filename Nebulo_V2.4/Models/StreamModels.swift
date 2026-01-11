@@ -11,7 +11,7 @@ struct EPGProgram: Identifiable, Codable, Sendable {
 }
 
 struct StreamChannel: Identifiable, Codable, Hashable, Equatable, Sendable {
-    var id: Int; var name: String; var streamURL: String; let icon: String?; let categoryID: Int; var originalName: String? = nil
+    var id: Int; var name: String; var streamURL: String; let icon: String?; var categoryID: Int; var originalName: String? = nil
     var epgID: String? = nil
     var hasArchive: Bool = false
     var originalID: Int? = nil // The ID from the provider (for API calls)
