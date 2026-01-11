@@ -58,6 +58,11 @@ class ChannelViewModel: ObservableObject {
     @Published var isUpdatingEPG: Bool = false
     @Published var loadingStatus: String = "Loading..." // New status property
     
+    // Multi-Account State
+    var activeAccountsMap: [UUID: Account] = [:]
+    // Stalker Token Map
+    var stalkerTokens: [UUID: String] = [:]
+    
     private var lastEPGUpdateTime: Date? {
         get {
             guard let interval = UserDefaults.standard.object(forKey: settingsPrefix + "lastEPGUpdate") as? TimeInterval else { return nil }
@@ -90,37 +95,135 @@ class ChannelViewModel: ObservableObject {
         loadSettings()
         startEPGClock()
         
-        // Observe Account Changes
-        AccountManager.shared.$currentAccount
+        // Observe Account Changes (Active/Inactive or List updates)
+        AccountManager.shared.$accounts
             .receive(on: RunLoop.main)
-            .sink { [weak self] account in
-                guard let self = self, let _ = account else { return }
-                Task {
-                    await self.loadCurrentAccount()
-                }
+            .sink { [weak self] _ in
+                Task { await self?.loadActiveAccounts() }
             }
             .store(in: &cancellables)
             
-        // Trigger initial load if account is already present
-        if AccountManager.shared.currentAccount != nil {
-            Task { await self.loadCurrentAccount() }
-        }
+        // Initial Load
+        Task { await loadActiveAccounts() }
     }
     
-    func loadCurrentAccount() async {
-        guard let account = AccountManager.shared.currentAccount else { return }
-        self.reset()
+    func loadActiveAccounts(silent: Bool = false) async {
+        let accounts = AccountManager.shared.accounts.filter { $0.isActive }
         
-        // 1. Instant Load from Cache
-        if let (cachedChannels, cachedCategories) = loadFromCache() {
-            self.channels = cachedChannels
-            self.categories = cachedCategories
-            self.categorizeSports()
-            print("🚀 [ChannelViewModel] Instant loaded \(channels.count) channels from disk cache.")
+        // If no active accounts in manager, fallback to legacy load check if not already attempted
+        if accounts.isEmpty {
+            // Check legacy AppStorage (handled by MainView calling loadData, so we do nothing here)
+            return
         }
         
-        // 2. Network Refresh
-        await loadData(url: account.url, user: account.username ?? "", pass: account.password ?? "", mac: account.macAddress, type: account.type)
+        await MainActor.run {
+            if !silent { 
+                self.isLoading = true; 
+                self.loadingStatus = "Loading Playlists..."
+                self.errorMessage = nil
+            }
+            // Reset data before merging
+            self.activeAccountsMap = Dictionary(uniqueKeysWithValues: accounts.map { ($0.id, $0) })
+            self.reset()
+        }
+        
+        var allChannels: [StreamChannel] = []
+        var allCategories: [StreamCategory] = []
+        var epgUrls: [URL] = []
+        
+        await withTaskGroup(of: ([StreamChannel], [StreamCategory], [URL]).self) { group in
+            for account in accounts {
+                group.addTask {
+                    return await self.fetchAccountData(account)
+                }
+            }
+            
+            for await (chans, cats, urls) in group {
+                allChannels.append(contentsOf: chans)
+                allCategories.append(contentsOf: cats)
+                epgUrls.append(contentsOf: urls)
+            }
+        }
+        
+        await MainActor.run {
+            self.channels = allChannels
+            // Sort categories by name to interleave them
+            self.categories = allCategories.sorted { $0.name < $1.name }
+            
+            self.categorizeSports()
+            self.saveToCache()
+            self.isLoading = false
+        }
+        
+        await self.preloadImages()
+        await self.updateEPGFromURLs(epgUrls, silent: silent)
+    }
+    
+    // Helper to fetch data for a single account with namespacing
+    func fetchAccountData(_ account: Account) async -> ([StreamChannel], [StreamCategory], [URL]) {
+        let offset = account.stableID * 100_000_000
+        let prefix = "acc_\(account.stableID)_" // specific prefix for settings
+        
+        var fetchedChannels: [StreamChannel] = []
+        var fetchedCategories: [StreamCategory] = []
+        var fetchedEPGs: [URL] = []
+        
+        do {
+            if account.type == .xtream {
+                guard let baseURL = URL(string: account.url) else { return ([], [], []) }
+                let user = account.username ?? ""
+                let pass = account.password ?? ""
+                
+                // Cats
+                let catUrl = try await ChannelViewModel.buildApiUrl(base: baseURL, user: user, pass: pass, action: "get_live_categories")
+                let (cData, _) = try await URLSession.shared.data(from: catUrl)
+                let cats = try JSONDecoder().decode([StreamCategory].self, from: cData)
+                let processedCats = await ChannelViewModel.processCategories(cats, prefix: prefix, idOffset: offset)
+                fetchedCategories = processedCats
+                
+                // Streams
+                let streamUrl = try await ChannelViewModel.buildApiUrl(base: baseURL, user: user, pass: pass, action: "get_live_streams")
+                let (sData, _) = try await URLSession.shared.data(from: streamUrl)
+                let raw = try JSONDecoder().decode([StreamChannel].self, from: sData)
+                let processedChans = await ChannelViewModel.processChannels(raw, safeURL: account.url, user: user, pass: pass, prefix: prefix, idOffset: offset, accountID: account.id)
+                fetchedChannels = processedChans
+                
+                // EPG
+                let epgUrl = baseURL.appendingPathComponent("xmltv.php")
+                var c = URLComponents(url: epgUrl, resolvingAgainstBaseURL: false)
+                c?.queryItems = [URLQueryItem(name: "username", value: user), URLQueryItem(name: "password", value: pass)]
+                if let finalEPG = c?.url { fetchedEPGs.append(finalEPG) }
+                
+            } else if account.type == .mac {
+                guard let baseURL = URL(string: account.url), let mac = account.macAddress else { return ([], [], []) }
+                let (chans, cats, token) = try await ChannelViewModel.fetchStalkerData(portalURL: baseURL, mac: mac, prefix: prefix, idOffset: offset, accountID: account.id)
+                fetchedChannels = chans
+                fetchedCategories = cats
+                await MainActor.run {
+                    self.stalkerTokens[account.id] = token
+                }
+            } else {
+                // M3U
+                guard let baseURL = URL(string: account.url) else { return ([], [], []) }
+                let (data, _) = try await URLSession.shared.data(from: baseURL)
+                if let content = String(data: data, encoding: .utf8) {
+                    let (pChannels, pCategories, epgUrl) = await ChannelViewModel.parseM3U(content: content, idOffset: offset, accountID: account.id)
+                    fetchedChannels = pChannels
+                    fetchedCategories = await ChannelViewModel.processCategories(pCategories, prefix: prefix, idOffset: offset)
+                    if let eURL = epgUrl, let u = URL(string: eURL) { fetchedEPGs.append(u) }
+                }
+            }
+            
+            // External EPGs
+            for ext in account.externalEPGUrls {
+                if let u = URL(string: ext) { fetchedEPGs.append(u) }
+            }
+            
+        } catch {
+            print("Error fetching account \(account.name): \(error)")
+        }
+        
+        return (fetchedChannels, fetchedCategories, fetchedEPGs)
     }
     
     private func saveToCache() {
@@ -761,93 +864,19 @@ class ChannelViewModel: ObservableObject {
     }
     
     func loadData(url: String, user: String, pass: String, mac: String? = nil, type: LoginType, silent: Bool = false) async {
-        guard !url.isEmpty else { return }
-        
-        // Update settings prefix based on login to isolate settings per user
-        let prefixKey = "\(url)_\(user)_\(mac ?? "")".components(separatedBy: CharacterSet.alphanumerics.inverted).joined()
-        self.settingsPrefix = prefixKey.isEmpty ? "" : prefixKey + "_"
-        self.loadSettings()
-        
-        // Show loading state if not silent (force refresh) or if empty
-        if !silent || channels.isEmpty { 
-            await MainActor.run { 
-                isLoading = true
-                loadingStatus = "Connecting to Server..."
-                errorMessage = nil 
-            }
+        // If we have active accounts in AccountManager, ignore this legacy call (unless it's empty)
+        if !AccountManager.shared.accounts.isEmpty {
+            await loadActiveAccounts(silent: silent)
+            return
         }
         
-        var safeURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !safeURL.lowercased().hasPrefix("http") { safeURL = "http://" + safeURL }
-        guard let baseURL = URL(string: safeURL) else { 
-            await MainActor.run { isLoading = false }
-            return 
-        }
+        // Legacy: Create a temporary account and load it
+        let tempAccount = Account(name: "Main", type: type, url: url, username: user, password: pass, macAddress: mac, isActive: true, stableID: 0)
         
-        let prefix = self.settingsPrefix
-        
-        do {
-            if type == .xtream {
-                await withThrowingTaskGroup(of: Void.self) { group in
-                    group.addTask { [weak self, baseURL, user, pass, prefix] in
-                        guard let self = self else { return }
-                        await MainActor.run { self.loadingStatus = "Fetching Categories..." }
-                        let catUrl = try await ChannelViewModel.buildApiUrl(base: baseURL, user: user, pass: pass, action: "get_live_categories")
-                        let (data, _) = try await URLSession.shared.data(from: catUrl)
-                        let cats = try JSONDecoder().decode([StreamCategory].self, from: data)
-                        let processed = await ChannelViewModel.processCategories(cats, prefix: prefix)
-                        await MainActor.run { [weak self] in self?.categories = processed }
-                    }
-                    group.addTask { [weak self, baseURL, user, pass, safeURL, prefix] in
-                        guard let self = self else { return }
-                        await MainActor.run { self.loadingStatus = "Fetching Channels..." }
-                        let streamUrl = try await ChannelViewModel.buildApiUrl(base: baseURL, user: user, pass: pass, action: "get_live_streams")
-                        let (data, _) = try await URLSession.shared.data(from: streamUrl)
-                        let raw = try JSONDecoder().decode([StreamChannel].self, from: data)
-                        let processed = await ChannelViewModel.processChannels(raw, safeURL: safeURL, user: user, pass: pass, prefix: prefix)
-                        await MainActor.run { [weak self] in 
-                            self?.channels = processed; 
-                            self?.categorizeSports()
-                            self?.saveToCache()
-                        }
-                        // Await image preloading to ensure cache is hot
-                        await self.preloadImages()
-                        await MainActor.run { self.loadingStatus = "Updating TV Guide..." }
-                        await self.updateEPG(baseURL: baseURL, user: user, pass: pass, force: false, silent: silent)
-                    }
-                }
-            } else if type == .mac, let macAddress = mac {
-                // Stalker / MAC Portal Logic
-                await MainActor.run { self.loadingStatus = "Authenticating Portal..." }
-                let (channels, categories, token) = try await ChannelViewModel.fetchStalkerData(portalURL: baseURL, mac: macAddress, prefix: prefix)
-                await MainActor.run {
-                    self.channels = channels
-                    self.categories = categories
-                    self.stalkerToken = token
-                    self.stalkerPortalURL = baseURL
-                    self.categorizeSports()
-                    self.saveToCache()
-                }
-                await self.preloadImages()
-            } else {
-                await MainActor.run { self.loadingStatus = "Downloading Playlist..." }
-                let (data, _) = try await URLSession.shared.data(from: baseURL)
-                if let content = String(data: data, encoding: .utf8) {
-                    await MainActor.run { self.loadingStatus = "Parsing Channels..." }
-                    let (pChannels, pCategories, epgUrl) = await ChannelViewModel.parseM3U(content: content)
-                    self.channels = pChannels; self.categories = pCategories; self.categorizeSports()
-                    self.saveToCache()
-                    await self.preloadImages()
-                    if let eURL = epgUrl, let xmlURL = URL(string: eURL) {
-                        await MainActor.run { self.loadingStatus = "Updating TV Guide..." }
-                        await self.updateEPGFromURL(xmlURL, silent: silent)
-                    }
-                }
-            }
-        } catch { 
-            await MainActor.run { self.errorMessage = "Error: " + error.localizedDescription }
+        // Save it to manager so we migrate to new system
+        await MainActor.run {
+            AccountManager.shared.saveAccount(tempAccount, makeActive: true)
         }
-        await MainActor.run { self.isLoading = false }
     }
     
     func preloadImages() async {
@@ -1048,10 +1077,11 @@ class ChannelViewModel: ObservableObject {
     func addToRecent(_ id: Int) { recentIDs.removeAll { $0 == id }; recentIDs.insert(id, at: 0); if recentIDs.count > 20 { recentIDs = Array(recentIDs.prefix(20)) }; if let d = try? JSONEncoder().encode(recentIDs) { UserDefaults.standard.set(d, forKey: settingsPrefix + "recentChannelIDs") } }
     func removeFromRecent(_ id: Int) { if let idx = recentIDs.firstIndex(of: id) { recentIDs.remove(at: idx); if let d = try? JSONEncoder().encode(recentIDs) { UserDefaults.standard.set(d, forKey: settingsPrefix + "recentChannelIDs") } } }
     
-    nonisolated static func parseM3U(content: String) async -> ([StreamChannel], [StreamCategory], String?) {
+    nonisolated static func parseM3U(content: String, idOffset: Int, accountID: UUID) async -> ([StreamChannel], [StreamCategory], String?) {
         var channels: [StreamChannel] = []; var categories: [StreamCategory] = []; var catNames = Set<String>()
         var epgUrl: String? = nil
         let lines = content.components(separatedBy: .newlines); var current: StreamChannel? = nil
+        
         for i in 0..<lines.count {
             let line = lines[i].trimmingCharacters(in: .whitespaces)
             if line.hasPrefix("#EXTM3U") {
@@ -1065,8 +1095,11 @@ class ChannelViewModel: ObservableObject {
                 if let lo = line.range(of: "tvg-logo=\"(.*?)\"", options: .regularExpression) { logo = String(line[lo]).replacingOccurrences(of: "tvg-logo=\"", with: "").replacingOccurrences(of: "\"", with: "") }
                 if let tid = line.range(of: "tvg-id=\"(.*?)\"", options: .regularExpression) { eID = String(line[tid]).replacingOccurrences(of: "tvg-id=\"", with: "").replacingOccurrences(of: "\"", with: "") }
                 let catID = abs(group.hashValue)
-                if !catNames.contains(group) { categories.append(StreamCategory(id: catID, name: group)); catNames.insert(group) }
-                current = StreamChannel(id: i, name: name, streamURL: "", icon: logo, categoryID: catID, originalName: name, epgID: eID)
+                if !catNames.contains(group) { categories.append(StreamCategory(id: catID + idOffset, name: group)); catNames.insert(group) }
+                
+                // M3U original ID is essentially the index or a hash
+                let originalID = i 
+                current = StreamChannel(id: originalID + idOffset, name: name, streamURL: "", icon: logo, categoryID: catID + idOffset, originalName: name, epgID: eID, hasArchive: false, originalID: originalID, accountID: accountID)
             } else if !line.hasPrefix("#") && !line.isEmpty && current != nil {
                 var fin = current!; fin.streamURL = line; fin.name = NameCleaner.clean(fin.name); channels.append(fin); current = nil
             }
@@ -1081,29 +1114,34 @@ class ChannelViewModel: ObservableObject {
         return url
     }
     
-    nonisolated static func processCategories(_ loadedCats: [StreamCategory], prefix: String) async -> [StreamCategory] {
+    nonisolated static func processCategories(_ loadedCats: [StreamCategory], prefix: String, idOffset: Int) async -> [StreamCategory] {
         var mutable = loadedCats; let data = UserDefaults.standard.data(forKey: prefix + "renamedCategories") ?? Data()
         let renames = (try? JSONDecoder().decode([Int: String].self, from: data)) ?? [:]
         
         // Also load hidden/saved state using the prefix
         struct Wrapper: Codable { let id: Int; var name: String; var isHidden: Bool; var order: Int }
-        if let savedData = UserDefaults.standard.data(forKey: prefix + "savedCategoriesנדה"),
+        if let savedData = UserDefaults.standard.data(forKey: prefix + "savedCategoriesanda"),
            let saved = try? JSONDecoder().decode([Wrapper].self, from: savedData) {
             
             // Map saved settings to loaded categories
             let savedMap = Dictionary(uniqueKeysWithValues: saved.map { ($0.id, $0) })
             
             for i in 0..<mutable.count {
-                let id = mutable[i].id
-                if let s = savedMap[id] {
-                    mutable[i].isHidden = s.isHidden
-                    mutable[i].order = s.order
+                let originalID = mutable[i].id
+                // Offset ID
+                mutable[i] = StreamCategory(id: originalID + idOffset, name: mutable[i].name)
+                
+                if let s = savedMap[originalID] {
+                    var c = mutable[i]
+                    c.isHidden = s.isHidden
+                    c.order = s.order
                     // Use saved name if available, or rename override
-                    if let custom = renames[id] { mutable[i].name = custom }
-                    else { mutable[i].name = s.name } // Use saved name (might be same as original)
+                    if let custom = renames[originalID] { c.name = custom }
+                    else { c.name = s.name } // Use saved name (might be same as original)
+                    mutable[i] = c
                 } else {
                      // Not saved, apply rename if exists
-                    if let custom = renames[id] { mutable[i].name = custom }
+                    if let custom = renames[originalID] { mutable[i].name = custom }
                     mutable[i].order = 9999 + i // Default order for new categories
                 }
             }
@@ -1111,14 +1149,30 @@ class ChannelViewModel: ObservableObject {
              return mutable.sorted { $0.order < $1.order }
         }
         
-        for i in 0..<mutable.count { let id = mutable[i].id; if let custom = renames[id] { mutable[i].name = custom }; mutable[i].order = i }
+        for i in 0..<mutable.count { 
+            let originalID = mutable[i].id
+            // Offset ID
+            mutable[i] = StreamCategory(id: originalID + idOffset, name: mutable[i].name)
+            if let custom = renames[originalID] { mutable[i].name = custom }
+            mutable[i].order = i 
+        }
         return mutable.sorted { $0.order < $1.order }
     }
     
-    nonisolated static func processChannels(_ raw: [StreamChannel], safeURL: String, user: String, pass: String, prefix: String) async -> [StreamChannel] {
+    nonisolated static func processChannels(_ raw: [StreamChannel], safeURL: String, user: String, pass: String, prefix: String, idOffset: Int, accountID: UUID) async -> [StreamChannel] {
         let data = UserDefaults.standard.data(forKey: prefix + "renamedChannels") ?? Data()
         let renames = (try? JSONDecoder().decode([Int: String].self, from: data)) ?? [:]
-        return raw.map { var c = $0; c.streamURL = "\(safeURL)/live/\(user)/\(pass)/\($0.id).m3u8"; c.originalName = c.name; if let custom = renames[c.id] { c.name = custom } else { c.name = NameCleaner.clean(c.name) }; return c }
+        return raw.map { 
+            var c = $0
+            c.originalID = c.id
+            c.accountID = accountID
+            c.id = c.id + idOffset // Apply Namespace Offset
+            c.streamURL = "\(safeURL)/live/\(user)/\(pass)/\($0.originalID ?? 0).m3u8"
+            c.originalName = c.name
+            if let custom = renames[c.originalID ?? 0] { c.name = custom } 
+            else { c.name = NameCleaner.clean(c.name) }
+            return c 
+        }
     }
     
     // Stalker State
@@ -1126,7 +1180,7 @@ class ChannelViewModel: ObservableObject {
     @Published var stalkerPortalURL: URL? = nil
 
     // Stalker / MAC Implementation
-    nonisolated static func fetchStalkerData(portalURL: URL, mac: String, prefix: String) async throws -> ([StreamChannel], [StreamCategory], String) {
+    nonisolated static func fetchStalkerData(portalURL: URL, mac: String, prefix: String, idOffset: Int, accountID: UUID) async throws -> ([StreamChannel], [StreamCategory], String) {
         let components = URLComponents(url: portalURL.appendingPathComponent("portal.php"), resolvingAgainstBaseURL: false)
         
         func createRequest(action: String, token: String? = nil) throws -> URLRequest {
@@ -1179,7 +1233,7 @@ class ChannelViewModel: ObservableObject {
             guard let id = Int(cat.id) else { return nil }
             return StreamCategory(id: id, name: cat.title)
         }
-        categories = await processCategories(loadedCats, prefix: prefix)
+        categories = await processCategories(loadedCats, prefix: prefix, idOffset: idOffset)
         
         // Fetch Channels
         let chReq = try createRequest(action: "get_all_channels", token: token)
@@ -1212,19 +1266,24 @@ class ChannelViewModel: ObservableObject {
             if let custom = renames[intID] { name = custom } 
             else { name = NameCleaner.clean(name) }
             
-            return StreamChannel(id: intID, name: name, streamURL: url, icon: c.logo, categoryID: catID, originalName: c.name, epgID: nil)
+            return StreamChannel(id: intID + idOffset, name: name, streamURL: url, icon: c.logo, categoryID: catID + idOffset, originalName: c.name, epgID: nil, hasArchive: false, originalID: intID, accountID: accountID)
         }
         
         return (channels, categories, token)
     }
     
     func resolveStalkerStream(_ channel: StreamChannel) async -> String {
-        guard let token = stalkerToken, let portalURL = stalkerPortalURL else { return channel.streamURL }
-        // If it looks like a direct link already, just use it (simple heuristic)
+        // Multi-Account resolution
+        guard let accID = channel.accountID, let account = activeAccountsMap[accID] else { return channel.streamURL }
+        
+        if account.type == .xtream { return channel.streamURL }
+        if account.type == .m3u { return channel.streamURL }
+        
+        // Stalker Logic
+        guard let token = stalkerTokens[accID], let portalURL = URL(string: account.url) else { return channel.streamURL }
+        
         if channel.streamURL.hasPrefix("http") && !channel.streamURL.contains("ffmpeg") { return channel.streamURL }
         
-        // Call create_link
-        // action=create_link&cmd=...
         var components = URLComponents(url: portalURL.appendingPathComponent("portal.php"), resolvingAgainstBaseURL: false)
         components?.queryItems = [
             URLQueryItem(name: "type", value: "itv"),
@@ -1239,19 +1298,13 @@ class ChannelViewModel: ObservableObject {
         
         do {
             let (data, _) = try await URLSession.shared.data(for: req)
-            struct LinkResponse: Codable {
-                struct JS: Codable { let cmd: String? }
-                let js: JS?
-            }
+            struct LinkResponse: Codable { struct JS: Codable { let cmd: String? }; let js: JS? }
             let res = try JSONDecoder().decode(LinkResponse.self, from: data)
-            if let finalURL = res.js?.cmd {
-                return finalURL
-            }
+            if let finalURL = res.js?.cmd { return finalURL }
         } catch {
             print("Stalker resolve error: \(error)")
         }
         
-        // Fallback: try basic cleaning
         var clean = channel.streamURL
         clean = clean.replacingOccurrences(of: "ffmpeg ", with: "")
         clean = clean.replacingOccurrences(of: "auto ", with: "")
@@ -1259,20 +1312,19 @@ class ChannelViewModel: ObservableObject {
     }
     
     func buildTimeshiftURL(channel: StreamChannel, targetDate: Date, program: EPGProgram) async -> URL? {
-        // Handle Stalker
-        if let _ = stalkerToken, let _ = stalkerPortalURL {
+        // Resolve account first
+        guard let accID = channel.accountID, let account = activeAccountsMap[accID] else { return nil }
+        
+        if account.type == .mac {
+            // Stalker logic using stored token
             let resolvedURL = await resolveStalkerStream(channel)
             guard let url = URL(string: resolvedURL) else { return nil }
-            
-            // Stalker Timeshift offset is from program start in seconds
             let offset = Int(targetDate.timeIntervalSince(program.start))
-            
             var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
             var queryItems = components?.queryItems ?? []
             queryItems.removeAll { $0.name == "timeshift" }
             queryItems.append(URLQueryItem(name: "timeshift", value: "\(offset)"))
             components?.queryItems = queryItems
-            
             return components?.url
         }
         
@@ -1281,20 +1333,21 @@ class ChannelViewModel: ObservableObject {
         let urlString = original.absoluteString
         
         if urlString.contains("/live/") {
-            // duration is usually total program duration in minutes
             let durationMinutes = Int(program.stop.timeIntervalSince(program.start) / 60)
-            
             let formatter = DateFormatter()
             formatter.dateFormat = "yyyy-MM-dd:HH-mm"
-            formatter.timeZone = TimeZone(secondsFromGMT: 0) // IMPORTANT: Servers expect UTC
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
             let startString = formatter.string(from: targetDate)
             
             // Format: http://domain:port/timeshift/user/pass/duration/timestamp/id.ts
-            let newString = urlString.replacingOccurrences(of: "/live/", with: "/timeshift/")
+            // Note: channel.streamURL is constructed as /live/user/pass/id.m3u8
+            // We need to inject duration/timestamp before the ID.
             
-            // Extract numeric ID and remove extension (like .m3u8)
+            let newString = urlString.replacingOccurrences(of: "/live/", with: "/timeshift/")
             if let lastSlash = newString.lastIndex(of: "/") {
                 let prefix = newString[..<lastSlash]
+                // The part after last slash is "id.m3u8"
+                // We need just the ID
                 let idPart = newString[newString.index(after: lastSlash)...]
                 let streamID = idPart.components(separatedBy: ".").first ?? String(idPart)
                 

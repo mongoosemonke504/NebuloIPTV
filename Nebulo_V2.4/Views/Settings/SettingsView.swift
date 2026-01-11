@@ -429,53 +429,78 @@ struct ContentManagementCard: View {
     
     @ObservedObject var accountManager = AccountManager.shared
     @Environment(\.dismiss) private var dismiss
-    @AppStorage("xstreamURL") private var xstreamURL = ""; @AppStorage("username") private var username = ""; @AppStorage("password") private var password = ""; @AppStorage("loginTypeRaw") private var loginTypeRaw = LoginType.xtream.rawValue
     
     var body: some View {
         SettingsCard {
             VStack(spacing: 0) {
-                // Playlists
+                // Playlists List
                 ForEach(accountManager.accounts) { account in
-                    Button(action: {
-                        withAnimation { accountManager.switchToAccount(account) }
-                    }) {
-                        HStack {
-                            Circle()
-                                .fill(Color.white.opacity(0.1))
-                                .frame(width: 40, height: 40)
-                                .overlay(Image(systemName: "play.tv.fill").font(.caption).foregroundColor(.white))
+                    HStack {
+                        // Active Toggle
+                        Toggle("", isOn: Binding(
+                            get: { account.isActive },
+                            set: { val in
+                                var updated = account
+                                updated.isActive = val
+                                accountManager.saveAccount(updated, makeActive: false)
+                            }
+                        ))
+                        .labelsHidden()
+                        .tint(accentColor)
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(account.displayName)
+                                .font(.subheadline.bold())
+                                .foregroundColor(.white)
+                                .lineLimit(1)
                             
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(account.displayName)
-                                    .font(.subheadline.bold())
-                                    .foregroundColor(.white)
-                                Text(account.url)
+                            HStack(spacing: 4) {
+                                Image(systemName: account.type == .mac ? "server.rack" : "list.bullet")
+                                    .font(.caption2)
+                                Text(account.type == .mac ? "Stalker/MAC" : (account.type == .m3u ? "M3U Playlist" : "Xtream Codes"))
                                     .font(.caption)
-                                    .foregroundColor(.white.opacity(0.5))
-                                    .lineLimit(1)
                             }
-                            Spacer()
-                            if accountManager.currentAccount?.id == account.id {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundColor(accentColor)
-                                    .font(.title3)
-                            }
+                            .foregroundColor(.white.opacity(0.5))
                         }
-                        .padding()
-                        .background(Color.white.opacity(accountManager.currentAccount?.id == account.id ? 0.05 : 0))
-                    }
-                    .buttonStyle(.plain)
-                    .contextMenu {
-                        Button(role: .destructive) {
-                            accountManager.removeAccount(account)
+                        
+                        Spacer()
+                        
+                        // Status Indicator (if primary)
+                        if accountManager.currentAccount?.id == account.id {
+                            Text("Primary")
+                                .font(.caption2.bold())
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(accentColor.opacity(0.2))
+                                .foregroundColor(accentColor)
+                                .cornerRadius(4)
+                        }
+                        
+                        // Actions Menu
+                        Menu {
+                            Button("Set as Primary") {
+                                withAnimation { accountManager.switchToAccount(account) }
+                            }
+                            
+                            Button(role: .destructive) {
+                                accountManager.removeAccount(account)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
                         } label: {
-                            Label("Delete Playlist", systemImage: "trash")
+                            Image(systemName: "ellipsis")
+                                .frame(width: 30, height: 30)
+                                .contentShape(Rectangle())
+                                .foregroundColor(.white.opacity(0.6))
                         }
                     }
+                    .padding()
+                    .background(Color.white.opacity(0.03))
                     
-                    Divider().background(Color.white.opacity(0.1)).padding(.leading, 60)
+                    Divider().background(Color.white.opacity(0.1))
                 }
                 
+                // Add Playlist Button
                 Button(action: { showAddPlaylist = true }) {
                     HStack {
                         Image(systemName: "plus.circle.fill")
@@ -491,57 +516,37 @@ struct ContentManagementCard: View {
                 
                 Divider().background(Color.white.opacity(0.1))
                 
-                // Management Tools
-                Group {
-                    Button(action: {
-                        dismiss()
-                        Task { 
-                            // Get active credentials
-                            if let account = accountManager.currentAccount {
-                                // 1. Refresh Playlist Data (Channels & Icons)
-                                await viewModel.loadData(
-                                    url: account.url, 
-                                    user: account.username ?? "", 
-                                    pass: account.password ?? "", 
-                                    mac: account.macAddress,
-                                    type: account.type, 
-                                    silent: false
-                                )
-                                
-                                // 2. Refresh Sports Data (Scores & Icons)
-                                await scoreViewModel.fetchScores(forceRefresh: true)
-                                
-                                // 3. Update EPG
-                                if let url = URL(string: account.url) { 
-                                    await viewModel.updateEPG(baseURL: url, user: account.username ?? "", pass: account.password ?? "", force: true, silent: false) 
-                                }
-                            }
-                        }
-                    }) {
-                        SettingsRow(icon: "arrow.clockwise.icloud", title: "Update Content & Guide", subtitle: viewModel.isUpdatingEPG ? "Updating..." : nil, showChevron: false)
+                // Global Refresh Button
+                Button(action: {
+                    dismiss()
+                    Task {
+                        await viewModel.loadActiveAccounts(silent: false)
+                        await scoreViewModel.fetchScores(forceRefresh: true)
                     }
-                    .disabled(viewModel.isUpdatingEPG)
-                    
-                    NavigationLink(destination: CategoriesManagerView(categories: $categories, accentColor: accentColor, viewModel: viewModel)) {
-                        SettingsRow(icon: "list.bullet.rectangle.portrait.fill", title: "Manage Categories")
-                    }
-                    
-                    NavigationLink(destination: ManageEPGsView()) {
-                        SettingsRow(icon: "list.bullet.clipboard", title: "Manage EPGs")
-                    }
-                    
-                    NavigationLink(destination: RecordingsView(viewModel: viewModel, playAction: { channel in
-                        dismissSettings()
-                        playAction?(channel)
-                    })) {
-                        SettingsRow(icon: "recordingtape", title: "Recordings", subtitle: "\(RecordingManager.shared.recordings.count) Saved")
-                    }
-                    
-                    NavigationLink(destination: HiddenChannelsSettingsView(viewModel: viewModel)) {
-                        SettingsRow(icon: "eye.slash.fill", title: "Hidden Channels", subtitle: !viewModel.hiddenIDs.isEmpty ? "\(viewModel.hiddenIDs.count)" : nil, iconColor: .white)
-                    }
+                }) {
+                    SettingsRow(icon: "arrow.clockwise.icloud", title: "Update All Content", subtitle: viewModel.isUpdatingEPG ? "Updating..." : nil, showChevron: false)
                 }
+                .disabled(viewModel.isUpdatingEPG)
                 .buttonStyle(.plain)
+                
+                NavigationLink(destination: CategoriesManagerView(categories: $categories, accentColor: accentColor, viewModel: viewModel)) {
+                    SettingsRow(icon: "list.bullet.rectangle.portrait.fill", title: "Manage Categories")
+                }
+                
+                NavigationLink(destination: ManageEPGsView()) {
+                    SettingsRow(icon: "list.bullet.clipboard", title: "Manage EPGs")
+                }
+                
+                NavigationLink(destination: RecordingsView(viewModel: viewModel, playAction: { channel in
+                    dismissSettings()
+                    playAction?(channel)
+                })) {
+                    SettingsRow(icon: "recordingtape", title: "Recordings", subtitle: "\(RecordingManager.shared.recordings.count) Saved")
+                }
+                
+                NavigationLink(destination: HiddenChannelsSettingsView(viewModel: viewModel)) {
+                    SettingsRow(icon: "eye.slash.fill", title: "Hidden Channels", subtitle: !viewModel.hiddenIDs.isEmpty ? "\(viewModel.hiddenIDs.count)" : nil, iconColor: .white)
+                }
             }
         }
     }
