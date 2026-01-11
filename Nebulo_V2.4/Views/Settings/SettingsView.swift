@@ -250,6 +250,31 @@ struct AppearanceCard: View {
                     }
                     .frame(height: 22)
                 }
+                
+                Divider().background(Color.white.opacity(0.1))
+                
+                // Real-time Preview Section
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Preview")
+                        .font(.caption.bold())
+                        .foregroundColor(.white.opacity(0.5))
+                    
+                    HStack {
+                        Image(systemName: "tv.fill")
+                            .foregroundColor(Color(hex: customAccentHex) ?? .blue)
+                            .frame(width: 30)
+                        Text("Example Category")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity)
+                    .modifier(GlassEffect(cornerRadius: 12, isSelected: false, accentColor: nil))
+                }
             }
             .padding()
             

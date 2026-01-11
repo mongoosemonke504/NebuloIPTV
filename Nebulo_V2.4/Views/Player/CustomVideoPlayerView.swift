@@ -441,15 +441,37 @@ struct CustomVideoPlayerView: SwiftUI.View {
             await MainActor.run {
                 self.currentStreamURL = targetURL
                 
-                // If the player is already active with the SAME content, reuse it (seamless)
-                if let current = playerManager.currentURL, 
-                   (playerManager.isPlaying || playerManager.isBuffering),
-                   current.absoluteString == targetURL.absoluteString {
-                    
-                    // Re-assert play to ensure UI sync, but engine will no-op if same
-                    playerManager.play(url: current)
+                // Smart Resume Logic: Prevent restarting stream if already loaded
+                // 1. Check exact match
+                // 2. Check path match (ignore tokens)
+                // 3. Check ID match (handle Xtream Codes /live/ vs /timeshift/ difference)
+                
+                var shouldResume = false
+                
+                if let current = playerManager.currentURL, playerManager.activeBackendName != "None" {
+                    if current.absoluteString == targetURL.absoluteString {
+                        shouldResume = true
+                    } else if current.path == targetURL.path {
+                        shouldResume = true
+                    } else {
+                        // Check if filenames (Stream IDs) match, ignoring extension
+                        let currentID = current.deletingPathExtension().lastPathComponent
+                        let targetID = targetURL.deletingPathExtension().lastPathComponent
+                        if !currentID.isEmpty && currentID == targetID {
+                            shouldResume = true
+                        }
+                    }
+                }
+                
+                if shouldResume {
+                    // Backend is active and content matches.
+                    // If not playing (paused in mini-player), simply resume to preserve time-shift buffer.
+                    if !playerManager.isPlaying && !playerManager.isBuffering {
+                        playerManager.resume()
+                    }
+                    // If already playing/buffering, do nothing (seamless transition)
                 } else {
-                    // Different content or stopped -> Force load
+                    // Different content or fully stopped -> Force load (resets buffer)
                     playerManager.play(url: targetURL)
                 }
                 

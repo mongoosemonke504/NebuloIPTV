@@ -20,7 +20,6 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
     var onCompletion: (() -> Void)?
     var onError: ((Error) -> Void)?
     
-    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var fileHandle: FileHandle?
     
     // Silent Audio Player to keep app alive in background
@@ -62,55 +61,62 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
     }
     
     private func setupSilentAudio() {
-        // Create a short silent audio buffer
-        // standard format: PCM 16-bit, 44.1kHz, mono
-        let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
-        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 100)!
-        buffer.frameLength = 100 // tiny buffer
+        // Create a proper silent WAV file in memory
+        let sampleRate: Int32 = 44100
+        let duration = 10 // seconds
+        let numSamples = sampleRate * Int32(duration)
+        let numChannels: Int16 = 1
+        let bitsPerSample: Int16 = 16
+        let blockAlign = numChannels * bitsPerSample / 8
+        let byteRate = sampleRate * Int32(blockAlign)
+        let dataSize = numSamples * Int32(blockAlign)
+        let chunkSize = 36 + dataSize
         
-        // We can't easily generate a wav file in memory without more boilerplate, 
-        // so we'll try to rely on the background task + "audio" mode. 
-        // Actually, without a real playing audio file, 'audio' mode might not hold.
-        // Let's create a dummy zero-filled Data and try to init AVAudioPlayer.
-        // A proper way is to use a bundled silent file, but we can't assume one exists.
-        // We will stick to the Background Task for now, but extending it.
-        // If the user wants "UHF-like" (indefinite), we strictly NEED playing audio.
+        var data = Data()
         
-        // Alternative: Use AudioQueue or just assume the Main Player is running?
-        // User said: "when the phone is off or when the app isn't open"
+        // RIFF chunk
+        data.append(contentsOf: [0x52, 0x49, 0x46, 0x46]) // "RIFF"
+        data.append(withUnsafeBytes(of: UInt32(chunkSize).littleEndian) { Data($0) })
+        data.append(contentsOf: [0x57, 0x41, 0x56, 0x45]) // "WAVE"
         
-        // Let's try to activate the session to hint we are active.
+        // fmt chunk
+        data.append(contentsOf: [0x66, 0x6D, 0x74, 0x20]) // "fmt "
+        data.append(withUnsafeBytes(of: UInt32(16).littleEndian) { Data($0) }) // chunk size 16
+        data.append(withUnsafeBytes(of: UInt16(1).littleEndian) { Data($0) }) // PCM
+        data.append(withUnsafeBytes(of: numChannels.littleEndian) { Data($0) })
+        data.append(withUnsafeBytes(of: sampleRate.littleEndian) { Data($0) })
+        data.append(withUnsafeBytes(of: byteRate.littleEndian) { Data($0) })
+        data.append(withUnsafeBytes(of: blockAlign.littleEndian) { Data($0) })
+        data.append(withUnsafeBytes(of: bitsPerSample.littleEndian) { Data($0) })
+        
+        // data chunk
+        data.append(contentsOf: [0x64, 0x61, 0x74, 0x61]) // "data"
+        data.append(withUnsafeBytes(of: dataSize.littleEndian) { Data($0) })
+        data.append(Data(count: Int(dataSize))) // Zeroed data
+        
         do {
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers, .allowAirPlay])
             try AVAudioSession.sharedInstance().setActive(true)
+            
+            silentAudioPlayer = try AVAudioPlayer(data: data)
+            silentAudioPlayer?.numberOfLoops = -1 // Infinite loop
+            silentAudioPlayer?.volume = 0.0 // Silent
+            silentAudioPlayer?.prepareToPlay()
+            print("✅ [StreamRecorder] Silent Audio Player Ready")
         } catch {
-            print("⚠️ [StreamRecorder] Audio Session Error: \(error)")
+            print("⚠️ [StreamRecorder] Silent Audio Setup Failed: \(error)")
         }
     }
     
     @objc private func handleDidEnterBackground() {
         guard isRecording else { return }
-        
-        // 1. Begin Background Task (gives ~30s to 3 mins)
-        if backgroundTask == .invalid {
-            backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Recording") {
-                // Expiration handler: If we run out of time, close up shop.
-                // But we don't want to stop recording if possible.
-                // We'll just end the task marking.
-                self.endBackgroundTask()
-            }
-        }
+        print("🌙 [StreamRecorder] App Entering Background. Starting Silent Audio Keeper.")
+        silentAudioPlayer?.play()
     }
     
     @objc private func handleWillEnterForeground() {
-        endBackgroundTask()
-    }
-    
-    private func endBackgroundTask() {
-        if backgroundTask != .invalid {
-            UIApplication.shared.endBackgroundTask(backgroundTask)
-            backgroundTask = .invalid
-        }
+        print("☀️ [StreamRecorder] App Entering Foreground. Stopping Silent Audio Keeper.")
+        silentAudioPlayer?.stop()
     }
     
     func start() {
@@ -184,7 +190,6 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
             
             DispatchQueue.main.async {
                 print("⏹️ [StreamRecorder] Clean stop.")
-                self.endBackgroundTask()
                 self.onCompletion?()
             }
         }
