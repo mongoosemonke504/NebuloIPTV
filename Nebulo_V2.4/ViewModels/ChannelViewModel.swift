@@ -702,7 +702,14 @@ class ChannelViewModel: ObservableObject {
     func triggerRenameCategory(_ c: StreamCategory) { promptRename(name: c.name) { [weak self] n in self?.renameCategory(id: c.id, newName: n) } }
     
     func categorizeSports() {
-        let currentChannels = self.channels; let currentConfigs = self.sportsConfigs; let currentExclusions = self.excludedSportsIDs
+        let currentChannels = self.channels
+        let currentConfigs = self.sportsConfigs
+        let currentExclusions = self.excludedSportsIDs
+        // Capture EPG snapshots for background sorting
+        let currentEPG = self.epgData
+        let currentMap = self.epgNameMap
+        let now = self.currentTime
+        
         Task.detached(priority: .utility) { [weak self] in
             var localGroups: [String: [StreamChannel]] = [:]
             for channel in currentChannels {
@@ -712,10 +719,40 @@ class ChannelViewModel: ObservableObject {
                     if config.keywords.contains(where: { searchName.localizedCaseInsensitiveContains($0) }) { localGroups[config.id, default: []].append(channel); break }
                 }
             }
+            
+            // Helper for sorting
+            func getSortDate(for channel: StreamChannel) -> Date {
+                let eID = channel.epgID ?? currentMap[channel.name.lowercased()]
+                guard let id = eID, let schedule = currentEPG[id] else { return Date.distantFuture }
+                
+                // Priority 1: Currently Live
+                if let current = schedule.first(where: { now >= $0.start && now <= $0.stop }) {
+                    return current.start
+                }
+                // Priority 2: Upcoming
+                if let next = schedule.first(where: { $0.start > now }) {
+                    return next.start
+                }
+                
+                return Date.distantFuture
+            }
+            
             for (key, list) in localGroups {
                 localGroups[key] = list.sorted { a, b in
-                    let aLive = NameCleaner.isLiveGameOrPPV(a.name); let bLive = NameCleaner.isLiveGameOrPPV(b.name)
-                    if aLive != bLive { return aLive }; return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+                    let dateA = getSortDate(for: a)
+                    let dateB = getSortDate(for: b)
+                    
+                    // If both have valid EPG dates (not distantFuture), sort by Date ASC
+                    if dateA != Date.distantFuture || dateB != Date.distantFuture {
+                        if dateA != dateB { return dateA < dateB }
+                    }
+                    
+                    // Fallback: Name Heuristics
+                    let aLive = NameCleaner.isLiveGameOrPPV(a.name)
+                    let bLive = NameCleaner.isLiveGameOrPPV(b.name)
+                    if aLive != bLive { return aLive }
+                    
+                    return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
                 }
             }
             let finalGroups = localGroups
