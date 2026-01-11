@@ -1167,6 +1167,7 @@ class ChannelViewModel: ObservableObject {
             c.originalID = c.id
             c.accountID = accountID
             c.id = c.id + idOffset // Apply Namespace Offset
+            c.categoryID = c.categoryID + idOffset // Apply Category Offset
             c.streamURL = "\(safeURL)/live/\(user)/\(pass)/\($0.originalID ?? 0).m3u8"
             c.originalName = c.name
             if let custom = renames[c.originalID ?? 0] { c.name = custom } 
