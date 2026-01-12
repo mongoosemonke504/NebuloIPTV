@@ -59,7 +59,19 @@ class ChannelViewModel: ObservableObject {
     @Published var loadingStatus: String = "Loading..." // New status property
     
     // Boot State
-    private var lastFullLoadTime: Date? = nil
+    private var lastFullLoadTime: Date? {
+        get {
+            guard let interval = UserDefaults.standard.object(forKey: settingsPrefix + "lastFullLoadTime") as? TimeInterval else { return nil }
+            return Date(timeIntervalSince1970: interval)
+        }
+        set {
+            if let date = newValue {
+                UserDefaults.standard.set(date.timeIntervalSince1970, forKey: settingsPrefix + "lastFullLoadTime")
+            } else {
+                UserDefaults.standard.removeObject(forKey: settingsPrefix + "lastFullLoadTime")
+            }
+        }
+    }
     @Published var lastImageCacheTime: Date? = nil
     
     // Multi-Account State
@@ -142,18 +154,41 @@ class ChannelViewModel: ObservableObject {
             
             if Task.isCancelled { return }
             
-            await MainActor.run {
-                if !silent { 
-                    self.isLoading = true; 
-                    self.loadingStatus = "Loading Playlists..."
-                    self.errorMessage = nil
+            // 1. Check Cache First (for instant load)
+            // If not silent (meaning user is waiting), try to load from disk first
+            if !silent {
+                if let (cachedChans, cachedCats) = self.loadFromCache() {
+                    await MainActor.run {
+                        self.channels = cachedChans
+                        self.categories = cachedCats
+                        self.categorizeSports()
+                        // If we have data, we can stop "loading" UI immediately
+                        // unless cache is very old? User said "much faster".
+                        self.isLoading = false
+                    }
+                } else {
+                    // No cache, show loading
+                    await MainActor.run {
+                        self.isLoading = true
+                        self.loadingStatus = "Loading Playlists..."
+                        self.errorMessage = nil
+                    }
                 }
-                // Reset data before merging
+            }
+            
+            // 2. Perform Network Sync (Always update in background to keep fresh)
+            // If we didn't load from cache, ensure isLoading is true
+            if self.channels.isEmpty {
+                await MainActor.run {
+                    if !silent { self.isLoading = true }
+                }
+            }
+            
+            await MainActor.run {
+                // Reset data before merging (only if we are going to replace it)
+                // Actually, if we loaded from cache, we don't want to reset immediately and flash empty.
+                // We should fetch new data into temp vars, then swap.
                 self.activeAccountsMap = Dictionary(uniqueKeysWithValues: accounts.map { ($0.id, $0) })
-                self.reset()
-                
-                // Re-assert loading state after reset (which clears it)
-                if !silent { self.isLoading = true }
             }
             
             var allChannels: [StreamChannel] = []
@@ -187,10 +222,10 @@ class ChannelViewModel: ObservableObject {
             }
             
             await self.preloadImages()
-            await self.updateEPGFromURLs(epgUrls, silent: silent)
+            await self.updateEPGFromURLs(epgUrls, silent: silent || !self.channels.isEmpty) // Silent if we already have data
             
-            // Ensure Minimum 3s Delay if visible loading
-            if !silent {
+            // Ensure Minimum 3s Delay if visible loading was actually shown (i.e. no cache)
+            if !silent && self.isLoading {
                 let elapsed = Date().timeIntervalSince(startTime)
                 if elapsed < 3.0 {
                     let remaining = 3.0 - elapsed
@@ -969,8 +1004,9 @@ class ChannelViewModel: ObservableObject {
 
     func updateEPG(baseURL: URL, user: String, pass: String, force: Bool = false, silent: Bool = false) async {
         let now = Date()
-        let isStale = lastEPGUpdateTime == nil || now.timeIntervalSince(lastEPGUpdateTime!) >= 14400
+        let isStale = lastEPGUpdateTime == nil || now.timeIntervalSince(lastEPGUpdateTime!) >= 14400 // 4 Hours
         
+        // If not forced and data is fresh, just load from disk and skip update
         if !force && !isStale {
             if let cached = EPGService().loadFromDisk(), !cached.epg.isEmpty {
                 await MainActor.run { 
@@ -994,65 +1030,76 @@ class ChannelViewModel: ObservableObject {
             }
         }
         
+        // Pass 'isStale' to determine if we should be silent (background update) or blocking (if force/first load)
+        // If it's stale but we have data (silent is true), we do it in background.
+        // If force is true, we show UI (silent passed as false usually).
+        // Here we respect the passed 'silent' parameter but could override if needed.
+        
         await updateEPGFromURLs(urls, silent: silent)
     }
     
     func updateEPGFromURLs(_ urls: [URL], silent: Bool = false) async {
         var shouldManageLoading = false
         
+        // Check staleness again here to decide on UI if called directly
+        let now = Date()
+        let isStale = lastEPGUpdateTime == nil || now.timeIntervalSince(lastEPGUpdateTime!) >= 14400
+        
+        // If we have cached data and just updating in background because it's stale, 
+        // we should treat it as silent even if 'silent' was passed as false (unless force which we can't see here directly but usually implies silent=false)
+        // But for safety, let's trust the caller. However, if silent is true, we definitely don't show UI.
+        
+        // Load from disk first if we haven't already (e.g. cold start with stale data)
+        if isStale && self.epgData.isEmpty {
+             if let cached = EPGService().loadFromDisk(), !cached.epg.isEmpty {
+                await MainActor.run {
+                    self.epgData = cached.epg
+                    self.epgNameMap = cached.map
+                }
+                // We loaded stale data to show SOMETHING, now continue to update in background
+            }
+        }
+        
+        // If we have data now (either from cache or previous load), we can be silent
+        let effectivelySilent = silent || !self.epgData.isEmpty
+        
         await MainActor.run {
-            if !silent && !self.isLoading {
+            // isLoading controls the skeletons. We only show skeletons if we have NO data.
+            if !effectivelySilent && !self.isLoading {
                 self.isLoading = true
                 shouldManageLoading = true
             }
             
             self.visualProgress = 0
             self.epgProgress = 0
-            self.loadingStatus = "Updating TV Guide..."
-            if !silent {
-                withAnimation(.spring()) { self.isUpdatingEPG = true }
-            }
+            self.loadingStatus = "Fetching EPG..."
             
-            self.smoothingTimer?.cancel()
-            self.smoothingTimer = Timer.publish(every: 0.04, on: .main, in: .common)
-                .autoconnect()
-                .sink { [weak self] _ in
-                    guard let self = self else { return }
-                    let real = self.epgProgress
-                    let current = self.visualProgress
-                    if Double.random(in: 0...1) < 0.6 { return }
-                    
-                    if current < real {
-                        let jump = Double.random(in: 0.01...0.08)
-                        self.visualProgress += min(real - current, jump)
-                    } else if current < 0.92 {
-                        let creep = Double.random(in: 0.001...0.005)
-                        self.visualProgress += creep
-                    }
-                    
-                    if real < 1.0 && self.visualProgress > 0.95 { self.visualProgress = 0.95 } 
-                    
-                    if real >= 1.0 {
-                        if self.visualProgress < 1.0 { self.visualProgress = 1.0 }
-                        self.smoothingTimer?.cancel()
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                            withAnimation(.spring()) { self.isUpdatingEPG = false }
-                        }
-                    }
-                }
+            // isUpdatingEPG controls the dropdown. We always show it during the fetch.
+            withAnimation(.spring()) { self.isUpdatingEPG = true }
         }
         
         let result = await EPGService().fetchAndMergeEPGs(urls: urls) { progress in
-            self.epgProgress = progress
+            Task { @MainActor in
+                self.epgProgress = progress
+                self.visualProgress = progress
+            }
         }
         
         await MainActor.run {
             self.lastEPGUpdateTime = Date()
             self.epgProgress = 1.0
+            self.visualProgress = 1.0
             self.epgData = result.epg
             self.epgNameMap = result.map
             
-            if shouldManageLoading { self.isLoading = false }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                withAnimation(.spring()) { self.isUpdatingEPG = false }
+            }
+            
+            if shouldManageLoading { 
+                // Small delay to ensure minimum skeleton time if it was shown
+                self.isLoading = false 
+            }
         }
     }
     

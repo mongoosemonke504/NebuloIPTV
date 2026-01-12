@@ -235,7 +235,8 @@ extension MainView {
             LoadingStatusOverlay(
                 status: viewModel.loadingStatus,
                 progress: viewModel.isUpdatingEPG ? viewModel.displayEPGProgress : nil,
-                accentColor: accentColor
+                accentColor: accentColor,
+                isBlocking: viewModel.isLoading // Only block if full loading (skeletons)
             )
             .transition(.opacity)
             .zIndex(100)
@@ -884,6 +885,7 @@ struct LoadingStatusOverlay: View {
     let status: String
     var progress: Double? = nil
     let accentColor: Color
+    var isBlocking: Bool = true
     
     var body: some View {
         VStack {
@@ -924,6 +926,12 @@ struct LoadingStatusOverlay: View {
             Spacer()
         }
         .frame(maxWidth: .infinity)
-        .background(Color.black.opacity(0.3).ignoresSafeArea()) // Dim background slightly more
+        .background(
+            isBlocking 
+            ? Color.black.opacity(0.3)
+            : Color.clear
+        )
+        .ignoresSafeArea()
+        .allowsHitTesting(isBlocking) // Pass through touches if not blocking (except the overlay itself ideally, but VStacks capture space. We need contentShape)
     }
 }
