@@ -294,8 +294,8 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         ksPlayerView.onFinish = { [weak self] error in if error != nil { self?.handleKSPlayerError() } }
         KSOptions.isAutoPlay = true
         KSOptions.isSecondOpen = false
-        KSOptions.maxBufferDuration = 30.0 // 30s buffer for stability
-        KSOptions.preferredForwardBufferDuration = 15.0 // Buffer at least 15s before start
+        KSOptions.maxBufferDuration = 60.0 
+        KSOptions.preferredForwardBufferDuration = 5.0 // Reduced to 5s to prevent stalls
         ksPlayerView.allowNativeControls = useNativeBridge
     }
     
@@ -426,6 +426,8 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                 NSLayoutConstraint.activate(newConstraints)
                 self.playerConstraints = newConstraints
             }
+            
+            // Note: KSOptions.preferredForwardBufferDuration was set globally in setupKSPlayer
             let resource = KSPlayerResource(url: url)
             self.ksPlayerView.set(resource: resource)
             self.ksPlayerView.currentPlayingURL = url
