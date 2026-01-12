@@ -438,6 +438,9 @@ struct CustomVideoPlayerView: SwiftUI.View {
             let resolvedURLString = await viewModel?.resolveStalkerStream(channel) ?? channel.streamURL
             guard let targetURL = URL(string: resolvedURLString) else { return }
             
+            // Give the UI a moment to settle and renderView to get its frame
+            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s delay
+            
             await MainActor.run {
                 self.currentStreamURL = targetURL
                 

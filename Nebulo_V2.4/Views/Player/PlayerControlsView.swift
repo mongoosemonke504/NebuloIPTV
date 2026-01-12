@@ -224,13 +224,18 @@ struct PlayerControlsView: View {
                                             .lineLimit(1)
                                         
                                         // Player Backend Indicator
-                                        Text(playerManager.activeBackendName)
-                                            .font(.system(size: 9, weight: .black))
-                                            .foregroundColor(.white.opacity(0.6))
-                                            .padding(.horizontal, 5)
-                                            .padding(.vertical, 1)
-                                            .background(Color.white.opacity(0.12))
-                                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                                        Button(action: {
+                                            playerManager.toggleBackend()
+                                        }) {
+                                            Text(playerManager.activeBackendName)
+                                                .font(.system(size: 9, weight: .black))
+                                                .foregroundColor(.white.opacity(0.6))
+                                                .padding(.horizontal, 5)
+                                                .padding(.vertical, 1)
+                                                .background(Color.white.opacity(0.12))
+                                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                                        }
+                                        .buttonStyle(.plain)
                                         
                                         Spacer()
                                     }
