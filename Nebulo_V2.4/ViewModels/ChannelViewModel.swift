@@ -58,10 +58,16 @@ class ChannelViewModel: ObservableObject {
     @Published var isUpdatingEPG: Bool = false
     @Published var loadingStatus: String = "Loading..." // New status property
     
+    // Boot State
+    private var lastFullLoadTime: Date? = nil
+    @Published var lastImageCacheTime: Date? = nil
+    
     // Multi-Account State
     var activeAccountsMap: [UUID: Account] = [:]
     // Stalker Token Map
     var stalkerTokens: [UUID: String] = [:]
+    
+    private var currentLoadTask: Task<Void, Never>? // Guard against redundant loads
     
     private var lastEPGUpdateTime: Date? {
         get {
@@ -107,56 +113,100 @@ class ChannelViewModel: ObservableObject {
         Task { await loadActiveAccounts() }
     }
     
-    func loadActiveAccounts(silent: Bool = false) async {
-        let accounts = AccountManager.shared.accounts.filter { $0.isActive }
-        
-        // If no active accounts in manager, fallback to legacy load check if not already attempted
-        if accounts.isEmpty {
-            // Check legacy AppStorage (handled by MainView calling loadData, so we do nothing here)
+    func checkReloadNeeded() async {
+        let now = Date()
+        // Reload if last load was > 30 minutes ago, or never loaded
+        if let last = lastFullLoadTime, now.timeIntervalSince(last) < 1800 {
             return
         }
         
-        await MainActor.run {
-            if !silent { 
-                self.isLoading = true; 
-                self.loadingStatus = "Loading Playlists..."
-                self.errorMessage = nil
+        print("🔄 [ChannelViewModel] Resume detected, triggering full reload...")
+        await loadActiveAccounts(silent: false)
+    }
+
+    func loadActiveAccounts(silent: Bool = false) async {
+        // Debounce: If already loading, and this is a silent refresh, skip it.
+        if isLoading && silent { return }
+        
+        // Cancel any existing load task to restart fresh or handle the new request
+        currentLoadTask?.cancel()
+        
+        currentLoadTask = Task {
+            let startTime = Date()
+            let accounts = AccountManager.shared.accounts.filter { $0.isActive }
+            
+            // If no active accounts in manager, fallback to legacy load check if not already attempted
+            if accounts.isEmpty {
+                return
             }
-            // Reset data before merging
-            self.activeAccountsMap = Dictionary(uniqueKeysWithValues: accounts.map { ($0.id, $0) })
-            self.reset()
-        }
-        
-        var allChannels: [StreamChannel] = []
-        var allCategories: [StreamCategory] = []
-        var epgUrls: [URL] = []
-        
-        await withTaskGroup(of: ([StreamChannel], [StreamCategory], [URL]).self) { group in
-            for account in accounts {
-                group.addTask {
-                    return await self.fetchAccountData(account)
+            
+            if Task.isCancelled { return }
+            
+            await MainActor.run {
+                if !silent { 
+                    self.isLoading = true; 
+                    self.loadingStatus = "Loading Playlists..."
+                    self.errorMessage = nil
+                }
+                // Reset data before merging
+                self.activeAccountsMap = Dictionary(uniqueKeysWithValues: accounts.map { ($0.id, $0) })
+                self.reset()
+                
+                // Re-assert loading state after reset (which clears it)
+                if !silent { self.isLoading = true }
+            }
+            
+            var allChannels: [StreamChannel] = []
+            var allCategories: [StreamCategory] = []
+            var epgUrls: [URL] = []
+            
+            await withTaskGroup(of: ([StreamChannel], [StreamCategory], [URL]).self) { group in
+                for account in accounts {
+                    group.addTask {
+                        if Task.isCancelled { return ([], [], []) }
+                        return await self.fetchAccountData(account)
+                    }
+                }
+                
+                for await (chans, cats, urls) in group {
+                    allChannels.append(contentsOf: chans)
+                    allCategories.append(contentsOf: cats)
+                    epgUrls.append(contentsOf: urls)
                 }
             }
             
-            for await (chans, cats, urls) in group {
-                allChannels.append(contentsOf: chans)
-                allCategories.append(contentsOf: cats)
-                epgUrls.append(contentsOf: urls)
+            if Task.isCancelled { return }
+            
+            await MainActor.run {
+                self.channels = allChannels
+                // Sort categories by name to interleave them
+                self.categories = allCategories.sorted { $0.name < $1.name }
+                
+                self.categorizeSports()
+                self.saveToCache()
+            }
+            
+            await self.preloadImages()
+            await self.updateEPGFromURLs(epgUrls, silent: silent)
+            
+            // Ensure Minimum 3s Delay if visible loading
+            if !silent {
+                let elapsed = Date().timeIntervalSince(startTime)
+                if elapsed < 3.0 {
+                    let remaining = 3.0 - elapsed
+                    try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+                }
+            }
+            
+            if Task.isCancelled { return }
+            
+            await MainActor.run {
+                self.lastFullLoadTime = Date()
+                self.isLoading = false
             }
         }
         
-        await MainActor.run {
-            self.channels = allChannels
-            // Sort categories by name to interleave them
-            self.categories = allCategories.sorted { $0.name < $1.name }
-            
-            self.categorizeSports()
-            self.saveToCache()
-            self.isLoading = false
-        }
-        
-        await self.preloadImages()
-        await self.updateEPGFromURLs(epgUrls, silent: silent)
+        await currentLoadTask?.value
     }
     
     // Helper to fetch data for a single account with namespacing
@@ -866,6 +916,12 @@ class ChannelViewModel: ObservableObject {
     }
     
     func preloadImages() async {
+        let now = Date()
+        // Check if we ran this recently (e.g. within 24 hours)
+        if let last = await MainActor.run(body: { return self.lastImageCacheTime }), now.timeIntervalSince(last) < 86400 {
+            return
+        }
+        
         await MainActor.run { self.loadingStatus = "Smart Caching Images..." }
         
         // Capture data on MainActor to avoid isolation issues
@@ -907,6 +963,7 @@ class ChannelViewModel: ObservableObject {
             }
         }
         
+        await MainActor.run { self.lastImageCacheTime = now }
         print("✅ [ChannelViewModel] Smart Cache complete.")
     }
 
