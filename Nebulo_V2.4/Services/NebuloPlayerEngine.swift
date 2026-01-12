@@ -125,9 +125,29 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     private var userPaused = false
     private var triedFallback = false
     private var ksPlayerRetryCount = 0
-    private let maxKSPlayerRetries = 3
+    private let maxKSPlayerRetries = 10 
     
     public private(set) var currentURL: URL?
+    
+    public func toggleBackend() {
+        guard let url = currentURL else { return }
+        
+        if currentBackend == .ksplayer {
+            // Switch to VLC
+            print("🔄 [NebuloEngine] Manually switching to VLC...")
+            ksPlayerView.pause()
+            ksPlayerView.removeFromSuperview()
+            playVLC(url: url)
+        } else if currentBackend == .vlc {
+            // Switch to KSPlayer
+            print("🔄 [NebuloEngine] Manually switching to KSPlayer...")
+            vlcMediaPlayer.stop()
+            vlcMediaPlayer.drawable = nil
+            if attemptKSPlayerPlayback(url: url) {
+                currentBackend = .ksplayer
+            }
+        }
+    }
     public var onRequestTimeshiftURL: ((Date) async -> URL?)?
     private var lastPauseDate: Date?
     
@@ -294,8 +314,8 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         ksPlayerView.onFinish = { [weak self] error in if error != nil { self?.handleKSPlayerError() } }
         KSOptions.isAutoPlay = true
         KSOptions.isSecondOpen = false
-        KSOptions.maxBufferDuration = 60.0 
-        KSOptions.preferredForwardBufferDuration = 5.0 // Reduced to 5s to prevent stalls
+        KSOptions.maxBufferDuration = 30.0 
+        KSOptions.preferredForwardBufferDuration = 1.0 // Minimal buffer to start instantly
         ksPlayerView.allowNativeControls = useNativeBridge
     }
     
@@ -356,6 +376,9 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     
     private func startBufferWatchdog() {
         stopBufferWatchdog()
+        // KSPlayer manages its own buffering. Watchdog is mainly for VLC.
+        if currentBackend == .ksplayer { return }
+        
         bufferStartTime = Date()
         bufferWatchdogTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self = self, self.isBuffering, let start = self.bufferStartTime else { return }
@@ -409,30 +432,39 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     private func attemptKSPlayerPlayback(url: URL) -> Bool {
         DispatchQueue.main.async { [weak self] in
              guard let self = self else { return }
+            
+            // Clean up existing view state for a truly fresh start
+            self.ksPlayerView.pause()
+            self.ksPlayerView.removeFromSuperview()
+            
             let playerView = self.ksPlayerView
-            if playerView.superview != self.renderView {
-                playerView.backgroundColor = UIColor.black
-                playerView.insetsLayoutMarginsFromSafeArea = false
-                playerView.preservesSuperviewLayoutMargins = false
-                self.renderView.addSubview(playerView)
-                playerView.translatesAutoresizingMaskIntoConstraints = false
-                 if !self.playerConstraints.isEmpty { NSLayoutConstraint.deactivate(self.playerConstraints); self.playerConstraints.removeAll() }
-                let newConstraints = [
-                    playerView.topAnchor.constraint(equalTo: self.renderView.topAnchor),
-                    playerView.bottomAnchor.constraint(equalTo: self.renderView.bottomAnchor),
-                    playerView.leadingAnchor.constraint(equalTo: self.renderView.leadingAnchor),
-                    playerView.trailingAnchor.constraint(equalTo: self.renderView.trailingAnchor)
-                ]
-                NSLayoutConstraint.activate(newConstraints)
-                self.playerConstraints = newConstraints
+            playerView.backgroundColor = UIColor.black
+            playerView.insetsLayoutMarginsFromSafeArea = false
+            playerView.preservesSuperviewLayoutMargins = false
+            
+            self.renderView.addSubview(playerView)
+            playerView.translatesAutoresizingMaskIntoConstraints = false
+            
+            // Always deactivate and re-apply constraints
+            if !self.playerConstraints.isEmpty { 
+                NSLayoutConstraint.deactivate(self.playerConstraints)
+                self.playerConstraints.removeAll() 
             }
             
-            // Note: KSOptions.preferredForwardBufferDuration was set globally in setupKSPlayer
+            let newConstraints = [
+                playerView.topAnchor.constraint(equalTo: self.renderView.topAnchor),
+                playerView.bottomAnchor.constraint(equalTo: self.renderView.bottomAnchor),
+                playerView.leadingAnchor.constraint(equalTo: self.renderView.leadingAnchor),
+                playerView.trailingAnchor.constraint(equalTo: self.renderView.trailingAnchor)
+            ]
+            NSLayoutConstraint.activate(newConstraints)
+            self.playerConstraints = newConstraints
+            
             let resource = KSPlayerResource(url: url)
             self.ksPlayerView.set(resource: resource)
             self.ksPlayerView.currentPlayingURL = url
             self.applyAspectRatio(self.currentAspectRatio)
-            self.ksPlayerView.play()
+            // Play is handled by KSOptions.isAutoPlay = true
         }
         return true
     }
@@ -520,17 +552,17 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         
         if ksPlayerRetryCount < maxKSPlayerRetries {
             ksPlayerRetryCount += 1
-            print("⚠️ [NebuloEngine] KSPlayer error, retrying (\(ksPlayerRetryCount)/\(maxKSPlayerRetries))...")
-            // Increased delay to 2.0s for better stability/recovery
+            print("⚠️ [NebuloEngine] KSPlayer error/stall, performing hard reload (\(ksPlayerRetryCount)/\(maxKSPlayerRetries))...")
+            
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
                 guard let self = self, self.currentBackend == .ksplayer else { return }
-                self.ksPlayerView.play()
+                // Re-initialize the resource connection (Hard Reload)
+                _ = self.attemptKSPlayerPlayback(url: url)
             }
         } else {
-            print("❌ [NebuloEngine] KSPlayer failed after \(maxKSPlayerRetries) retries, falling back to VLC.")
-            triedFallback = true
-            ksPlayerRetryCount = 0
-            ksPlayerView.pause(); ksPlayerView.removeFromSuperview(); playVLC(url: url)
+            print("❌ [NebuloEngine] KSPlayer failed after \(maxKSPlayerRetries) retries.")
+            self.playbackFailed = true
+            self.ksPlayerView.pause()
         }
     }
     
