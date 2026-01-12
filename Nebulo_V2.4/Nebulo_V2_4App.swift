@@ -15,6 +15,7 @@ struct Nebulo_V2_4App: App {
     // Initialize ViewModels here to start data fetching immediately
     @StateObject private var channelViewModel = ChannelViewModel.shared
     @StateObject private var scoreViewModel = ScoreViewModel()
+    @Environment(\.scenePhase) var scenePhase
     
     // Timer for periodic updates (every 60 seconds)
     let timer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
@@ -26,6 +27,11 @@ struct Nebulo_V2_4App: App {
                 .environmentObject(scoreViewModel)
                 .onAppear {
                     UIApplication.shared.beginReceivingRemoteControlEvents()
+                }
+                .onChange(of: scenePhase) { phase in
+                    if phase == .active {
+                        Task { await channelViewModel.checkReloadNeeded() }
+                    }
                 }
                 .onReceive(timer) { _ in
                     // Periodically refresh scores

@@ -273,26 +273,7 @@ struct StandardLayout: SwiftUI.View {
     
     var body: some SwiftUI.View {
         ZStack(alignment: .bottom) {
-            if !searchText.isEmpty {
-                searchView
-                    .modifier(SwipeBackModifier(onBack: { withAnimation { searchText = "" } }))
-            } else if let cat = selectedCategory {
-                if cat.id == -3 { 
-                    SportsHubView(viewModel: viewModel, accentColor: accentColor, playAction: playAction, onBack: { withAnimation { selectedCategory = nil } }, scoreViewModel: scoreViewModel)
-                        .transition(.blurFade)
-                        .modifier(SwipeBackModifier(onBack: { withAnimation { selectedCategory = nil } }))
-                }
-                else if cat.id == -5 { 
-                    RecordingsView(viewModel: viewModel, playAction: playAction, onBack: { withAnimation { selectedCategory = nil } })
-                        .transition(.blurFade)
-                        .modifier(SwipeBackModifier(onBack: { withAnimation { selectedCategory = nil } }))
-                }
-                else { 
-                    CategoryDetailView(title: cat.name, channels: getChannelsToShow(for: cat), accentColor: accentColor, playAction: playAction, toggleFav: viewModel.toggleFavorite, promptRename: viewModel.triggerRenameChannel, hideChannel: viewModel.hideChannel, favoriteIDs: viewModel.favoriteIDs, viewModel: viewModel, showMultiView: $showMultiView, onBack: { withAnimation { selectedCategory = nil } }, onCategorySelect: { cat in withAnimation { selectedCategory = cat; searchText = "" } })
-                        .transition(.blurFade)
-                        .modifier(SwipeBackModifier(onBack: { withAnimation { selectedCategory = nil } }))
-                }
-            } else if viewModel.isLoading {
+            if viewModel.isLoading {
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 24) {
                         // 1. Recent Preview Skeleton
@@ -332,6 +313,25 @@ struct StandardLayout: SwiftUI.View {
                         }
                     }
                     .padding(.vertical)
+                }
+            } else if !searchText.isEmpty {
+                searchView
+                    .modifier(SwipeBackModifier(onBack: { withAnimation { searchText = "" } }))
+            } else if let cat = selectedCategory {
+                if cat.id == -3 { 
+                    SportsHubView(viewModel: viewModel, accentColor: accentColor, playAction: playAction, onBack: { withAnimation { selectedCategory = nil } }, scoreViewModel: scoreViewModel)
+                        .transition(.blurFade)
+                        .modifier(SwipeBackModifier(onBack: { withAnimation { selectedCategory = nil } }))
+                }
+                else if cat.id == -5 { 
+                    RecordingsView(viewModel: viewModel, playAction: playAction, onBack: { withAnimation { selectedCategory = nil } })
+                        .transition(.blurFade)
+                        .modifier(SwipeBackModifier(onBack: { withAnimation { selectedCategory = nil } }))
+                }
+                else { 
+                    CategoryDetailView(title: cat.name, channels: getChannelsToShow(for: cat), accentColor: accentColor, playAction: playAction, toggleFav: viewModel.toggleFavorite, promptRename: viewModel.triggerRenameChannel, hideChannel: viewModel.hideChannel, favoriteIDs: viewModel.favoriteIDs, viewModel: viewModel, showMultiView: $showMultiView, onBack: { withAnimation { selectedCategory = nil } }, onCategorySelect: { cat in withAnimation { selectedCategory = cat; searchText = "" } })
+                        .transition(.blurFade)
+                        .modifier(SwipeBackModifier(onBack: { withAnimation { selectedCategory = nil } }))
                 }
             } else {
                 ScrollViewReader { proxy in
@@ -597,7 +597,14 @@ struct SidebarLayout: SwiftUI.View {
                 }
             }.frame(width: isLandscape ? 260 : 170).background(Color.clear); Divider().overlay(Color.white.opacity(0.2))
             ZStack {
-                if !searchText.isEmpty {
+                if viewModel.isLoading {
+                    ScrollView {
+                        VStack {
+                            ForEach(0..<15, id: \.self) { _ in ChannelRowSkeleton() }
+                        }
+                    }
+                }
+                else if !searchText.isEmpty {
                     // searchView is private to StandardLayout, so we need a similar view here or reuse components.
                     // For Sidebar layout, we usually reuse the same logic. 
                     // To keep it simple and safe, we can reuse the components directly.
@@ -605,13 +612,6 @@ struct SidebarLayout: SwiftUI.View {
                         .id("SearchOverride") // Hack to force reload if needed
                 } else if selectedCategory?.id == -3 { SportsHubView(viewModel: viewModel, accentColor: accentColor, playAction: playAction, onBack: nil, scoreViewModel: scoreViewModel).transition(.blurFade) }
                 else if selectedCategory?.id == -5 { RecordingsView(viewModel: viewModel, playAction: playAction, onBack: { withAnimation { selectedCategory = nil } }).transition(.blurFade) }
-                else if viewModel.isLoading {
-                    ScrollView {
-                        VStack {
-                            ForEach(0..<15, id: \.self) { _ in ChannelRowSkeleton() }
-                        }
-                    }
-                }
                 else {
                     ScrollViewReader { proxy in
                         ScrollView(showsIndicators: false) {
