@@ -151,6 +151,10 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     
     private var timeObserverTimer: Timer?
     
+    // Progress Watchdog State
+    private var lastProgressCheckTime: Date?
+    private var lastProgressValue: Double = -1
+    
     public enum VideoQuality: String, CaseIterable, Identifiable {
         case auto = "Auto", high = "1080p", medium = "720p", low = "480p"
         public var id: String { rawValue }
@@ -304,10 +308,9 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         }
         ksPlayerView.onFinish = { [weak self] error in if error != nil { self?.handleKSPlayerError() } }
         KSOptions.isAutoPlay = true
-        KSOptions.isSecondOpen = false // Disable fast open to prioritize buffer stability
-        KSOptions.maxBufferDuration = 300.0 // 5 Minutes Max Buffer
-        KSOptions.preferredForwardBufferDuration = 30.0 // Fetch 30s ahead aggressively
-        KSOptions.isAccurateSeek = true
+        KSOptions.isSecondOpen = true // Re-enable for connection speed
+        KSOptions.maxBufferDuration = 300.0 // Keep 5 Minutes Max Buffer
+        KSOptions.preferredForwardBufferDuration = 15.0 // Reduce to 15s to allow quicker start/resume
         
         ksPlayerView.allowNativeControls = useNativeBridge
     }
@@ -327,6 +330,10 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         self.userPaused = false
         self.playbackFailed = false
         self.triedFallback = false
+        // Reset Watchdog state
+        self.lastProgressValue = -1
+        self.lastProgressCheckTime = Date()
+        
         if url.isFileURL { playVLC(url: url); return }
         
         // Respect User Preference
@@ -472,7 +479,16 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             NSLayoutConstraint.activate(newConstraints)
             self.playerConstraints = newConstraints
             
-            let resource = KSPlayerResource(url: url)
+            // Use KSPlayerResource with options for robust connection
+            let options = KSOptions()
+            // FFmpeg reconnect options
+            options.set(key: "reconnect", value: "1")
+            options.set(key: "reconnect_at_eof", value: "1")
+            options.set(key: "reconnect_streamed", value: "1")
+            options.set(key: "reconnect_delay_max", value: "5")
+            options.set(key: "timeout", value: "10000000") // 10s read timeout (microseconds)
+            
+            let resource = KSPlayerResource(url: url, options: options)
             self.ksPlayerView.set(resource: resource)
             self.ksPlayerView.currentPlayingURL = url
             self.applyAspectRatio(self.currentAspectRatio)
@@ -509,6 +525,25 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     private func stopTicker() { timeObserverTimer?.invalidate(); timeObserverTimer = nil }
     
     private func updateState() {
+        // --- Playback Progress Watchdog ---
+        if isPlaying && !userPaused && !isBuffering {
+            let now = Date()
+            
+            // If currentTime hasn't changed for > 6 seconds, assume stalled
+            if abs(currentTime - lastProgressValue) < 0.1 {
+                if let lastCheck = lastProgressCheckTime, now.timeIntervalSince(lastCheck) > 6.0 {
+                    print("🚨 [NebuloEngine] Playback stalled (time not advancing). Triggering Watchdog.")
+                    handleStuckBuffer()
+                    lastProgressCheckTime = now // Reset to avoid spam
+                }
+            } else {
+                // Moving forward! Reset watchdog
+                lastProgressValue = currentTime
+                lastProgressCheckTime = now
+            }
+        }
+        // ----------------------------------
+    
         if currentBackend == .vlc {
             let time = vlcMediaPlayer.time
             if let val = time.value, !isInteractionSeeking { self.currentTime = Double(truncating: val) / 1000.0 }
