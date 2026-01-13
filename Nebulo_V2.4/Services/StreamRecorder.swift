@@ -160,11 +160,12 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
         
         print("🔴 [StreamRecorder] Starting optimized recording for \(streamURL)")
         
-        task = Task {
+        // Use a detached task for initial setup, then switch to Dispatch for loop
+        Task.detached(priority: .userInitiated) {
             do {
-                var request = URLRequest(url: streamURL)
+                var request = URLRequest(url: self.streamURL)
                 request.cachePolicy = .reloadIgnoringLocalCacheData
-                request.networkServiceType = .background // Hint to system to keep this alive
+                request.networkServiceType = .background
                 request.allowsCellularAccess = true
                 
                 // Perform peek on a background task
@@ -174,41 +175,53 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
                 if contentString.contains("#EXTM3U") {
                     print("ℹ️ [StreamRecorder] HLS Polling Mode")
                     
-                    // Open file handle on the dedicated I/O queue for HLS too
-                    fileQueue.sync {
-                        self.fileHandle = try? FileHandle(forWritingTo: outputURL)
+                    self.fileQueue.sync {
+                        self.fileHandle = try? FileHandle(forWritingTo: self.outputURL)
                         self.fileHandle?.seekToEndOfFile()
                     }
                     
-                    try await processManifest(initialData: data, response: response)
+                    try await self.processManifest(initialData: data, response: response)
+                    self.scheduleNextPoll()
                     
-                    while isRecording {
-                        try? await Task.sleep(nanoseconds: 5_000_000_000)
-                        if !isRecording { break }
-                        try await processManifest()
-                    }
                 } else {
                     print("ℹ️ [StreamRecorder] Continuous Chunk Mode")
                     
-                    // Open file handle on the dedicated I/O queue
-                    fileQueue.sync {
-                        self.fileHandle = try? FileHandle(forWritingTo: outputURL)
+                    self.fileQueue.sync {
+                        self.fileHandle = try? FileHandle(forWritingTo: self.outputURL)
                         self.fileHandle?.seekToEndOfFile()
                         if !data.isEmpty {
                             self.fileHandle?.write(data)
                         }
                     }
                     
-                    var streamRequest = URLRequest(url: streamURL)
+                    var streamRequest = URLRequest(url: self.streamURL)
                     streamRequest.networkServiceType = .background
                     streamRequest.allowsCellularAccess = true
-                    self.dataTask = urlSession.dataTask(with: streamRequest)
+                    self.dataTask = self.urlSession.dataTask(with: streamRequest)
                     self.dataTask?.resume()
                 }
             } catch {
                 print("❌ [StreamRecorder] Fatal: \(error)")
                 self.endBackgroundTask()
-                onError?(error)
+                self.onError?(error)
+            }
+        }
+    }
+    
+    private func scheduleNextPoll() {
+        guard isRecording else { return }
+        // Use global queue which is less likely to be throttled than Task sleep if audio is playing
+        DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 4.0) { [weak self] in
+            guard let self = self, self.isRecording else { return }
+            Task {
+                do {
+                    try await self.processManifest()
+                    self.scheduleNextPoll()
+                } catch {
+                    print("⚠️ [StreamRecorder] Poll failed: \(error)")
+                    // Retry with backoff or just continue
+                    self.scheduleNextPoll()
+                }
             }
         }
     }
@@ -218,8 +231,6 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
         silentAudioPlayer?.stop()
         dataTask?.cancel()
         dataTask = nil
-        task?.cancel()
-        task = nil
         
         NotificationCenter.default.removeObserver(self)
         
