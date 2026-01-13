@@ -29,6 +29,7 @@ struct SettingsView: View {
     @State private var showFilePicker = false
     @State private var showSourceSelection = false
     @State private var showAddPlaylist = false
+    @State private var accountToEdit: Account? = nil
     @State private var inputImage: UIImage?
     
     // Background Settings States (Local copies for editing)
@@ -74,6 +75,7 @@ struct SettingsView: View {
                             viewModel: viewModel,
                             scoreViewModel: scoreViewModel, // Pass to subview
                             showAddPlaylist: $showAddPlaylist,
+                            accountToEdit: $accountToEdit,
                             playAction: playAction,
                             dismissSettings: { dismiss() }
                         )
@@ -111,7 +113,7 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { onSave(); dismiss() }.fontWeight(.bold) } }
-            .sheet(isPresented: $showAddPlaylist) { AddPlaylistSheet() }
+            .sheet(isPresented: $showAddPlaylist) { AddPlaylistSheet(accountToEdit: accountToEdit) }
             .sheet(isPresented: $showImagePicker) { PhotoPicker(image: $inputImage) }
             .sheet(isPresented: $showFilePicker) { FilePicker(image: $inputImage) }
             .onChangeCompat(of: inputImage) { newImage in if let img = newImage { saveImage(img) } }
@@ -479,6 +481,7 @@ struct ContentManagementCard: View {
     @ObservedObject var viewModel: ChannelViewModel
     @ObservedObject var scoreViewModel: ScoreViewModel
     @Binding var showAddPlaylist: Bool
+    @Binding var accountToEdit: Account?
     let playAction: ((StreamChannel) -> Void)?
     let dismissSettings: () -> Void
     
@@ -537,6 +540,13 @@ struct ContentManagementCard: View {
                                 withAnimation { accountManager.switchToAccount(account) }
                             }
                             
+                            Button {
+                                accountToEdit = account
+                                showAddPlaylist = true
+                            } label: {
+                                Label("Edit", systemImage: "pencil")
+                            }
+                            
                             Button(role: .destructive) {
                                 accountManager.removeAccount(account)
                             } label: {
@@ -556,7 +566,10 @@ struct ContentManagementCard: View {
                 }
                 
                 // Add Playlist Button
-                Button(action: { showAddPlaylist = true }) {
+                Button(action: { 
+                    accountToEdit = nil
+                    showAddPlaylist = true 
+                }) {
                     HStack {
                         Image(systemName: "plus.circle.fill")
                             .foregroundColor(accentColor)

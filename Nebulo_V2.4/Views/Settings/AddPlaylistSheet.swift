@@ -12,6 +12,8 @@ struct AddPlaylistSheet: View {
     @State private var errorMessage = ""
     @State private var selectedLoginType: LoginType = .xtream
     
+    var accountToEdit: Account? = nil
+    
     // Namespace for matched geometry if we want animation, but simple state switch is fine for sheet
     
     var body: some View {
@@ -22,7 +24,7 @@ struct AddPlaylistSheet: View {
                 
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 30) {
-                        Text("Add New Playlist")
+                        Text(accountToEdit != nil ? "Edit Playlist" : "Add New Playlist")
                             .font(.system(size: 28, weight: .bold, design: .rounded))
                             .foregroundStyle(.white)
                             .padding(.top, 40)
@@ -78,7 +80,7 @@ struct AddPlaylistSheet: View {
                             
                             // Save Button
                             Button(action: save) {
-                                Text("Add Playlist")
+                                Text(accountToEdit != nil ? "Save Changes" : "Add Playlist")
                                     .font(.headline)
                                     .foregroundColor(.black)
                                     .frame(maxWidth: .infinity)
@@ -108,6 +110,16 @@ struct AddPlaylistSheet: View {
                 Text(errorMessage)
             }
             .onChangeCompat(of: urlInput) { nv in if selectedLoginType == .xtream { parseM3ULink(nv) } }
+            .onAppear {
+                if let acc = accountToEdit {
+                    playlistNameInput = acc.name
+                    urlInput = acc.url
+                    usernameInput = acc.username ?? ""
+                    passwordInput = acc.password ?? ""
+                    macInput = acc.macAddress ?? ""
+                    selectedLoginType = acc.type
+                }
+            }
         }
     }
     
@@ -134,17 +146,30 @@ struct AddPlaylistSheet: View {
             guard !safe.isEmpty else { errorMessage = "Please enter a valid Playlist URL."; showError = true; return }
         }
         
-        // Create Account
-        let newAccount = Account(
-            name: playlistNameInput.isEmpty ? "Playlist \(Int.random(in: 1...100))" : playlistNameInput,
-            type: selectedLoginType,
-            url: safe,
-            username: usernameInput,
-            password: passwordInput,
-            macAddress: macInput
-        )
-        
-        AccountManager.shared.saveAccount(newAccount, makeActive: true)
+        if let existing = accountToEdit {
+            var updated = existing
+            updated.name = playlistNameInput.isEmpty ? "Playlist" : playlistNameInput
+            updated.type = selectedLoginType
+            updated.url = safe
+            updated.username = usernameInput
+            updated.password = passwordInput
+            updated.macAddress = macInput
+            
+            // Only update active if not set (or keep existing)
+            // saveAccount updates by ID
+            AccountManager.shared.saveAccount(updated, makeActive: false)
+        } else {
+            // Create Account
+            let newAccount = Account(
+                name: playlistNameInput.isEmpty ? "Playlist \(Int.random(in: 1...100))" : playlistNameInput,
+                type: selectedLoginType,
+                url: safe,
+                username: usernameInput,
+                password: passwordInput,
+                macAddress: macInput
+            )
+            AccountManager.shared.saveAccount(newAccount, makeActive: true)
+        }
         dismiss()
     }
 }
