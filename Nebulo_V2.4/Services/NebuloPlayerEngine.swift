@@ -479,20 +479,12 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             NSLayoutConstraint.activate(newConstraints)
             self.playerConstraints = newConstraints
             
-            // Use FFPlayerOptions for robust connection
-            let options = FFPlayerOptions()
-            options.setFormatOption("reconnect", value: 1)
-            options.setFormatOption("reconnect_at_eof", value: 1)
-            options.setFormatOption("reconnect_streamed", value: 1)
-            options.setFormatOption("reconnect_delay_max", value: 5)
-            options.setFormatOption("timeout", value: 10000000)
-            
-            // Optimization for live streams
-            options.setPlayerOption("framedrop", value: 1)
-            options.setPlayerOption("infbuf", value: 1) // Infinite buffer (keeps loading ahead)
-            
-            let resource = KSPlayerResource(url: url, options: options)
+            // Use basic resource, relying on global KSOptions and Watchdog for stability
+            let resource = KSPlayerResource(url: url)
             self.ksPlayerView.set(resource: resource)
+            self.ksPlayerView.currentPlayingURL = url
+            self.applyAspectRatio(self.currentAspectRatio)
+            // Play is handled by KSOptions.isAutoPlay = true
             self.ksPlayerView.currentPlayingURL = url
             self.applyAspectRatio(self.currentAspectRatio)
             // Play is handled by KSOptions.isAutoPlay = true
