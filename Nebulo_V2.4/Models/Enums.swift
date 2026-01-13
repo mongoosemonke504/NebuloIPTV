@@ -34,3 +34,61 @@ enum SportType: String, CaseIterable, Identifiable, Sendable {
         }
     }
 }
+
+enum StreamQuality: String, CaseIterable, Identifiable, Sendable {
+    case best = "Best Available"
+    case fourK = "4K / UHD"
+    case fhd = "FHD (1080p)"
+    case hd = "HD (720p)"
+    case sd = "SD"
+    
+    var id: String { rawValue }
+    
+    var scoreWeight: Int {
+        switch self {
+        case .best: return 0 // Dynamic
+        case .fourK: return 400
+        case .fhd: return 300
+        case .hd: return 200
+        case .sd: return 100
+        }
+    }
+}
+
+enum LanguagePreference: String, CaseIterable, Identifiable, Sendable {
+    case any = "Any"
+    case us = "English (US)"
+    case uk = "English (UK)"
+    case ca = "English (Canada)"
+    case es = "Spanish"
+    case fr = "French"
+    case de = "German"
+    case it = "Italian"
+    
+    var id: String { rawValue }
+    
+    var searchTokens: [String] {
+        switch self {
+        case .any: return []
+        case .us: return ["us", "usa", "america"]
+        case .uk: return ["uk", "gbr", "britain"]
+        case .ca: return ["ca", "can", "canada"]
+        case .es: return ["es", "esp", "mx", "mex", "latino"]
+        case .fr: return ["fr", "fra", "france"]
+        case .de: return ["de", "deu", "ger", "germany"]
+        case .it: return ["it", "ita", "italy"]
+        }
+    }
+    
+    var languageIndicators: [String] {
+        switch self {
+        case .any: return []
+        case .us, .uk, .ca: return ["the", "and", "with", "live", "coverage", "from", "tonight", "watch", "is", "on", "at", "for"]
+        case .es: return ["el", "la", "en", "y", "con", "los", "las", "del", "por", "vivo", "partido", "de", "es", "un", "una", "al"]
+        case .fr: return ["le", "la", "et", "du", "de", "d'", "des", "pour", "une", "dans", "direct", "est", "un", "au", "les", "sur", "match"]
+        case .de: return ["der", "die", "das", "und", "mit", "dem", "aus", "von", "live", "ist", "auf", "im", "ein", "eine"]
+        case .it: return ["il", "lo", "la", "i", "gli", "le", "di", "e", "con", "diretta", "in", "su", "per", "un", "una"]
+        }
+    }
+}
+

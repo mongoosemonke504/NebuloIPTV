@@ -58,6 +58,14 @@ class ChannelViewModel: ObservableObject {
     @Published var isUpdatingEPG: Bool = false
     @Published var loadingStatus: String = "Loading..." // New status property
     
+    // Preferences
+    @Published var preferredLanguage: LanguagePreference = .us {
+        didSet { UserDefaults.standard.set(preferredLanguage.rawValue, forKey: settingsPrefix + "preferredLanguage") }
+    }
+    @Published var preferredQuality: StreamQuality = .best {
+        didSet { UserDefaults.standard.set(preferredQuality.rawValue, forKey: settingsPrefix + "preferredQuality") }
+    }
+    
     // Boot State
     private var lastFullLoadTime: Date? {
         get {
@@ -553,14 +561,16 @@ class ChannelViewModel: ObservableObject {
         let hiddenCatIDs = Set(self.categories.filter { $0.isHidden }.map { $0.id })
         let currentEPG = self.epgData
         let now = self.currentTime
+        let pLang = self.preferredLanguage
+        let pQual = self.preferredQuality
         
-        Task.detached(priority: .utility) { [weak self, inputChannels, inputHidden, hiddenCatIDs, currentEPG, now, infos] in
+        Task.detached(priority: .utility) { [weak self, inputChannels, inputHidden, hiddenCatIDs, currentEPG, now, infos, pLang, pQual] in
             guard let self = self else { return }
             
             for info in infos {
                 if await self.preResolvedCache[info.id] != nil { continue }
                 
-                if let best = ChannelViewModel.resolveBestMatch(home: info.home, away: info.away, network: info.network, channels: inputChannels, hiddenIDs: inputHidden, hiddenCatIDs: hiddenCatIDs, epg: currentEPG, now: now) {
+                if let best = ChannelViewModel.resolveBestMatch(home: info.home, away: info.away, network: info.network, channels: inputChannels, hiddenIDs: inputHidden, hiddenCatIDs: hiddenCatIDs, epg: currentEPG, now: now, preferredLanguage: pLang, preferredQuality: pQual) {
                     await MainActor.run {
                         self.preResolvedCache[info.id] = best
                         // Smarters Logic: Warm up the connection immediately
@@ -571,7 +581,7 @@ class ChannelViewModel: ObservableObject {
         }
     }
     
-    nonisolated static func resolveBestMatch(home: String, away: String, network: String?, channels: [StreamChannel], hiddenIDs: Set<Int>, hiddenCatIDs: Set<Int>, epg: [String: [EPGProgram]], now: Date) -> StreamChannel? {
+    nonisolated static func resolveBestMatch(home: String, away: String, network: String?, channels: [StreamChannel], hiddenIDs: Set<Int>, hiddenCatIDs: Set<Int>, epg: [String: [EPGProgram]], now: Date, preferredLanguage: LanguagePreference, preferredQuality: StreamQuality) -> StreamChannel? {
         let homeTokens = SmartSearchLogic.tokenize(home)
         let awayTokens = SmartSearchLogic.tokenize(away)
         let targetNetwork = (network ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -623,6 +633,34 @@ class ChannelViewModel: ObservableObject {
             let totalA = nameA + titleA + descA
             if totalH > 0 && totalA > 0 { score += 300 }
             
+            // 3. Preferences
+            // Language
+            if score > 0 {
+                let combinedText = "\(channel.name) \(epgTitle) \(epgDesc)"
+                
+                if SmartSearchLogic.checkLanguageMatch(combinedText, preference: preferredLanguage) {
+                    score += 2000
+                } else if preferredLanguage != .any && preferredLanguage != .us && preferredLanguage != .uk && preferredLanguage != .ca {
+                    // If we want a specific non-English language (e.g. French), and we detect English, penalize.
+                    if let detected = SmartSearchLogic.detectLanguage(combinedText), (detected == .us || detected == .uk || detected == .ca) {
+                        score -= 1000
+                    }
+                }
+            }
+            
+            // Quality
+            let q = SmartSearchLogic.detectQuality(channel.name)
+            if preferredQuality == .best {
+                // Higher is better
+                if q == .fourK { score += 40 }
+                else if q == .fhd { score += 30 }
+                else if q == .hd { score += 20 }
+            } else {
+                // Match is better
+                if q == preferredQuality { score += 50 }
+                // Close match? e.g. FHD when HD wanted is okay, but maybe less points
+            }
+            
             score += channel.qualityScore
             
             if score > bestScore {
@@ -650,10 +688,12 @@ class ChannelViewModel: ObservableObject {
         let currentEPG = self.epgData
         let now = self.currentTime
         let manualOrder = self.manualChannelOrder
+        let pLang = self.preferredLanguage
+        let pQual = self.preferredQuality
         
         self.isSearchingGame = true; self.suggestedChannels = []; self.channelToAutoPlay = nil
         
-        Task.detached(priority: .userInitiated) { [weak self, inputChannels, inputHidden, hiddenCatIDs, currentEPG, now, manualOrder] in
+        Task.detached(priority: .userInitiated) { [weak self, inputChannels, inputHidden, hiddenCatIDs, currentEPG, now, manualOrder, pLang, pQual] in
             guard let self = self else { return }
             let homeTokens = SmartSearchLogic.tokenize(home)
             let awayTokens = SmartSearchLogic.tokenize(away)
@@ -726,6 +766,33 @@ class ChannelViewModel: ObservableObject {
                 let totalH = nameH + titleH + descH
                 let totalA = nameA + titleA + descA
                 if totalH > 0 && totalA > 0 { score += 300 }
+                
+                // 3. Preferences
+                // Language
+                if score > 0 {
+                    let combinedText = "\(channel.name) \(epgTitle) \(epgDesc)"
+                    
+                    if SmartSearchLogic.checkLanguageMatch(combinedText, preference: pLang) {
+                        score += 2000
+                    } else if pLang != .any && pLang != .us && pLang != .uk && pLang != .ca {
+                         // If we want a specific non-English language (e.g. French), and we detect English, penalize.
+                        if let detected = SmartSearchLogic.detectLanguage(combinedText), (detected == .us || detected == .uk || detected == .ca) {
+                            score -= 1000
+                        }
+                    }
+                }
+                
+                // Quality
+                let q = SmartSearchLogic.detectQuality(channel.name)
+                if pQual == .best {
+                    // Higher is better
+                    if q == .fourK { score += 40 }
+                    else if q == .fhd { score += 30 }
+                    else if q == .hd { score += 20 }
+                } else {
+                    // Match is better
+                    if q == pQual { score += 50 }
+                }
                 
                 // Quality & Language Adjustments
                 score += channel.qualityScore
@@ -1128,6 +1195,9 @@ class ChannelViewModel: ObservableObject {
         self.recentIDs = loadedRecents.reduce(into: [Int]()) { if !$0.contains($1) { $0.append($1) } }
         self.manualChannelOrder = load("manualChannelOrder", type: [Int].self) ?? []
         self.recentQueries = UserDefaults.standard.stringArray(forKey: settingsPrefix + "recentQueries") ?? []
+        
+        if let langRaw = UserDefaults.standard.string(forKey: settingsPrefix + "preferredLanguage"), let lang = LanguagePreference(rawValue: langRaw) { self.preferredLanguage = lang }
+        if let qualRaw = UserDefaults.standard.string(forKey: settingsPrefix + "preferredQuality"), let qual = StreamQuality(rawValue: qualRaw) { self.preferredQuality = qual }
         
         if let saved = load("sportsConfigs", type: [SportConfig].self) {
             self.sportsConfigs = saved.filter { $0.id != "Other" }.sorted { $0.order < $1.order }
