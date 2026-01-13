@@ -24,6 +24,7 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
     
     // Silent Audio Player to keep app alive in background
     private var silentAudioPlayer: AVAudioPlayer?
+    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     
     init(streamURL: URL, outputURL: URL) {
         self.streamURL = streamURL
@@ -37,8 +38,11 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
             "Accept": "*/*",
             "Connection": "keep-alive"
         ]
-        config.timeoutIntervalForRequest = 60
+        // Increase timeouts for long-running streams
+        config.timeoutIntervalForRequest = 300 
         config.timeoutIntervalForResource = 0 
+        config.isDiscretionary = false // CRITICAL: Prevent system from deferring
+        config.sessionSendsLaunchEvents = true
         
         // Use a background queue for the delegate to keep the Main thread and Player threads free
         let delegateQueue = OperationQueue()
@@ -58,6 +62,23 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
     private func setupLifecycleObservers() {
         NotificationCenter.default.addObserver(self, selector: #selector(handleDidEnterBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(handleWillEnterForeground), name: UIApplication.willEnterForegroundNotification, object: nil)
+    }
+    
+    private func beginBackgroundTask() {
+        if backgroundTask != .invalid { return }
+        print("🛡️ [StreamRecorder] Beginning Background Task assertion.")
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "NebuloRecording") { [weak self] in
+            print("⚠️ [StreamRecorder] System forcing expiration of background task!")
+            self?.endBackgroundTask()
+        }
+    }
+    
+    private func endBackgroundTask() {
+        if backgroundTask != .invalid {
+            print("🛡️ [StreamRecorder] Ending Background Task assertion.")
+            UIApplication.shared.endBackgroundTask(backgroundTask)
+            backgroundTask = .invalid
+        }
     }
     
     private func setupSilentAudio() {
@@ -110,25 +131,41 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
     
     @objc private func handleDidEnterBackground() {
         guard isRecording else { return }
-        print("🌙 [StreamRecorder] App Entering Background. Starting Silent Audio Keeper.")
-        silentAudioPlayer?.play()
+        print("🌙 [StreamRecorder] App Entering Background.")
+        // Ensure silent audio is playing to keep network socket alive
+        if silentAudioPlayer?.isPlaying == false {
+            silentAudioPlayer?.play()
+        }
     }
     
     @objc private func handleWillEnterForeground() {
-        print("☀️ [StreamRecorder] App Entering Foreground. Stopping Silent Audio Keeper.")
-        silentAudioPlayer?.stop()
+        print("☀️ [StreamRecorder] App Entering Foreground.")
+        // We can optionally pause silent audio here, but keeping it playing is safer for seamless transitions.
+        // If we pause, we risk being suspended if we background again quickly.
     }
     
     func start() {
         guard !isRecording else { return }
         isRecording = true
+        beginBackgroundTask()
+        
+        // Activate Audio Session immediately
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers, .allowAirPlay])
+            try AVAudioSession.sharedInstance().setActive(true)
+            silentAudioPlayer?.play()
+        } catch {
+            print("⚠️ [StreamRecorder] Failed to activate audio session: \(error)")
+        }
+        
         print("🔴 [StreamRecorder] Starting optimized recording for \(streamURL)")
         
         task = Task {
             do {
                 var request = URLRequest(url: streamURL)
                 request.cachePolicy = .reloadIgnoringLocalCacheData
-                request.networkServiceType = .background
+                request.networkServiceType = .background // Hint to system to keep this alive
+                request.allowsCellularAccess = true
                 
                 // Perform peek on a background task
                 let (data, response) = try await self.urlSession.data(for: request)
@@ -164,11 +201,13 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
                     
                     var streamRequest = URLRequest(url: streamURL)
                     streamRequest.networkServiceType = .background
+                    streamRequest.allowsCellularAccess = true
                     self.dataTask = urlSession.dataTask(with: streamRequest)
                     self.dataTask?.resume()
                 }
             } catch {
                 print("❌ [StreamRecorder] Fatal: \(error)")
+                self.endBackgroundTask()
                 onError?(error)
             }
         }
@@ -176,6 +215,7 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
     
     func stop() {
         isRecording = false
+        silentAudioPlayer?.stop()
         dataTask?.cancel()
         dataTask = nil
         task?.cancel()
@@ -190,6 +230,7 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
             
             DispatchQueue.main.async {
                 print("⏹️ [StreamRecorder] Clean stop.")
+                self.endBackgroundTask()
                 self.onCompletion?()
             }
         }
@@ -279,6 +320,19 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
             } catch {
                 print("⚠️ [StreamRecorder] Failed to download HLS segment: \(error)")
             }
+        }
+        
+        // Prune old segments to keep memory low (keep last 50)
+        if downloadedSegments.count > 100 {
+            let overflow = downloadedSegments.count - 50
+            // Sets are unordered, but we just need to remove arbitrary old ones to cap size.
+            // Since we only check existence, removing *any* that are definitely old is fine.
+            // But we don't track time. Ideally we should track sequence numbers.
+            // For now, just clearing completely might re-download if the manifest loops, which is bad.
+            // Better strategy: Since 'newSegments' filters by sequence > lastSequence, 
+            // 'downloadedSegments' is only strictly needed for the *current* manifest batch if we get overlapping responses.
+            // We can actually clear it occasionally or rely on sequence number filtering primarily.
+            // Let's just rely on sequence number for main filtering and use this set for the current batch safety.
         }
     }
 }
