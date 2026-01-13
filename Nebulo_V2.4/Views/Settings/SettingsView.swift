@@ -310,10 +310,24 @@ struct AppearanceCard: View {
 struct PlaybackCard: View {
     @AppStorage("autoBuffer") private var autoBuffer = true
     @AppStorage("bufferTime") private var bufferTime = 2.0
+    @AppStorage("defaultPlayerEngine") private var defaultPlayerEngine = "KSPlayer"
     
     var body: some View {
         SettingsCard {
             VStack(spacing: 16) {
+                HStack {
+                    Text("Default Player").font(.body).foregroundColor(.white)
+                    Spacer()
+                    Picker("Default Player", selection: $defaultPlayerEngine) {
+                        Text("KSPlayer").tag("KSPlayer")
+                        Text("VLC").tag("VLC")
+                    }
+                    .pickerStyle(.menu)
+                    .tint(.white.opacity(0.7))
+                }
+                
+                Divider().background(Color.white.opacity(0.1))
+                
                 SettingsToggle(title: "Auto Buffer", isOn: $autoBuffer)
                 
                 if !autoBuffer {
