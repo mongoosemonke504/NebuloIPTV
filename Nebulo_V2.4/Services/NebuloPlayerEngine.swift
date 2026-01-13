@@ -81,26 +81,11 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     @Published public var progress: Double = 0
     @Published public var availableSubtitles: [VideoSubtitle] = []
     @Published public var currentSubtitle: VideoSubtitle? = nil
-    @Published public var subtitleOffset: Double = 0.0 {
-        didSet {
-            if currentBackend == .vlc {
-                vlcMediaPlayer.currentVideoSubTitleDelay = Int(subtitleOffset * 1000)
-            } else if currentBackend == .ksplayer {
-                if let player = ksPlayerView.playerLayer?.player {
-                    let tracks = player.tracks(mediaType: AVMediaType.subtitle)
-                    for track in tracks {
-                        if track.isEnabled, let ffmpegTrack = track as? FFmpegAssetTrack {
-                            ffmpegTrack.delay = subtitleOffset
-                        }
-                    }
-                }
-            }
-        }
-    }
     @Published public var activeCaption: String? = nil
     @Published public var currentResolution: String = ""
     @Published public var activeBackendName: String = "None" // New property
     @Published public var playbackFailed: Bool = false
+    
     public let renderView = UIView()
     public let useNativeBridge = false
     
@@ -322,6 +307,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         KSOptions.isSecondOpen = false
         KSOptions.maxBufferDuration = 30.0 
         KSOptions.preferredForwardBufferDuration = 1.0 // Minimal buffer to start instantly
+        
         ksPlayerView.allowNativeControls = useNativeBridge
     }
     
@@ -588,9 +574,6 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                 if subtitle.index < tracks.count {
                     let selectedTrack = tracks[subtitle.index]
                     player.select(track: selectedTrack)
-                    if let ffmpegTrack = selectedTrack as? FFmpegAssetTrack {
-                        ffmpegTrack.delay = subtitleOffset
-                    }
                 }
             }
         }
