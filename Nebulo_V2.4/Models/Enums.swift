@@ -67,7 +67,7 @@ enum LanguagePreference: String, CaseIterable, Identifiable, Sendable {
     
     var id: String { rawValue }
     
-    var searchTokens: [String] {
+    nonisolated var searchTokens: [String] {
         switch self {
         case .any: return []
         case .us: return ["us", "usa", "america"]
@@ -80,7 +80,7 @@ enum LanguagePreference: String, CaseIterable, Identifiable, Sendable {
         }
     }
     
-    var languageIndicators: [String] {
+    nonisolated var languageIndicators: [String] {
         switch self {
         case .any: return []
         case .us, .uk, .ca: return ["the", "and", "with", "live", "coverage", "from", "tonight", "watch", "is", "on", "at", "for"]
