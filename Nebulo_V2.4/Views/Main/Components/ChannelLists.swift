@@ -101,9 +101,12 @@ struct HorizontalPreviewList: View {
                                         .font(.system(size: 12))
                                         .foregroundStyle(.white.opacity(0.6))
                                         .lineLimit(1)
+                                } else {
+                                    Text(" ")
+                                        .font(.system(size: 12))
                                 }
                             }
-                            .frame(width: 192, alignment: .leading) // Constrain text width to image width
+                            .frame(width: 192, height: 40, alignment: .topLeading) // Constrain text width to image width and fix height
                             .padding(.horizontal, 4)
                         }
                     }.buttonStyle(.plain)

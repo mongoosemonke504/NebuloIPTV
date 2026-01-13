@@ -148,13 +148,21 @@ struct CustomVideoPlayerView: SwiftUI.View {
                                             .lineLimit(1)
                                             .frame(width: 140, alignment: .leading)
                                         
-                                        if let prog = viewModel?.getCurrentProgram(for: c) {
-                                            Text(prog.title)
-                                                .font(.caption2)
-                                                .foregroundColor(.white.opacity(0.7))
-                                                .lineLimit(1)
-                                                .frame(width: 140, alignment: .leading)
+                                        VStack(alignment: .leading) {
+                                            if let prog = viewModel?.getCurrentProgram(for: c) {
+                                                Text(prog.title)
+                                                    .font(.caption2)
+                                                    .foregroundColor(.white.opacity(0.7))
+                                                    .lineLimit(1)
+                                                    .frame(width: 140, alignment: .leading)
+                                            } else {
+                                                // Placeholder to maintain height
+                                                Text(" ")
+                                                    .font(.caption2)
+                                                    .frame(width: 140, alignment: .leading)
+                                            }
                                         }
+                                        .frame(height: 15)
                                     }
                                 }
                                 .buttonStyle(.plain)
