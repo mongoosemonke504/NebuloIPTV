@@ -68,7 +68,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                 isBuffering = false
                 stopBufferWatchdog()
             }
-            updatePlaybackState()
+            updatePlaybackState(force: true)
         }
     }
     
@@ -210,6 +210,9 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     private func setupRemoteTransportControls() {
         let commandCenter = MPRemoteCommandCenter.shared()
         
+        // Disable Scrubbing (Not Movable)
+        commandCenter.changePlaybackPositionCommand.isEnabled = false
+        
         // Play
         commandCenter.playCommand.isEnabled = true
         commandCenter.playCommand.addTarget { [weak self] _ in 
@@ -272,26 +275,28 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         }
         
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
-        updatePlaybackState()
+        updatePlaybackState(force: true)
     }
     
-    private func updatePlaybackState() {
+    private var lastInfoUpdateTime: Date?
+    
+    private func updatePlaybackState(force: Bool = false) {
+        let now = Date()
+        // Throttle updates to avoid spamming the system (unless forced, e.g. state change)
+        if !force, let last = lastInfoUpdateTime, now.timeIntervalSince(last) < 2.0 { return }
+        
         var info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [String: Any]()
         
         info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
         info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
         info[MPNowPlayingInfoPropertyMediaType] = MPNowPlayingInfoMediaType.video.rawValue
         
-        // If duration is 0 or very large, it's likely a live stream
-        if duration <= 0 || duration > 86400 {
-            info[MPNowPlayingInfoPropertyIsLiveStream] = true
-            info[MPMediaItemPropertyPlaybackDuration] = 0
-        } else {
-            info[MPNowPlayingInfoPropertyIsLiveStream] = false
-            info[MPMediaItemPropertyPlaybackDuration] = duration
-        }
+        // Force Live Stream Mode (Not Movable / Live)
+        info[MPNowPlayingInfoPropertyIsLiveStream] = true
+        info[MPMediaItemPropertyPlaybackDuration] = 0 // Indefinite
         
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        lastInfoUpdateTime = now
     }
     
     private func setupVLC() { vlcMediaPlayer.delegate = self }
@@ -308,6 +313,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                 }
                 self.currentTime = current
                 self.duration = total
+                // KSPlayer sends updates frequently. We rely on the throttle in updatePlaybackState.
                 self.updatePlaybackState()
             }
         }
