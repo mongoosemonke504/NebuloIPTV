@@ -1,5 +1,6 @@
 import SwiftUI
 import KSPlayer
+import MobileVLCKit
 
 // MARK: - MULTI VIEW
 struct MultiViewScreen: View {
@@ -51,7 +52,7 @@ struct MultiViewSlot: View {
         ZStack { 
             Color.gray.opacity(0.15); 
             if let c = channel { 
-                GridVideoPlayer(url: URL(string: c.streamURL)!, isMuted: !isFocused, isPlaying: $isPlaying)
+                GridVLCPlayer(url: URL(string: c.streamURL)!, isMuted: !isFocused, isPlaying: $isPlaying)
                     .allowsHitTesting(false); 
                 VStack { 
                     Spacer(); 
@@ -71,84 +72,115 @@ struct MultiViewSlot: View {
     }
 }
 
-struct GridVideoPlayer: UIViewRepresentable {
-    typealias UIViewType = NebuloKSVideoPlayerView
+struct GridVLCPlayer: UIViewRepresentable {
     let url: URL; let isMuted: Bool; @Binding var isPlaying: Bool
     
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     
-    func makeUIView(context: Context) -> NebuloKSVideoPlayerView {
-        let player = NebuloKSVideoPlayerView()
-        player.backgroundColor = UIColor.black
-        player.allowNativeControls = false
-        context.coordinator.player = player
-        context.coordinator.startPlayback(url: url)
-        return player
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .black
+        context.coordinator.setupPlayer(view: view, url: url)
+        return view
     }
     
-    func updateUIView(_ uiView: NebuloKSVideoPlayerView, context: Context) {
-        if context.coordinator.currentURL != url { 
-            context.coordinator.startPlayback(url: url)
-        }
-        uiView.playerLayer?.player.isMuted = isMuted
-        
-        if isPlaying {
-            if !uiView.playerLayer!.player.isPlaying { uiView.play() }
-        } else {
-            if uiView.playerLayer!.player.isPlaying { uiView.pause() }
-        }
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.update(url: url, isMuted: isMuted, isPlaying: isPlaying)
     }
     
-    class Coordinator: NSObject {
-        var parent: GridVideoPlayer
-        var player: NebuloKSVideoPlayerView?
+    static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
+        coordinator.player.stop()
+        coordinator.player.drawable = nil
+    }
+    
+    class Coordinator: NSObject, VLCMediaPlayerDelegate {
+        var parent: GridVLCPlayer
+        let player = VLCMediaPlayer()
         var currentURL: URL?
         var watchdogTimer: Timer?
-        var lastTime: TimeInterval = -1
+        var lastTime: Int32 = -1
         var stuckCount = 0
         
-        init(_ parent: GridVideoPlayer) { self.parent = parent }
+        init(_ parent: GridVLCPlayer) {
+            self.parent = parent
+            super.init()
+            player.delegate = self
+        }
         
-        func startPlayback(url: URL) {
-            self.currentURL = url
-            // Use same robust options as main player
-            let resource = KSPlayerResource(url: url)
-            player?.set(resource: resource)
-            player?.play()
-            
+        func setupPlayer(view: UIView, url: URL) {
+            player.drawable = view
+            playURL(url)
             startWatchdog()
+        }
+        
+        func playURL(_ url: URL) {
+            currentURL = url
+            let media = VLCMedia(url: url)
+            // Consistent robust options
+            media.addOptions([
+                "network-caching": 3000,
+                "clock-jitter": 0,
+                "clock-synchro": 0
+            ])
+            player.media = media
+            player.play()
+        }
+        
+        func update(url: URL, isMuted: Bool, isPlaying: Bool) {
+            if currentURL != url {
+                playURL(url)
+            }
             
-            player?.onTimeChange = { [weak self] current, _ in
-                self?.lastTime = current
-                self?.stuckCount = 0
+            // Handle Audio
+            // Note: VLCMediaPlayer doesn't have a simple isMuted property exposed in all bindings?
+            // We use audio volume. 0 = Muted.
+            // But we need to check if 'audio' property is accessible.
+            // Assuming standard MobileVLCKit.
+            if let audio = player.audio {
+                audio.volume = isMuted ? 0 : 100
+            }
+            
+            // Handle Play/Pause
+            if isPlaying {
+                if !player.isPlaying { player.play() }
+            } else {
+                if player.isPlaying { player.pause() }
             }
         }
         
         func startWatchdog() {
             watchdogTimer?.invalidate()
             watchdogTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-                guard let self = self, let player = self.player else { return }
+                guard let self = self else { return }
                 guard self.parent.isPlaying else { return }
                 
                 // If time hasn't moved for 6 seconds (3 checks * 2s), reload
-                if abs(player.playerLayer!.player.currentPlaybackTime - self.lastTime) < 0.1 {
+                // player.time.intValue is in ms
+                let currentTime = self.player.time.intValue
+                
+                // Check if valid time (sometimes -1 or 0 at start)
+                // We only count stuck if it's > 0 or if we've been trying to start for a while?
+                // Let's rely on change.
+                
+                if abs(currentTime - self.lastTime) < 100 { // Less than 100ms change
                     self.stuckCount += 1
-                    if self.stuckCount >= 3 {
-                        print("♻️ [MultiView] Stream stuck, reloading: \(self.currentURL?.lastPathComponent ?? "")")
+                    if self.stuckCount >= 5 { // 10 seconds stuck
+                        print("♻️ [MultiView-VLC] Stream stuck, reloading: \(self.currentURL?.lastPathComponent ?? "")")
                         self.stuckCount = 0
                         if let url = self.currentURL {
-                            let resource = KSPlayerResource(url: url)
-                            player.set(resource: resource)
-                            player.play()
+                            self.playURL(url)
                         }
                     }
                 } else {
                     self.stuckCount = 0
                 }
-                self.lastTime = player.playerLayer!.player.currentPlaybackTime
+                self.lastTime = currentTime
             }
         }
         
-        deinit { watchdogTimer?.invalidate() }
+        deinit {
+            watchdogTimer?.invalidate()
+            player.stop()
+        }
     }
 }
