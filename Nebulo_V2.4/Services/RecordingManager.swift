@@ -99,6 +99,18 @@ class RecordingManager: NSObject, ObservableObject {
         let filename = "\(recording.id.uuidString).ts"
         let outputURL = getDocumentsDirectory().appendingPathComponent(filename)
         
+        // --- Playback Handoff Logic ---
+        // Check if player is currently watching this stream
+        let player = NebuloPlayerEngine.shared
+        var hijackedPlayer = false
+        
+        if let current = player.currentURL, (current.absoluteString == url.absoluteString || current.path == url.path) {
+            print("🔀 [RecordingManager] Conflict detected! Switching player to local recording file...")
+            player.stop() // Stop strictly to close the connection
+            hijackedPlayer = true
+        }
+        // ------------------------------
+        
         let recorder = StreamRecorder(streamURL: url, outputURL: outputURL)
         
         // Setup callbacks
@@ -136,6 +148,14 @@ class RecordingManager: NSObject, ObservableObject {
         
         activeRecorders[recording.id] = recorder
         recorder.start()
+        
+        // Resume player from local file if we hijacked it
+        if hijackedPlayer {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                print("▶️ [RecordingManager] Resuming player from local file: \(outputURL)")
+                player.play(url: outputURL)
+            }
+        }
         
         // Schedule Stop
         let timeUntilEnd = recording.endTime.timeIntervalSince(Date())
@@ -190,6 +210,18 @@ class RecordingManager: NSObject, ObservableObject {
         let recordingStatus = recordings.contains(where: { $0.channelName == channelName && $0.status == .recording })
         print("RecordingManager: isRecording for \(channelName): \(recordingStatus)")
         return recordingStatus
+    }
+    
+    func getActiveRecordingURL(for channel: StreamChannel) -> URL? {
+        // Find an active recording for this channel
+        if let rec = recordings.first(where: { $0.channelName == channel.name && $0.status == .recording }) {
+            let filename = "\(rec.id.uuidString).ts"
+            let url = getDocumentsDirectory().appendingPathComponent(filename)
+            if FileManager.default.fileExists(atPath: url.path) {
+                return url
+            }
+        }
+        return nil
     }
     
     // Persistence
