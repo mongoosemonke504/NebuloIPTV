@@ -214,23 +214,6 @@ struct RecordingPlayerView: View {
                                 }
                             }.padding(.top)
                         }.frame(maxHeight: 200)
-                        
-                        Divider().background(Color.white.opacity(0.3))
-                        
-                        VStack(spacing: 10) {
-                            Text("Offset (Delay)").font(.caption).foregroundColor(.white.opacity(0.7))
-                            HStack(spacing: 20) {
-                                Button(action: { playerManager.subtitleOffset -= 0.1 }) {
-                                    Image(systemName: "minus").font(.system(size: 14, weight: .bold)).padding(8).modifier(GlassEffect(cornerRadius: 15, isSelected: true, accentColor: nil))
-                                }.buttonStyle(.plain).foregroundStyle(.white)
-                                
-                                Text(String(format: "%+.1fs", playerManager.subtitleOffset)).font(.headline).foregroundColor(.yellow).frame(minWidth: 60)
-                                
-                                Button(action: { playerManager.subtitleOffset += 0.1 }) {
-                                    Image(systemName: "plus").font(.system(size: 14, weight: .bold)).padding(8).modifier(GlassEffect(cornerRadius: 15, isSelected: true, accentColor: nil))
-                                }.buttonStyle(.plain).foregroundStyle(.white)
-                            }
-                        }.padding().background(Color.white.opacity(0.1))
                     }
                 } onClose: { showSubtitlePanel = false }
             }
