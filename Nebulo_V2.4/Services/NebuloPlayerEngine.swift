@@ -336,8 +336,8 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         
         if url.isFileURL { playVLC(url: url); return }
         
-        // Respect User Preference
-        let defaultEngine = UserDefaults.standard.string(forKey: "defaultPlayerEngine") ?? "KSPlayer"
+        // Respect User Preference - DEFAULT TO VLC FOR NEW INSTALLS
+        let defaultEngine = UserDefaults.standard.string(forKey: "defaultPlayerEngine") ?? "VLC"
         if defaultEngine == "KSPlayer" {
             if attemptKSPlayerPlayback(url: url) { currentBackend = .ksplayer; return }
         }
