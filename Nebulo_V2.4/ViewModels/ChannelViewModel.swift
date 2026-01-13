@@ -1106,27 +1106,27 @@ class ChannelViewModel: ObservableObject {
     }
     
     func updateEPGFromURLs(_ urls: [URL], silent: Bool = false) async {
-        var shouldManageLoading = false
-        
-        // Check staleness again here to decide on UI if called directly
         let now = Date()
-        let isStale = lastEPGUpdateTime == nil || now.timeIntervalSince(lastEPGUpdateTime!) >= 14400
+        let isStale = lastEPGUpdateTime == nil || now.timeIntervalSince(lastEPGUpdateTime!) >= 14400 // 4 Hours
         
-        // If we have cached data and just updating in background because it's stale, 
-        // we should treat it as silent even if 'silent' was passed as false (unless force which we can't see here directly but usually implies silent=false)
-        // But for safety, let's trust the caller. However, if silent is true, we definitely don't show UI.
-        
-        // Load from disk first if we haven't already (e.g. cold start with stale data)
-        if isStale && self.epgData.isEmpty {
+        // 1. Load from disk first if we don't have data in memory
+        if self.epgData.isEmpty {
              if let cached = EPGService().loadFromDisk(), !cached.epg.isEmpty {
                 await MainActor.run {
                     self.epgData = cached.epg
                     self.epgNameMap = cached.map
+                    // If we successfully loaded from disk, we aren't "empty" anymore
                 }
-                // We loaded stale data to show SOMETHING, now continue to update in background
             }
         }
         
+        // 2. If data is fresh (not stale) AND we have data, SKIP network update
+        if !isStale && !self.epgData.isEmpty {
+            print("✅ [EPG] Data is fresh (last update: \(lastEPGUpdateTime?.description ?? "never")). Skipping network fetch.")
+            return
+        }
+        
+        // 3. Otherwise, proceed with network fetch
         // If we have data now (either from cache or previous load), we can be silent
         let effectivelySilent = silent || !self.epgData.isEmpty
         
@@ -1134,7 +1134,6 @@ class ChannelViewModel: ObservableObject {
             // isLoading controls the skeletons. We only show skeletons if we have NO data.
             if !effectivelySilent && !self.isLoading {
                 self.isLoading = true
-                shouldManageLoading = true
             }
             
             self.visualProgress = 0
@@ -1163,10 +1162,7 @@ class ChannelViewModel: ObservableObject {
                 withAnimation(.spring()) { self.isUpdatingEPG = false }
             }
             
-            if shouldManageLoading { 
-                // Small delay to ensure minimum skeleton time if it was shown
-                self.isLoading = false 
-            }
+            self.isLoading = false 
         }
     }
     
