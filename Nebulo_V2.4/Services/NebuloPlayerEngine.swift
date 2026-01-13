@@ -304,9 +304,10 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         }
         ksPlayerView.onFinish = { [weak self] error in if error != nil { self?.handleKSPlayerError() } }
         KSOptions.isAutoPlay = true
-        KSOptions.isSecondOpen = true // Enable fast open logic (often helps with HLS)
-        KSOptions.maxBufferDuration = 60.0 // Increase max buffer
-        KSOptions.preferredForwardBufferDuration = 4.0 // Ensure we buffer enough ahead
+        KSOptions.isSecondOpen = false // Disable fast open to prioritize buffer stability
+        KSOptions.maxBufferDuration = 300.0 // 5 Minutes Max Buffer
+        KSOptions.preferredForwardBufferDuration = 30.0 // Fetch 30s ahead aggressively
+        KSOptions.isAccurateSeek = true
         
         ksPlayerView.allowNativeControls = useNativeBridge
     }
@@ -400,9 +401,17 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         stopBufferWatchdog()
         
         if currentBackend == .ksplayer {
-            // For KSPlayer, sometimes just calling play() or seeking to current time kicks it
-            // But a hard reload is safer for "indefinite buffering"
-            handleKSPlayerError() 
+            // First attempt: Seek slightly forward to flush buffer logic
+            if ksPlayerRetryCount == 0 {
+                ksPlayerRetryCount += 1
+                print("🔄 [NebuloEngine] Attempting seek-flush...")
+                ksPlayerView.seek(time: currentTime + 0.5) { _ in 
+                    self.startBufferWatchdog() // Restart watchdog to see if it fixed it
+                }
+            } else {
+                // Second attempt: Hard Reload
+                handleKSPlayerError() 
+            }
         } else {
             // Re-play the current URL to force a fresh connection
             DispatchQueue.main.async {
