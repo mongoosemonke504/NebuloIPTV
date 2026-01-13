@@ -304,9 +304,9 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         }
         ksPlayerView.onFinish = { [weak self] error in if error != nil { self?.handleKSPlayerError() } }
         KSOptions.isAutoPlay = true
-        KSOptions.isSecondOpen = false
-        KSOptions.maxBufferDuration = 30.0 
-        KSOptions.preferredForwardBufferDuration = 1.0 // Minimal buffer to start instantly
+        KSOptions.isSecondOpen = true // Enable fast open logic (often helps with HLS)
+        KSOptions.maxBufferDuration = 60.0 // Increase max buffer
+        KSOptions.preferredForwardBufferDuration = 4.0 // Ensure we buffer enough ahead
         
         ksPlayerView.allowNativeControls = useNativeBridge
     }
@@ -374,16 +374,15 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     
     private func startBufferWatchdog() {
         stopBufferWatchdog()
-        // KSPlayer manages its own buffering. Watchdog is mainly for VLC.
-        if currentBackend == .ksplayer { return }
+        // Enable watchdog for ALL backends to handle stuck states
         
         bufferStartTime = Date()
         bufferWatchdogTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self = self, self.isBuffering, let start = self.bufferStartTime else { return }
             let duration = Date().timeIntervalSince(start)
             
-            // If buffering for more than 15 seconds, it's likely stuck
-            if duration > 15.0 {
+            // If buffering for more than 20 seconds, it's likely stuck
+            if duration > 20.0 {
                 self.handleStuckBuffer()
             }
         }
@@ -397,12 +396,18 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     
     private func handleStuckBuffer() {
         guard let url = currentURL, !userPaused else { return }
-        print("🚨 [NebuloEngine] Buffer stuck for >7s, triggering automatic re-sync...")
+        print("🚨 [NebuloEngine] Buffer stuck for >20s, triggering automatic re-sync...")
         stopBufferWatchdog()
         
-        // Re-play the current URL to force a fresh connection
-        DispatchQueue.main.async {
-            self.play(url: url)
+        if currentBackend == .ksplayer {
+            // For KSPlayer, sometimes just calling play() or seeking to current time kicks it
+            // But a hard reload is safer for "indefinite buffering"
+            handleKSPlayerError() 
+        } else {
+            // Re-play the current URL to force a fresh connection
+            DispatchQueue.main.async {
+                self.play(url: url)
+            }
         }
     }
     
