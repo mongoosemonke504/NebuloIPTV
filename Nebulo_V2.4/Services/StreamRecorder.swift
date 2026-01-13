@@ -121,7 +121,7 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
             
             silentAudioPlayer = try AVAudioPlayer(data: data)
             silentAudioPlayer?.numberOfLoops = -1 // Infinite loop
-            silentAudioPlayer?.volume = 0.0 // Silent
+            silentAudioPlayer?.volume = 0.01 // Almost silent, but active
             silentAudioPlayer?.prepareToPlay()
             print("✅ [StreamRecorder] Silent Audio Player Ready")
         } catch {

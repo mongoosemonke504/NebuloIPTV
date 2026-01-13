@@ -14,6 +14,40 @@ class RecordingManager: NSObject, ObservableObject {
     override init() {
         super.init()
         loadRecordings()
+        restoreActiveRecordings()
+    }
+    
+    private func restoreActiveRecordings() {
+        let now = Date()
+        for i in recordings.indices {
+            let rec = recordings[i]
+            if rec.status == .recording {
+                if rec.endTime > now {
+                    // Should still be recording. Resume it.
+                    print("🔄 [RecordingManager] Restoring interrupted recording: \(rec.channelName)")
+                    startRecording(rec)
+                } else {
+                    // Should have finished. Mark as completed/failed.
+                    print("⚠️ [RecordingManager] Found stale recording: \(rec.channelName)")
+                    finalizeStaleRecording(index: i)
+                }
+            }
+        }
+    }
+    
+    private func finalizeStaleRecording(index: Int) {
+        let rec = recordings[index]
+        let filename = "\(rec.id.uuidString).ts"
+        let url = getDocumentsDirectory().appendingPathComponent(filename)
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
+        
+        if size > 1024 * 1024 {
+            recordings[index].status = .completed
+            recordings[index].localFileName = filename
+        } else {
+            recordings[index].status = .failed
+        }
+        saveRecordings()
     }
     
     func scheduleRecording(channel: StreamChannel, startTime: Date, endTime: Date, programTitle: String? = nil, programDescription: String? = nil) {
