@@ -316,7 +316,7 @@ struct AppearanceCard: View {
 struct PlaybackCard: View {
     @AppStorage("autoBuffer") private var autoBuffer = true
     @AppStorage("bufferTime") private var bufferTime = 2.0
-    @AppStorage("defaultPlayerEngine") private var defaultPlayerEngine = "KSPlayer"
+    @AppStorage("defaultPlayerEngine") private var defaultPlayerEngine = "VLC"
     
     var body: some View {
         SettingsCard {
