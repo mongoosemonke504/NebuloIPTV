@@ -426,6 +426,20 @@ struct CustomVideoPlayerView: SwiftUI.View {
     func setupPlayer() {
         KSOptions.isAutoPlay = true
         Task {
+            // Check for active recording handoff
+            if let localURL = RecordingManager.shared.getActiveRecordingURL(for: channel) {
+                print("⏺️ [Player] Playing from active recording file: \(localURL.lastPathComponent)")
+                await MainActor.run {
+                    self.currentStreamURL = localURL
+                    // Force play local file (treat as new content to avoid resume logic skipping it)
+                    playerManager.play(url: localURL)
+                    
+                    let prog = viewModel?.getCurrentProgram(for: channel)?.title
+                    playerManager.updateNowPlayingMetadata(title: channel.name, subtitle: prog, imageURL: channel.icon)
+                }
+                return
+            }
+            
             let resolvedURLString = await viewModel?.resolveStalkerStream(channel) ?? channel.streamURL
             guard let targetURL = URL(string: resolvedURLString) else { return }
             
