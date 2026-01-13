@@ -9,7 +9,7 @@ class ChannelViewModel: ObservableObject {
     
     @Published var categories: [StreamCategory] = []
     @Published var channels: [StreamChannel] = []
-    @Published var isLoading = false
+    @Published var isLoading = true
     @Published var errorMessage: String? = nil
     
     // Split Search Results
