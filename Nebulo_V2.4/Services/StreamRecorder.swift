@@ -335,15 +335,7 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
         
         // Prune old segments to keep memory low (keep last 50)
         if downloadedSegments.count > 100 {
-            let overflow = downloadedSegments.count - 50
-            // Sets are unordered, but we just need to remove arbitrary old ones to cap size.
-            // Since we only check existence, removing *any* that are definitely old is fine.
-            // But we don't track time. Ideally we should track sequence numbers.
-            // For now, just clearing completely might re-download if the manifest loops, which is bad.
-            // Better strategy: Since 'newSegments' filters by sequence > lastSequence, 
-            // 'downloadedSegments' is only strictly needed for the *current* manifest batch if we get overlapping responses.
-            // We can actually clear it occasionally or rely on sequence number filtering primarily.
-            // Let's just rely on sequence number for main filtering and use this set for the current batch safety.
+            // Logic for pruning goes here if needed, removing unused overflow calculation
         }
     }
 }
