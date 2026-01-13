@@ -45,24 +45,110 @@ struct MultiViewSearchSheet: View {
 
 struct MultiViewSlot: View {
     let channel: StreamChannel?; let isFocused: Bool; let showControls: Bool; let onTap: () -> Void; let onAdd: () -> Void; let onRemove: () -> Void
-    var body: some View { ZStack { Color.gray.opacity(0.15); if let c = channel { GridVideoPlayer(url: URL(string: c.streamURL)!, isMuted: !isFocused).allowsHitTesting(false); VStack { Spacer(); HStack { Button(action: onRemove) { Image(systemName: "xmark.circle.fill").font(.system(size: 30)).foregroundStyle(.white.opacity(0.8)) }.padding(30); Spacer(); Image(systemName: isFocused ? "speaker.wave.2.fill" : "speaker.slash.fill").foregroundStyle(.white.opacity(isFocused ? 1 : 0.5)).font(.system(size: 26)).padding(30) } }.opacity(showControls ? 1 : 0).animation(.easeInOut(duration: 0.2), value: showControls) } else { Button(action: onAdd) { VStack { Image(systemName: "plus.circle").font(.largeTitle); Text("Add Channel").font(.caption) }.foregroundStyle(.white.opacity(0.5)) } } }.contentShape(Rectangle()).onTapGesture { onTap() }.clipShape(RoundedRectangle(cornerRadius: 24)) }
+    @State private var isPlaying = true
+    
+    var body: some View { 
+        ZStack { 
+            Color.gray.opacity(0.15); 
+            if let c = channel { 
+                GridVideoPlayer(url: URL(string: c.streamURL)!, isMuted: !isFocused, isPlaying: $isPlaying)
+                    .allowsHitTesting(false); 
+                VStack { 
+                    Spacer(); 
+                    HStack { 
+                        Button(action: onRemove) { Image(systemName: "xmark.circle.fill").font(.system(size: 30)).foregroundStyle(.white.opacity(0.8)) }.padding(30); 
+                        Spacer(); 
+                        Button(action: { isPlaying.toggle() }) {
+                            Image(systemName: isPlaying ? "pause.fill" : "play.fill").font(.system(size: 26)).foregroundStyle(.white).padding(10).background(.ultraThinMaterial).clipShape(Circle())
+                        }
+                        Image(systemName: isFocused ? "speaker.wave.2.fill" : "speaker.slash.fill").foregroundStyle(.white.opacity(isFocused ? 1 : 0.5)).font(.system(size: 26)).padding(30) 
+                    } 
+                }.opacity(showControls ? 1 : 0).animation(.easeInOut(duration: 0.2), value: showControls) 
+            } else { 
+                Button(action: onAdd) { VStack { Image(systemName: "plus.circle").font(.largeTitle); Text("Add Channel").font(.caption) }.foregroundStyle(.white.opacity(0.5)) } 
+            } 
+        }.contentShape(Rectangle()).onTapGesture { onTap() }.clipShape(RoundedRectangle(cornerRadius: 24)) 
+    }
 }
 
 struct GridVideoPlayer: UIViewRepresentable {
     typealias UIViewType = NebuloKSVideoPlayerView
-    let url: URL; let isMuted: Bool
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    let url: URL; let isMuted: Bool; @Binding var isPlaying: Bool
+    
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    
     func makeUIView(context: Context) -> NebuloKSVideoPlayerView {
         let player = NebuloKSVideoPlayerView()
         player.backgroundColor = UIColor.black
         player.allowNativeControls = false
-        context.coordinator.player = player; context.coordinator.currentURL = url
-        let resource = KSPlayerResource(url: url); player.set(resource: resource); player.play()
+        context.coordinator.player = player
+        context.coordinator.startPlayback(url: url)
         return player
     }
+    
     func updateUIView(_ uiView: NebuloKSVideoPlayerView, context: Context) {
-        if context.coordinator.currentURL != url { context.coordinator.currentURL = url; let resource = KSPlayerResource(url: url); uiView.set(resource: resource); uiView.play() }
+        if context.coordinator.currentURL != url { 
+            context.coordinator.startPlayback(url: url)
+        }
         uiView.playerLayer?.player.isMuted = isMuted
+        
+        if isPlaying {
+            if !uiView.playerLayer!.player.isPlaying { uiView.play() }
+        } else {
+            if uiView.playerLayer!.player.isPlaying { uiView.pause() }
+        }
     }
-    class Coordinator: NSObject { var player: NebuloKSVideoPlayerView?; var currentURL: URL? }
+    
+    class Coordinator: NSObject {
+        var parent: GridVideoPlayer
+        var player: NebuloKSVideoPlayerView?
+        var currentURL: URL?
+        var watchdogTimer: Timer?
+        var lastTime: TimeInterval = -1
+        var stuckCount = 0
+        
+        init(_ parent: GridVideoPlayer) { self.parent = parent }
+        
+        func startPlayback(url: URL) {
+            self.currentURL = url
+            // Use same robust options as main player
+            let resource = KSPlayerResource(url: url)
+            player?.set(resource: resource)
+            player?.play()
+            
+            startWatchdog()
+            
+            player?.onTimeChange = { [weak self] current, _ in
+                self?.lastTime = current
+                self?.stuckCount = 0
+            }
+        }
+        
+        func startWatchdog() {
+            watchdogTimer?.invalidate()
+            watchdogTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+                guard let self = self, let player = self.player else { return }
+                guard self.parent.isPlaying else { return }
+                
+                // If time hasn't moved for 6 seconds (3 checks * 2s), reload
+                if abs(player.playerLayer!.player.currentPlaybackTime - self.lastTime) < 0.1 {
+                    self.stuckCount += 1
+                    if self.stuckCount >= 3 {
+                        print("♻️ [MultiView] Stream stuck, reloading: \(self.currentURL?.lastPathComponent ?? "")")
+                        self.stuckCount = 0
+                        if let url = self.currentURL {
+                            let resource = KSPlayerResource(url: url)
+                            player.set(resource: resource)
+                            player.play()
+                        }
+                    }
+                } else {
+                    self.stuckCount = 0
+                }
+                self.lastTime = player.playerLayer!.player.currentPlaybackTime
+            }
+        }
+        
+        deinit { watchdogTimer?.invalidate() }
+    }
 }
