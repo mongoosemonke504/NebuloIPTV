@@ -170,9 +170,9 @@ class ChannelViewModel: ObservableObject {
                         self.channels = cachedChans
                         self.categories = cachedCats
                         self.categorizeSports()
-                        // If we have data, we can stop "loading" UI immediately
-                        // unless cache is very old? User said "much faster".
-                        self.isLoading = false
+                        // Keep isLoading = true until EPG is also ready
+                        self.isLoading = true
+                        self.loadingStatus = "Restoring Data..."
                     }
                 } else {
                     // No cache, show loading
@@ -1115,14 +1115,13 @@ class ChannelViewModel: ObservableObject {
                 await MainActor.run {
                     self.epgData = cached.epg
                     self.epgNameMap = cached.map
-                    // If we successfully loaded from disk, we aren't "empty" anymore
                 }
             }
         }
         
         // 2. If data is fresh (not stale) AND we have data, SKIP network update
         if !isStale && !self.epgData.isEmpty {
-            print("✅ [EPG] Data is fresh (last update: \(lastEPGUpdateTime?.description ?? "never")). Skipping network fetch.")
+            print("✅ [EPG] Data is fresh. Skipping network fetch.")
             return
         }
         
@@ -1131,14 +1130,14 @@ class ChannelViewModel: ObservableObject {
         let effectivelySilent = silent || !self.epgData.isEmpty
         
         await MainActor.run {
-            // isLoading controls the skeletons. We only show skeletons if we have NO data.
-            if !effectivelySilent && !self.isLoading {
+            // isLoading controls the skeletons.
+            if !effectivelySilent {
                 self.isLoading = true
             }
             
             self.visualProgress = 0
             self.epgProgress = 0
-            self.loadingStatus = "Fetching EPG..."
+            self.loadingStatus = "Updating Guide..."
             
             // isUpdatingEPG controls the dropdown. We always show it during the fetch.
             withAnimation(.spring()) { self.isUpdatingEPG = true }
