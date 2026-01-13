@@ -404,23 +404,34 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     
     private func handleStuckBuffer() {
         guard let url = currentURL, !userPaused else { return }
-        print("🚨 [NebuloEngine] Buffer stuck for >20s, triggering automatic re-sync...")
+        print("🚨 [NebuloEngine] Buffer stuck for >20s or playback stalled.")
         stopBufferWatchdog()
         
         if currentBackend == .ksplayer {
-            // First attempt: Seek slightly forward to flush buffer logic
-            if ksPlayerRetryCount == 0 {
-                ksPlayerRetryCount += 1
-                print("🔄 [NebuloEngine] Attempting seek-flush...")
-                ksPlayerView.seek(time: currentTime + 0.5) { _ in 
-                    self.startBufferWatchdog() // Restart watchdog to see if it fixed it
+            print("⚠️ [NebuloEngine] KSPlayer unstable. Falling back to VLC...")
+            let savedTime = currentTime
+            
+            // Switch to VLC
+            DispatchQueue.main.async {
+                self.ksPlayerView.pause()
+                self.ksPlayerView.removeFromSuperview()
+                
+                // Play VLC
+                self.playVLC(url: url)
+                
+                // Seek to where we left off (VLC needs a moment to init, handled in updateState or delayed)
+                // For VLC, we can set the time immediately after setting media, but accurate seeking works best after 'playing' starts.
+                // We'll use a small delay or the 'isInteractionSeeking' flag to apply the seek once it starts.
+                
+                // Simple approach: Schedule seek
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    if self.currentBackend == .vlc {
+                        self.vlcMediaPlayer.time = VLCTime(int: Int32(savedTime * 1000))
+                    }
                 }
-            } else {
-                // Second attempt: Hard Reload
-                handleKSPlayerError() 
             }
         } else {
-            // Re-play the current URL to force a fresh connection
+            // Re-play the current URL to force a fresh connection (VLC retry)
             DispatchQueue.main.async {
                 self.play(url: url)
             }
