@@ -179,7 +179,32 @@ struct ManualSelectionSheet: View {
                     HStack {
                         CachedAsyncImage(urlString: channel.icon ?? "", size: CGSize(width: 35, height: 35)).cornerRadius(8)
                         VStack(alignment: .leading) {
-                            Text(channel.name).font(.headline).foregroundStyle(.primary)
+                            HStack(spacing: 6) {
+                                Text(channel.name).font(.headline).foregroundStyle(.primary)
+                                
+                                // Quality Badge
+                                let q = SmartSearchLogic.detectQuality(channel.name)
+                                if q != .sd {
+                                    Text(q.rawValue.components(separatedBy: " ").first ?? "HD")
+                                        .font(.system(size: 9, weight: .bold))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 4)
+                                        .padding(.vertical, 2)
+                                        .background(Color.blue.opacity(0.8))
+                                        .cornerRadius(4)
+                                }
+                                
+                                // Language Badge (Debug/Info)
+                                if let lang = SmartSearchLogic.detectLanguage("\(channel.name) \(viewModel.getCurrentProgram(for: channel)?.title ?? "") \(viewModel.getCurrentProgram(for: channel)?.description ?? "")") {
+                                    Text(lang.rawValue.prefix(2).uppercased())
+                                        .font(.system(size: 9, weight: .bold))
+                                        .foregroundStyle(.black)
+                                        .padding(.horizontal, 4)
+                                        .padding(.vertical, 2)
+                                        .background(Color.white.opacity(0.8))
+                                        .cornerRadius(4)
+                                }
+                            }
                             if let live = viewModel.getCurrentProgram(for: channel) {
                                 Text(live.title).font(.caption).foregroundColor(.secondary)
                             }

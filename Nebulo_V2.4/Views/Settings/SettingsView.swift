@@ -62,6 +62,10 @@ struct SettingsView: View {
                         SettingsSectionHeader(title: "Playback")
                         PlaybackCard()
                         
+                        // MARK: - SPORTS CENTER
+                        SettingsSectionHeader(title: "Sports Center")
+                        SportsPreferencesCard(viewModel: viewModel)
+                        
                         // MARK: - CONTENT MANAGEMENT
                         SettingsSectionHeader(title: "Content Management")
                         ContentManagementCard(
@@ -339,6 +343,43 @@ struct PlaybackCard: View {
                         Slider(value: $bufferTime, in: 0.5...10.0, step: 0.5)
                             .tint(.blue)
                     }
+                }
+            }
+            .padding()
+        }
+    }
+}
+
+struct SportsPreferencesCard: View {
+    @ObservedObject var viewModel: ChannelViewModel
+    
+    var body: some View {
+        SettingsCard {
+            VStack(spacing: 16) {
+                HStack {
+                    Text("Preferred Language").font(.body).foregroundColor(.white)
+                    Spacer()
+                    Picker("Preferred Language", selection: $viewModel.preferredLanguage) {
+                        ForEach(LanguagePreference.allCases) { lang in
+                            Text(lang.rawValue).tag(lang)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .tint(.white.opacity(0.7))
+                }
+                
+                Divider().background(Color.white.opacity(0.1))
+                
+                HStack {
+                    Text("Preferred Quality").font(.body).foregroundColor(.white)
+                    Spacer()
+                    Picker("Preferred Quality", selection: $viewModel.preferredQuality) {
+                        ForEach(StreamQuality.allCases) { qual in
+                            Text(qual.rawValue).tag(qual)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .tint(.white.opacity(0.7))
                 }
             }
             .padding()
