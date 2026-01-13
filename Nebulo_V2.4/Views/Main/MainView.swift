@@ -231,12 +231,13 @@ extension MainView {
         }
         
         // General Loading Overlay
-        if viewModel.isLoading || viewModel.isUpdatingEPG {
+        // Show if explicitly loading OR if we have no channels yet (initial cold start state)
+        if viewModel.isLoading || viewModel.isUpdatingEPG || viewModel.channels.isEmpty {
             LoadingStatusOverlay(
                 status: viewModel.loadingStatus,
                 progress: viewModel.isUpdatingEPG ? viewModel.displayEPGProgress : nil,
                 accentColor: accentColor,
-                isBlocking: viewModel.isLoading // Only block if full loading (skeletons)
+                isBlocking: true // Always block on startup/empty
             )
             .transition(.opacity)
             .zIndex(100)
