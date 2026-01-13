@@ -27,12 +27,31 @@ struct MultiViewScreen: View {
     }
     func getRect(for index: Int, size: CGSize) -> CGRect {
         let indices = activeIndices, count = indices.count, w = size.width, h = size.height
+        let isLandscape = w > h
+        
         if count == 0 { return index == 0 ? CGRect(x: 0, y: 0, width: w, height: h) : CGRect(x: w/2, y: h/2, width: 0, height: 0) }
+        
         if count == 1 { return indices.contains(index) ? CGRect(x: 0, y: 0, width: w, height: h) : CGRect(x: w/2, y: h/2, width: 0, height: 0) }
-        if count == 2 { if indices.contains(index) { let isFirst = indices.first == index; return CGRect(x: 0, y: isFirst ? 0 : h/2, width: w, height: h/2) }; return CGRect(x: w/2, y: h/2, width: 0, height: 0) }
+        
+        if count == 2 {
+            if indices.contains(index) {
+                let isFirst = indices.first == index
+                if isLandscape {
+                    // Side-by-Side in Landscape
+                    return CGRect(x: isFirst ? 0 : w/2, y: 0, width: w/2, height: h)
+                } else {
+                    // Top-Bottom in Portrait
+                    return CGRect(x: 0, y: isFirst ? 0 : h/2, width: w, height: h/2)
+                }
+            }
+            return CGRect(x: w/2, y: h/2, width: 0, height: 0)
+        }
+        
+        // 3 or 4 streams: 2x2 Grid
         let halfW = w / 2, halfH = h / 2, row = CGFloat(index / 2), col = CGFloat(index % 2)
         return CGRect(x: col * halfW, y: row * halfH, width: halfW, height: halfH)
     }
+    
     func shouldShow(index: Int) -> Bool { let indices = activeIndices, count = indices.count; if count == 0 { return index == 0 }; if count <= 2 { return indices.contains(index) }; return true }
     private func handleDismiss() { withAnimation(.easeInOut(duration: 0.25)) { isExiting = true }; DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { showMultiView = false } }
     func toggleControls() { guard !isExiting else { return }; withAnimation { showControls.toggle(); if showControls { resetTimer() } } }
@@ -68,7 +87,11 @@ struct MultiViewSlot: View {
             } else { 
                 Button(action: onAdd) { VStack { Image(systemName: "plus.circle").font(.largeTitle); Text("Add Channel").font(.caption) }.foregroundStyle(.white.opacity(0.5)) } 
             } 
-        }.contentShape(Rectangle()).onTapGesture { onTap() }.clipShape(RoundedRectangle(cornerRadius: 24)) 
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { onTap() }
+        .clipShape(RoundedRectangle(cornerRadius: 24))
+        .padding(2) // Add spacing for cleaner grid
     }
 }
 
