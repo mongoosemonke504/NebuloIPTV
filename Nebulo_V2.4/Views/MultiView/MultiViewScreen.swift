@@ -116,11 +116,15 @@ struct GridVLCPlayer: UIViewRepresentable {
         func playURL(_ url: URL) {
             currentURL = url
             let media = VLCMedia(url: url)
-            // Consistent robust options
+            // Consistent robust options optimized for Multi-View
+            // Enable hardware decoding to reduce CPU load with 4 streams
             media.addOptions([
-                "network-caching": 3000,
+                "network-caching": 2000,
                 "clock-jitter": 0,
-                "clock-synchro": 0
+                "clock-synchro": 0,
+                "avcodec-hw": "any",
+                "videotoolbox": 1,
+                "framedrop": 1
             ])
             player.media = media
             player.play()
