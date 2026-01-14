@@ -306,15 +306,17 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                 self.updatePlaybackState()
             }
         }
-                        ksPlayerView.onFinish = { [weak self] error in if error != nil { self?.handleKSPlayerError() } }
-                        KSOptions.isAutoPlay = true
-                        KSOptions.isSecondOpen = false
-                        KSOptions.maxBufferDuration = 300.0 // Keep max buffer high
-                        KSOptions.preferredForwardBufferDuration = 0.1 // Play immediately, don't wait to fill buffer
-                        KSOptions.isAccurateSeek = false // Disable accurate seek to speed up recovery
-                        
-                        ksPlayerView.allowNativeControls = useNativeBridge
-                    }    
+        ksPlayerView.onFinish = { [weak self] error in if error != nil { self?.handleKSPlayerError() } }
+        
+        KSOptions.isAutoPlay = true
+        KSOptions.isSecondOpen = false
+        KSOptions.maxBufferDuration = 300.0 // Keep max buffer high
+        KSOptions.preferredForwardBufferDuration = 0.1 // Play immediately, don't wait to fill buffer
+        KSOptions.isAccurateSeek = false // Disable accurate seek to speed up recovery
+        
+        ksPlayerView.allowNativeControls = useNativeBridge
+    }
+    
     private func setupAudioSession() {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [.allowAirPlay, .allowBluetoothA2DP])
         try? AVAudioSession.sharedInstance().setActive(true)
@@ -420,10 +422,6 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                 self.playVLC(url: url)
                 
                 // Seek to where we left off (VLC needs a moment to init, handled in updateState or delayed)
-                // For VLC, we can set the time immediately after setting media, but accurate seeking works best after 'playing' starts.
-                // We'll use a small delay or the 'isInteractionSeeking' flag to apply the seek once it starts.
-                
-                // Simple approach: Schedule seek
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                     if self.currentBackend == .vlc {
                         self.vlcMediaPlayer.time = VLCTime(int: Int32(savedTime * 1000))
@@ -796,7 +794,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                 
                 // Helper to find and set gravity on AVPlayerLayer
                 func setGravity(_ gravity: AVLayerVideoGravity, on view: UIView) {
-                    if let layer = view.layer as? AVPlayerLayer {
+                    if let layer = view.layer as? AVPlayerLayer { 
                         layer.videoGravity = gravity
                     } else {
                         // Check sublayers recursively
