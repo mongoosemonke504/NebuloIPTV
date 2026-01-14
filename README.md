@@ -1,9 +1,19 @@
 # Nebulo IPTV - The Cleanest Sports iOS IPTV App
 
-[![Demo Video](<img width="482" height="1059" alt="SCR-20260114-cbsq" src="https://github.com/user-attachments/assets/58028365-987f-44d2-836b-cccb79df852f" />
-)](https://drive.google.com/file/d/198YeAiS9ly8JsXf4QFwh1FvBjfd8sZkR/view?usp=sharing)
+[![Watch the Demo](https://img.youtube.com/vi/MJFixFWJnyM/maxresdefault.jpg)](https://youtube.com/shorts/MJFixFWJnyM)
 
-**Nebulo V2.2** is here! NEW features include recording, captions, new homescreen, better sports search logic in sports section, support for multiple playlists and epgs at once, custom background, custom buttons, new faster and smoother playback (VLC and KSplayer), in app updates, and much more!
+**Nebulo V2.4** is here! 
+
+### **What's New in V2.4**
+*   **Redesigned Dashboard:** A completely new home screen with Quick Access cards for Favorites, Sports, and Recordings.
+*   **Multi-Playlist & EPG Support:** Log into multiple accounts and add custom external EPG links to run simultaneously.
+*   **Stream Recording:** Built-in support to record live content and manage your library directly in the app.
+*   **Advanced Sports Logic:** Improved smart-search logic to automatically match games to the best available streams in the Sports section.
+*   **Optimized Playback:** Faster channel switching and smoother streaming performance using updated VLC and KSPlayer engines.
+*   **UI Customization:** Fully adjustable button transparency and color settings, plus custom nebula background effects.
+*   **Captions:** Added support for subtitles and closed captions on compatible streams.
+*   **In-App Updates:** Check for and install the latest versions of Nebulo directly from the settings menu.
+*   **Performance:** Extensive code cleanup and bug fixes for a faster, more stable experience.
 
 ## Main Features
 
