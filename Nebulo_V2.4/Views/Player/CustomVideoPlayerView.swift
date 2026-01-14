@@ -79,9 +79,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
             
             // BUFFERING INDICATOR (On Top)
             if playerManager.isBuffering {
-                ProgressView()
-                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    .scaleEffect(1.7)
+                CustomSpinner(color: .white, lineWidth: 5, size: 50)
                     .frame(width: 82, height: 82)
                     .modifier(GlassEffect(cornerRadius: 42, isSelected: true, accentColor: nil))
                     .ignoresSafeArea()

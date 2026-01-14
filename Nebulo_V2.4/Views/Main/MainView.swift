@@ -893,9 +893,7 @@ struct LoadingStatusOverlay: View {
         VStack {
             VStack(spacing: 12) {
                 HStack(spacing: 12) {
-                    ProgressView()
-                        .tint(.white)
-                        .scaleEffect(0.8)
+                    CustomSpinner(color: .white, lineWidth: 3, size: 25)
                     
                     Text(status)
                         .font(.subheadline.bold())

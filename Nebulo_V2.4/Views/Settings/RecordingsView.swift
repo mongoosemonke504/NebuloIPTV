@@ -230,7 +230,7 @@ struct RecordingPlayerView: View {
                                 seekBackward: { playerManager.seek(to: playerManager.currentTime - 15); resetTimer() }
                             )            
             if playerManager.isBuffering {
-                ProgressView().tint(.white).scaleEffect(1.5)
+                CustomSpinner(color: .white, lineWidth: 5, size: 50)
             }
             
             // SUBTITLE SETTINGS PANEL

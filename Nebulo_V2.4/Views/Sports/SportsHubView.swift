@@ -120,7 +120,7 @@ struct SportsHubView: View {
         ZStack {
             Color.black.opacity(0.4).ignoresSafeArea()
             VStack(spacing: 15) {
-                ProgressView().tint(.white)
+                CustomSpinner(color: .white, lineWidth: 4, size: 40)
                 Text("Finding best stream...").font(.caption).bold().foregroundStyle(.white)
             }
             .padding(25)
@@ -171,7 +171,7 @@ struct SportGamesListView: View {
     @ViewBuilder
     private var emptyState: some View {
         if scoreViewModel.isLoading {
-            ProgressView().tint(.white).padding(.top, 100)
+            CustomSpinner(color: .white, lineWidth: 4, size: 40).padding(.top, 100)
         } else {
             EmptyStateView(title: "No Match Data", systemImage: "calendar.badge.exclamationmark", description: "No matches found for \(sport.rawValue).").frame(height: 300)
         }
