@@ -316,7 +316,7 @@ struct SoccerGameSection: Identifiable, Sendable, Codable {
     let league: String
     let games: [ESPNEvent]
     
-    init(id: UUID = UUID(), league: String, games: [ESPNEvent]) {
+    nonisolated init(id: UUID = UUID(), league: String, games: [ESPNEvent]) {
         self.id = id
         self.league = league
         self.games = games
