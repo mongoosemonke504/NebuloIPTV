@@ -182,6 +182,13 @@ class RecordingManager: NSObject, ObservableObject {
         }
     }
     
+    func renameRecording(_ recording: Recording, newName: String) {
+        if let index = recordings.firstIndex(where: { $0.id == recording.id }) {
+            recordings[index].customTitle = newName
+            saveRecordings()
+        }
+    }
+    
     func deleteRecording(_ recording: Recording) {
         // Stop if running
         if activeRecorders[recording.id] != nil {

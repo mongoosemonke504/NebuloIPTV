@@ -14,11 +14,20 @@ struct Recording: Identifiable, Codable, Hashable {
     var programTitle: String? = nil
     var programDescription: String? = nil
     
+    // User customizations
+    var customTitle: String? = nil
+    
     var status: RecordingStatus
     var localFileName: String? // Filename in Documents/Recordings/
     
     var duration: TimeInterval {
         return endTime.timeIntervalSince(startTime)
+    }
+    
+    var displayName: String {
+        if let custom = customTitle, !custom.isEmpty { return custom }
+        if let title = programTitle, !title.isEmpty { return title }
+        return channelName
     }
     
     enum RecordingStatus: String, Codable {

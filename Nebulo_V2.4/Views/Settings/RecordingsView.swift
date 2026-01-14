@@ -6,6 +6,10 @@ import Combine
 struct RecordingsView: View {
     @ObservedObject var manager = RecordingManager.shared
     @State private var selectedRecording: Recording?
+    @State private var recordingToRename: Recording?
+    @State private var newNameInput = ""
+    @State private var showRenameAlert = false
+    
     var viewModel: ChannelViewModel? = nil
     var playAction: ((StreamChannel) -> Void)? = nil
     var onBack: (() -> Void)? = nil
@@ -53,11 +57,15 @@ struct RecordingsView: View {
                                 .cornerRadius(4)
                                 
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(recording.channelName)
+                                    Text(recording.displayName)
                                         .font(.headline)
                                         .foregroundColor(.white)
                                     
                                     HStack {
+                                        if recording.displayName != recording.channelName {
+                                            Text(recording.channelName).bold()
+                                            Text("•")
+                                        }
                                         Text(formatDate(recording.startTime))
                                         Text("•")
                                         Text(recording.status == .recording ? "In Progress" : recording.status.rawValue.capitalized)
@@ -65,6 +73,7 @@ struct RecordingsView: View {
                                     }
                                     .font(.caption)
                                     .foregroundColor(.white.opacity(0.7))
+                                    .lineLimit(1)
                                 }
                                 
                                 Spacer()
@@ -84,7 +93,32 @@ struct RecordingsView: View {
                         .buttonStyle(.plain)
                         .listRowBackground(Color.clear)
                         .listRowSeparatorTint(Color.white.opacity(0.2))
-                        .swipeActions {
+                        .contextMenu {
+                            Button {
+                                recordingToRename = recording
+                                newNameInput = recording.displayName
+                                showRenameAlert = true
+                            } label: {
+                                Label("Rename", systemImage: "pencil")
+                            }
+                            
+                            Button(role: .destructive) {
+                                manager.deleteRecording(recording)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                        .swipeActions(edge: .leading) {
+                            Button {
+                                recordingToRename = recording
+                                newNameInput = recording.displayName
+                                showRenameAlert = true
+                            } label: {
+                                Label("Rename", systemImage: "pencil")
+                            }
+                            .tint(.blue)
+                        }
+                        .swipeActions(edge: .trailing) {
                             Button(role: .destructive) {
                                 manager.deleteRecording(recording)
                             } label: {
@@ -114,6 +148,15 @@ struct RecordingsView: View {
         }
         .fullScreenCover(item: $selectedRecording) { recording in
             RecordingPlayerView(recording: recording)
+        }
+        .alert("Rename Recording", isPresented: $showRenameAlert) {
+            TextField("Name", text: $newNameInput)
+            Button("Save") {
+                if let rec = recordingToRename {
+                    manager.renameRecording(rec, newName: newNameInput)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
         }
     }
     
