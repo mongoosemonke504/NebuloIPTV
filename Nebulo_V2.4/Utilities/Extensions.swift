@@ -1,6 +1,5 @@
 import SwiftUI
 
-// MARK: - EXTENSIONS & LOGIC
 extension Color {
     init?(hex: String) {
         let hex = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
@@ -45,7 +44,7 @@ extension View {
             DragGesture()
                 .onEnded { value in
                     let minDragTranslation: CGFloat = 100
-                    let minStartingX: CGFloat = 50 // Gesture starts near left edge
+                    let minStartingX: CGFloat = 50 
                     
                     if value.startLocation.x < minStartingX && value.translation.width > minDragTranslation {
                         onTrigger()
@@ -66,28 +65,24 @@ extension View {
 
 import UIKit
 
-// MARK: - Navigation Pop Gesture Handling
-
-/// A `UIViewControllerRepresentable` that provides access to the `UINavigationController`
-/// to enable or disable its interactive pop gesture.
 struct NavigationPopGestureHandler: UIViewControllerRepresentable {
     var isEnabled: Bool
 
     func makeUIViewController(context: Context) -> UIViewController {
-        // Return a dummy UIViewController. We only need access to its navigationController.
+        
         return UIViewController()
     }
 
     func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
-        // Access the nearest UINavigationController and update its interactivePopGestureRecognizer.
+        
         uiViewController.navigationController?.interactivePopGestureRecognizer?.isEnabled = isEnabled
     }
 }
 
 extension View {
-    /// A view modifier to control the interactive pop gesture of the `UINavigationController`.
-    /// - Parameter isEnabled: A boolean indicating whether the interactive pop gesture should be enabled.
-    ///   Defaults to `true`.
+    
+    
+    
     func interactivePopGesture(isEnabled: Bool) -> some View {
         self.background(NavigationPopGestureHandler(isEnabled: isEnabled))
     }

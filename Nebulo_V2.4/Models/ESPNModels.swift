@@ -13,7 +13,7 @@ struct ESPNEvent: Codable, Identifiable, Hashable, Sendable {
     let groupings: [ESPNGrouping]?
     var leagueLabel: String? = nil
     
-    // Cache the parsed date to avoid repeated formatter creation and actor isolation issues
+    
     private let _dateParsed: Date?
     
     enum CodingKeys: String, CodingKey {
@@ -30,7 +30,7 @@ struct ESPNEvent: Codable, Identifiable, Hashable, Sendable {
         self.groupings = try container.decodeIfPresent([ESPNGrouping].self, forKey: .groupings)
         self.leagueLabel = try container.decodeIfPresent(String.self, forKey: .leagueLabel)
         
-        // Parse date once
+        
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let d = formatter.date(from: self.date) {

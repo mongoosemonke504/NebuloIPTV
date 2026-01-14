@@ -1,6 +1,5 @@
 import Foundation
 
-// MARK: - EPG MODELS
 struct EPGProgram: Identifiable, Codable, Sendable {
     var id = UUID()
     let channelID: String
@@ -20,10 +19,10 @@ struct StreamChannel: Identifiable, Codable, Hashable, Equatable, Sendable {
     var streamURL: String; let icon: String?; var categoryID: Int; var originalName: String? = nil
     var epgID: String? = nil
     var hasArchive: Bool = false
-    var originalID: Int? = nil // The ID from the provider (for API calls)
-    var accountID: UUID? = nil // The source account
+    var originalID: Int? = nil 
+    var accountID: UUID? = nil 
     
-    // Optimization: Pre-computed search string and quality score
+    
     var searchNormalizedName: String = ""
     var qualityScore: Int = 0
     
@@ -69,7 +68,7 @@ struct StreamChannel: Identifiable, Codable, Hashable, Equatable, Sendable {
         self.originalID = originalID; self.accountID = accountID
         updateComputedProperties()
     }
-    // Backward compatibility for linker
+    
     nonisolated init(id: Int, name: String, streamURL: String, icon: String?, categoryID: Int, originalName: String?, epgID: String?) {
         self.id = id; self.name = name; self.streamURL = streamURL; self.icon = icon; self.categoryID = categoryID; self.originalName = originalName; self.epgID = epgID; self.hasArchive = false
         updateComputedProperties()

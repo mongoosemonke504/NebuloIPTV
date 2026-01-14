@@ -50,13 +50,13 @@ class AccountManager: ObservableObject {
             accounts[index] = account
         } else {
             var newAccount = account
-            // Assign unique stableID
+            
             let maxID = accounts.map { $0.stableID }.max() ?? 0
-            // If it's the very first account (and maxID is 0), we can keep it 0.
-            // But if 0 exists, increment.
-            // Actually, for migration safety:
-            // If accounts is empty, 0.
-            // If not empty, max + 1.
+            
+            
+            
+            
+            
             if !accounts.isEmpty {
                 newAccount.stableID = maxID + 1
             }

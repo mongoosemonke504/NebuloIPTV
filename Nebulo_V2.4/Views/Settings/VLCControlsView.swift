@@ -4,7 +4,7 @@ struct VLCControlsView: View {
     @Binding var isPlaying: Bool
     @Binding var progress: Float
     @Binding var isScrubbing: Bool
-    let duration: Double // Total duration in ms
+    let duration: Double 
     
     var onSeek: (Float) -> Void
     var onClose: () -> Void
@@ -15,7 +15,7 @@ struct VLCControlsView: View {
     
     var body: some View {
         ZStack {
-            // Full-screen background for dismissal
+            
             Color.black.opacity(0.4)
                 .contentShape(Rectangle())
                 .onTapGesture {
@@ -24,7 +24,7 @@ struct VLCControlsView: View {
                 .ignoresSafeArea()
             
             VStack {
-                // Top Bar
+                
                 HStack {
                     Button(action: { onClose(); onInteraction() }) {
                         Image(systemName: "xmark.circle.fill")
@@ -38,9 +38,9 @@ struct VLCControlsView: View {
                 
                 Spacer()
                 
-                // Bottom Controls
+                
                 VStack(spacing: 12) {
-                    // Scrubber
+                    
                     Slider(value: $progress, in: 0...1) { editing in
                         isScrubbing = editing
                         onInteraction()
@@ -58,7 +58,7 @@ struct VLCControlsView: View {
                         
                         Spacer()
                         
-                        // Play/Pause
+                        
                         Button(action: { isPlaying.toggle(); onInteraction() }) {
                             Image(systemName: isPlaying ? "pause.fill" : "play.fill")
                                 .font(.system(size: 34))

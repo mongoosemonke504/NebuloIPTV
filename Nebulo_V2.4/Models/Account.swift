@@ -11,7 +11,7 @@ struct Account: Identifiable, Codable, Equatable, Hashable {
     var externalEPGUrls: [String] = []
     var dateAdded: Date = Date()
     var isActive: Bool = true
-    var stableID: Int = 0 // Used for ID namespacing (Legacy/First account = 0)
+    var stableID: Int = 0 
     
     var displayName: String {
         if !name.isEmpty { return name }

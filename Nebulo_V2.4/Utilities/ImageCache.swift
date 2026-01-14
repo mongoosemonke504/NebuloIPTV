@@ -1,14 +1,13 @@
 import SwiftUI
 import Combine
 
-// MARK: - ROBUST IMAGE CACHE (Disk + Memory)
 class ImageCache {
     static let shared = ImageCache()
     
     private let cache: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
-        cache.countLimit = 200 // Max 200 images in memory
-        cache.totalCostLimit = 100 * 1024 * 1024 // Max 100MB in memory
+        cache.countLimit = 200 
+        cache.totalCostLimit = 100 * 1024 * 1024 
         return cache
     }()
     
@@ -36,7 +35,7 @@ class ImageCache {
         
         guard fileManager.fileExists(atPath: fileURL.path) else { return nil }
         
-        // Use downsampling for disk images to save memory
+        
         if let image = downsample(imageAt: fileURL, to: size ?? CGSize(width: 300, height: 300)) {
             cache.setObject(image, forKey: cacheKey)
             return image
@@ -72,7 +71,7 @@ class ImageCache {
         }
     }
     
-    // High-performance downsampling logic
+    
     private func downsample(imageAt imageURL: URL, to pointSize: CGSize, scale: CGFloat = UIScreen.main.scale) -> UIImage? {
         let imageSourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let imageSource = CGImageSourceCreateWithURL(imageURL as CFURL, imageSourceOptions) else { return nil }
@@ -106,7 +105,6 @@ class ImageCache {
     }
 }
 
-// MARK: - IMAGE LOADER
 class ImageLoader: ObservableObject {
     @Published var image: UIImage?
     private let urlString: String
@@ -114,7 +112,7 @@ class ImageLoader: ObservableObject {
     
     init(urlString: String) {
         self.urlString = urlString
-        // Synchronous check for immediate display ONLY if in memory cache
+        
         if let cached = ImageCache.shared.getMemoryCache(forKey: urlString) {
             self.image = cached
             return
@@ -126,7 +124,7 @@ class ImageLoader: ObservableObject {
         if image != nil { return }
         
         task = Task {
-            // Check full cache (Disk + Memory) in background task
+            
             if let cached = ImageCache.shared.get(forKey: urlString) {
                 await MainActor.run { self.image = cached }
                 return
@@ -140,7 +138,7 @@ class ImageLoader: ObservableObject {
                     await MainActor.run { self.image = downloadedImage }
                 }
             } catch {
-                // Error
+                
             }
         }
     }
@@ -150,7 +148,6 @@ class ImageLoader: ObservableObject {
     }
 }
 
-// MARK: - CACHED ASYNC IMAGE VIEW
 struct CachedAsyncImage: View {
     @StateObject private var loader: ImageLoader
     let size: CGSize?
@@ -168,7 +165,7 @@ struct CachedAsyncImage: View {
                     .aspectRatio(contentMode: .fit)
             } else {
                 ZStack {
-                    Color.white.opacity(0.1) // Placeholder bg
+                    Color.white.opacity(0.1) 
                     if size != nil {
                         CustomSpinner(color: .white.opacity(0.5), lineWidth: 2, size: 15)
                     }

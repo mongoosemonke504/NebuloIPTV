@@ -11,14 +11,14 @@ struct SettingsView: View {
     @Binding var categories: [StreamCategory]
     let accentColor: Color
     @ObservedObject var viewModel: ChannelViewModel
-    @ObservedObject var scoreViewModel: ScoreViewModel // Added ScoreViewModel
+    @ObservedObject var scoreViewModel: ScoreViewModel 
     let playAction: ((StreamChannel) -> Void)?
     let onSave: () -> Void
     
     @AppStorage("xstreamURL") private var xstreamURL = ""
     @AppStorage("username") private var username = ""
     @AppStorage("password") private var password = ""
-    @AppStorage("loginTypeRaw") private var loginTypeRaw = LoginType.xtream.rawValue // Needed for loadData
+    @AppStorage("loginTypeRaw") private var loginTypeRaw = LoginType.xtream.rawValue 
     @AppStorage("customBackgroundVersion") private var customBackgroundVersion = 0
     @AppStorage("showSupportPopup") private var showSupportPopup = true
     
@@ -32,7 +32,7 @@ struct SettingsView: View {
     @State private var accountToEdit: Account? = nil
     @State private var inputImage: UIImage?
     
-    // Background Settings States (Local copies for editing)
+    
     @AppStorage("nebColor1") private var nebColor1 = "#AF52DE"; @AppStorage("nebColor2") private var nebColor2 = "#007AFF"; @AppStorage("nebColor3") private var nebColor3 = "#FF2D55"; @AppStorage("nebX1") private var nebX1 = 0.2; @AppStorage("nebY1") private var nebY1 = 0.2; @AppStorage("nebX2") private var nebX2 = 0.8; @AppStorage("nebY2") private var nebY2 = 0.3; @AppStorage("nebX3") private var nebX3 = 0.5; @AppStorage("nebY3") private var nebY3 = 0.8
     @AppStorage("useCustomBackground") private var useCustomBackground = false
     @AppStorage("customBackgroundBlur") private var customBackgroundBlur = 0.0
@@ -40,7 +40,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                // Background
+                
                 Color.black.ignoresSafeArea()
                 NebulaBackgroundView(color1: Color(hex: nebColor1) ?? .purple, color2: Color(hex: nebColor2) ?? .blue, color3: Color(hex: nebColor3) ?? .pink, point1: UnitPoint(x: nebX1, y: nebY1), point2: UnitPoint(x: nebX2, y: nebY2), point3: UnitPoint(x: nebX3, y: nebY3))
                     .opacity(0.3)
@@ -49,7 +49,7 @@ struct SettingsView: View {
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 24) {
                         
-                        // MARK: - APPEARANCE
+                        
                         SettingsSectionHeader(title: "Appearance")
                         AppearanceCard(
                             showSourceSelection: $showSourceSelection,
@@ -59,36 +59,36 @@ struct SettingsView: View {
                             accentColor: accentColor
                         )
                         
-                        // MARK: - PLAYBACK
+                        
                         SettingsSectionHeader(title: "Playback")
                         PlaybackCard()
                         
-                        // MARK: - SPORTS
+                        
                         SettingsSectionHeader(title: "Sports")
                         SportsPreferencesCard(viewModel: viewModel)
                         
-                        // MARK: - CONTENT MANAGEMENT
+                        
                         SettingsSectionHeader(title: "Content Management")
                         ContentManagementCard(
                             categories: $categories,
                             accentColor: accentColor,
                             viewModel: viewModel,
-                            scoreViewModel: scoreViewModel, // Pass to subview
+                            scoreViewModel: scoreViewModel, 
                             showAddPlaylist: $showAddPlaylist,
                             accountToEdit: $accountToEdit,
                             playAction: playAction,
                             dismissSettings: { dismiss() }
                         )
                         
-                        // MARK: - UPDATES
+                        
                         SettingsSectionHeader(title: "Updates")
                         UpdatesCard(updateService: updateService)
                         
-                        // MARK: - SUPPORT
+                        
                         SettingsSectionHeader(title: "Support")
                         SupportCard()
                         
-                        // MARK: - SIGN OUT
+                        
                         Button(action: {
                             if let current = accountManager.currentAccount {
                                 accountManager.removeAccount(current)
@@ -140,14 +140,13 @@ struct SettingsView: View {
     }
 }
 
-// MARK: - SUBVIEWS
 struct AppearanceCard: View {
     @AppStorage("viewMode") private var viewMode = ViewMode.automatic.rawValue
     @AppStorage("customAccentHex") private var customAccentHex = "#007AFF"
     @AppStorage("useCustomBackground") private var useCustomBackground = false
     @AppStorage("customBackgroundBlur") private var customBackgroundBlur = 0.0
     @AppStorage("glassOpacity") private var glassOpacity = 0.15
-    @AppStorage("glassShade") private var glassShade = 1.0 // 1.0 = White, 0.0 = Black
+    @AppStorage("glassShade") private var glassShade = 1.0 
     
     @Binding var showSourceSelection: Bool
     @Binding var showImagePicker: Bool
@@ -158,7 +157,7 @@ struct AppearanceCard: View {
     var body: some View {
         SettingsCard {
             VStack(spacing: 16) {
-                // Layout Mode
+                
                 HStack {
                     Text("Layout Mode").font(.body).foregroundColor(.white)
                     Spacer()
@@ -182,10 +181,10 @@ struct AppearanceCard: View {
                         Text("\(Int(glassOpacity * 100))%").font(.caption).foregroundColor(.white.opacity(0.7))
                     }
                     
-                    // Custom Opacity Slider
+                    
                     GeometryReader { geo in
                         ZStack(alignment: .leading) {
-                            // Track with Checkerboard to White gradient
+                            
                             ZStack {
                                 TransparencyCheckerboardView()
                                     .clipShape(Capsule())
@@ -230,10 +229,10 @@ struct AppearanceCard: View {
                         Text(glassShade == 1.0 ? "White" : (glassShade == 0.0 ? "Black" : String(format: "%.0f%% Gray", (1.0 - glassShade) * 100))).font(.caption).foregroundColor(.white.opacity(0.7))
                     }
                     
-                    // Premium Grayscale Slider
+                    
                     GeometryReader { geo in
                         ZStack(alignment: .leading) {
-                            // Gradient Track
+                            
                             LinearGradient(colors: [.black, .white], startPoint: .leading, endPoint: .trailing)
                                 .frame(height: 8)
                                 .clipShape(Capsule())
@@ -259,7 +258,7 @@ struct AppearanceCard: View {
                 
                 Divider().background(Color.white.opacity(0.1))
                 
-                // Real-time Preview Section
+                
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Preview")
                         .font(.caption.bold())
@@ -286,7 +285,7 @@ struct AppearanceCard: View {
             
             Divider().background(Color.white.opacity(0.1))
             
-            // Background Section
+            
             VStack(alignment: .leading, spacing: 16) {
                 Text("Background Style")
                     .font(.caption.bold())
@@ -491,10 +490,10 @@ struct ContentManagementCard: View {
     var body: some View {
         SettingsCard {
             VStack(spacing: 0) {
-                // Playlists List
+                
                 ForEach(accountManager.accounts) { account in
                     HStack {
-                        // Active Toggle
+                        
                         Toggle("", isOn: Binding(
                             get: { account.isActive },
                             set: { val in
@@ -523,7 +522,7 @@ struct ContentManagementCard: View {
                         
                         Spacer()
                         
-                        // Status Indicator (if primary)
+                        
                         if accountManager.currentAccount?.id == account.id {
                             Text("Primary")
                                 .font(.caption2.bold())
@@ -534,7 +533,7 @@ struct ContentManagementCard: View {
                                 .cornerRadius(4)
                         }
                         
-                        // Actions Menu
+                        
                         Menu {
                             Button("Set as Primary") {
                                 withAnimation { accountManager.switchToAccount(account) }
@@ -565,7 +564,7 @@ struct ContentManagementCard: View {
                     Divider().background(Color.white.opacity(0.1))
                 }
                 
-                // Add Playlist Button
+                
                 Button(action: { 
                     accountToEdit = nil
                     showAddPlaylist = true 
@@ -584,7 +583,7 @@ struct ContentManagementCard: View {
                 
                 Divider().background(Color.white.opacity(0.1))
                 
-                // Global Refresh Button
+                
                 Button(action: {
                     dismiss()
                     Task {
@@ -742,7 +741,6 @@ struct UpdatesCard: View {
     }
 }
 
-// MARK: - UI COMPONENTS
 struct SettingsSectionHeader: View {
     let title: String
     var body: some View {
@@ -801,7 +799,7 @@ struct SettingsRow: View {
             }
         }
         .padding()
-        .contentShape(Rectangle()) // Tappable area
+        .contentShape(Rectangle()) 
     }
 }
 
@@ -821,7 +819,6 @@ struct SettingsToggle: View {
     }
 }
 
-// Retain Helpers
 struct DragHandle: View { @Binding var x: Double; @Binding var y: Double; let color: Color; let size: CGSize; var body: some View { Circle().fill(color).frame(width: 30, height: 30).overlay(Circle().stroke(Color.white, lineWidth: 2)).shadow(radius: 4).position(x: x * size.width, y: y * size.height).gesture(DragGesture().onChanged { v in x = min(max(v.location.x / size.width, 0), 1); y = min(max(v.location.y / size.height, 0), 1) }) } }
 
 struct CategoriesManagerView: View {

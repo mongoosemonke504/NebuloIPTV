@@ -2,7 +2,6 @@ import SwiftUI
 import AVFoundation
 import Combine
 
-// MARK: - MAIN VIEW
 struct MainView: SwiftUI.View {
     @ObservedObject var viewModel: ChannelViewModel
     @ObservedObject var scoreViewModel: ScoreViewModel
@@ -94,7 +93,7 @@ struct MainView: SwiftUI.View {
             }
             .modifier(MainViewModifiers(
                 viewModel: viewModel,
-                scoreViewModel: scoreViewModel, // Pass scoreViewModel here
+                scoreViewModel: scoreViewModel, 
                 showMultiView: $showMultiView,
                 showSettings: $showSettings,
                 showSupportAlert: $showSupportAlert,
@@ -121,7 +120,7 @@ struct MainView: SwiftUI.View {
 
 struct MainViewModifiers: ViewModifier {
     @ObservedObject var viewModel: ChannelViewModel
-    @ObservedObject var scoreViewModel: ScoreViewModel // Added ScoreViewModel
+    @ObservedObject var scoreViewModel: ScoreViewModel 
     @Binding var showMultiView: Bool
     @Binding var showSettings: Bool
     @Binding var showSupportAlert: Bool
@@ -153,8 +152,8 @@ struct MainViewModifiers: ViewModifier {
                 }
             }
             .fullScreenCover(item: $selectedRecording) { recording in 
-                // Placeholder for RecordingPlayerView if not defined in this file
-                // Assuming it exists or will be handled
+                
+                
                 Text("Recording Player") 
             }
             .sheet(isPresented: $showSettings) { SettingsView(categories: categories, accentColor: accentColor, viewModel: viewModel, scoreViewModel: scoreViewModel, playAction: playAction, onSave: { viewModel.saveCategorySettings() }) }
@@ -214,7 +213,7 @@ extension MainView {
                         selectedChannel = nil
                         showQuickSwitcher = false 
                     }
-                    // Stop engine if NOT going to mini player
+                    
                     if viewModel.miniPlayerChannel == nil {
                         NebuloPlayerEngine.shared.stop()
                     }
@@ -230,9 +229,9 @@ extension MainView {
             .ignoresSafeArea() 
         }
         
-        // General Loading Overlay
-        // Show if explicitly loading. isUpdatingEPG does NOT block (handled inside overlay logic or by not setting isBlocking)
-        // We only block if viewModel.isLoading is true (which means we have NO data)
+        
+        
+        
         if viewModel.isLoading || viewModel.isUpdatingEPG {
             LoadingStatusOverlay(
                 status: viewModel.loadingStatus,
@@ -264,7 +263,6 @@ extension MainView {
     func shouldUseSidebar(isLandscape: Bool) -> Bool { if selectedCategory?.id == -3 { return false }; switch ViewMode(rawValue: viewMode) ?? .automatic { case .automatic: return isLandscape; case .sidebar: return true; case .standard: return false } }
 }
 
-// MARK: - STANDARD LAYOUT (Restored)
 struct StandardLayout: SwiftUI.View {
     @AppStorage("glassOpacity") private var glassOpacity = 0.15
     @AppStorage("glassShade") private var glassShade = 1.0
@@ -279,7 +277,7 @@ struct StandardLayout: SwiftUI.View {
             if viewModel.isLoading {
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 24) {
-                        // 1. Recent Preview Skeleton
+                        
                         VStack(alignment: .leading, spacing: 12) {
                             SkeletonBox(width: 180, height: 20).padding(.horizontal)
                             ScrollView(.horizontal, showsIndicators: false) {
@@ -291,7 +289,7 @@ struct StandardLayout: SwiftUI.View {
                             }
                         }
                         
-                        // 2. Quick Access Skeleton
+                        
                         VStack(alignment: .leading, spacing: 12) {
                             SkeletonBox(width: 140, height: 20).padding(.horizontal)
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
@@ -301,11 +299,11 @@ struct StandardLayout: SwiftUI.View {
                             }.padding(.horizontal)
                         }
                         
-                        // 3. Browse All Skeleton
+                        
                         FullWidthCardSkeleton()
                             .padding(.horizontal)
                         
-                        // 4. Categories Skeleton
+                        
                         VStack(alignment: .leading, spacing: 12) {
                             SkeletonBox(width: 120, height: 20).padding(.horizontal)
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
@@ -341,10 +339,10 @@ struct StandardLayout: SwiftUI.View {
                     ScrollView(showsIndicators: false) {
                         VStack(alignment: .leading, spacing: 24) {
                             
-                            // MARK: - Header
-                            // Greeting removed as requested
                             
-                            // MARK: - Recent
+                            
+                            
+                            
                             if !viewModel.recentIDs.isEmpty {
                                 VStack(alignment: .leading, spacing: 12) {
                                     Button(action: {
@@ -368,7 +366,7 @@ struct StandardLayout: SwiftUI.View {
                                 }
                             }
                             
-                            // MARK: - Quick Access
+                            
                             VStack(alignment: .leading, spacing: 12) {
                                 Label("Quick Access", systemImage: "square.grid.2x2.fill")
                                     .font(.headline)
@@ -392,7 +390,7 @@ struct StandardLayout: SwiftUI.View {
                                 .padding(.horizontal)
                             }
                             
-                            // MARK: - All Channels
+                            
                             Button(action: {
                                 viewModel.lastSelectedHomeID = -1; withAnimation { selectedCategory = StreamCategory(id: -1, name: "All Channels") }
                             }) {
@@ -425,7 +423,7 @@ struct StandardLayout: SwiftUI.View {
                             .buttonStyle(.plain)
                             .padding(.horizontal)
                             
-                            // MARK: - Categories
+                            
                             VStack(alignment: .leading, spacing: 12) {
                                 Label("Categories", systemImage: "list.bullet")
                                     .font(.headline)
@@ -440,8 +438,8 @@ struct StandardLayout: SwiftUI.View {
                                             Text(cat.name)
                                                 .font(.subheadline.bold())
                                                 .foregroundStyle(.white)
-                                                .multilineTextAlignment(.center) // Centered
-                                                .frame(maxWidth: .infinity, alignment: .center) // Centered
+                                                .multilineTextAlignment(.center) 
+                                                .frame(maxWidth: .infinity, alignment: .center) 
                                                 .padding(14)
                                                 .frame(height: 70)
                                                 .background(Color(white: glassShade).opacity(glassOpacity))
@@ -608,11 +606,11 @@ struct SidebarLayout: SwiftUI.View {
                     }
                 }
                 else if !searchText.isEmpty {
-                    // searchView is private to StandardLayout, so we need a similar view here or reuse components.
-                    // For Sidebar layout, we usually reuse the same logic. 
-                    // To keep it simple and safe, we can reuse the components directly.
+                    
+                    
+                    
                     StandardLayout(viewModel: viewModel, scoreViewModel: scoreViewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $searchText, accentColor: accentColor, playAction: playAction, showMultiView: $showMultiView, showSettings: $showSettings, selectedRecording: .constant(nil))
-                        .id("SearchOverride") // Hack to force reload if needed
+                        .id("SearchOverride") 
                 } else if selectedCategory?.id == -3 { SportsHubView(viewModel: viewModel, accentColor: accentColor, playAction: playAction, onBack: nil, scoreViewModel: scoreViewModel).transition(.blurFade) }
                 else if selectedCategory?.id == -5 { RecordingsView(viewModel: viewModel, playAction: playAction, onBack: { withAnimation { selectedCategory = nil } }).transition(.blurFade) }
                 else {
@@ -681,7 +679,7 @@ struct CategoryDetailView: SwiftUI.View {
                     ScrollView(showsIndicators: false) {
                         LazyVStack(spacing: 0) {
                             if !viewModel.searchText.isEmpty {
-                                // Search Logic
+                                
                                 Text("Search Results").font(.headline).padding()
                             } else {
                                 ForEach(channels) { c in
@@ -732,7 +730,6 @@ struct CategoryDetailView: SwiftUI.View {
     }
 }
 
-// MARK: - Mini Player View
 struct MiniPlayerView: SwiftUI.View {
     let channel: StreamChannel
     let viewModel: ChannelViewModel
@@ -753,7 +750,7 @@ struct MiniPlayerView: SwiftUI.View {
                 .clipShape(RoundedRectangle(cornerRadius: 16))
                 .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 5)
             
-            // Interaction Layer
+            
             Color.black.opacity(0.001)
                 .frame(width: 240, height: 135)
                 .contentShape(Rectangle())
@@ -844,14 +841,13 @@ struct MiniPlayerView: SwiftUI.View {
     }
 }
 
-// MARK: - Swipe Back Modifier
 struct SwipeBackModifier: ViewModifier {
     let onBack: () -> Void
     func body(content: Content) -> some View {
         ZStack(alignment: .leading) {
             content
             
-            // Invisible edge trigger
+            
             Color.clear
                 .frame(width: 25)
                 .contentShape(Rectangle())
@@ -878,7 +874,7 @@ struct MultiViewIndicator: SwiftUI.View {
                     .padding(.horizontal, 16).padding(.vertical, 12)
                     .modifier(GlassEffect(cornerRadius: 20, isSelected: true, accentColor: accentColor)) 
             }
-            .padding(.bottom, 15) // Moved lower
+            .padding(.bottom, 15) 
         }
     } 
 }
@@ -921,7 +917,7 @@ struct LoadingStatusOverlay: View {
             .cornerRadius(20)
             .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.2), lineWidth: 1))
             .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 5)
-            .padding(.top, 60) // Safe area padding
+            .padding(.top, 60) 
             
             Spacer()
         }
@@ -932,6 +928,6 @@ struct LoadingStatusOverlay: View {
             : Color.clear
         )
         .ignoresSafeArea()
-        .allowsHitTesting(isBlocking) // Pass through touches if not blocking (except the overlay itself ideally, but VStacks capture space. We need contentShape)
+        .allowsHitTesting(isBlocking) 
     }
 }

@@ -1,6 +1,5 @@
 import SwiftUI
 
-// MARK: - COMMON COMPONENTS
 struct EmptyStateView: View {
     let title: String
     let systemImage: String
@@ -24,9 +23,6 @@ struct EmptyStateView: View {
         .padding()
     }
 }
-
-// MARK: - SKELETONS
-// Note: SkeletonBox is defined in Modifiers.swift
 
 struct ChannelRowSkeleton: View {
     var body: some View {

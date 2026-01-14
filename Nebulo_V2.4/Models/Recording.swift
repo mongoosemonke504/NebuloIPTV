@@ -10,15 +10,15 @@ struct Recording: Identifiable, Codable, Hashable {
     let endTime: Date
     let createdAt: Date
     
-    // EPG Data preserved from time of recording
+    
     var programTitle: String? = nil
     var programDescription: String? = nil
     
-    // User customizations
+    
     var customTitle: String? = nil
     
     var status: RecordingStatus
-    var localFileName: String? // Filename in Documents/Recordings/
+    var localFileName: String? 
     
     var duration: TimeInterval {
         return endTime.timeIntervalSince(startTime)

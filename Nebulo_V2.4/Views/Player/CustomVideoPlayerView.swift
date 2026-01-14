@@ -2,8 +2,6 @@ import SwiftUI
 import Combine
 import KSPlayer
 
-// MARK: - UI COMPONENTS
-
 struct CustomVideoPlayerView: SwiftUI.View {
     let channel: StreamChannel
     var viewModel: ChannelViewModel? = nil
@@ -13,7 +11,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
     
     @Binding var showQuickSwitcher: Bool
     
-    // OBSERVE THE PLAYER MANAGER
+    
     @ObservedObject var playerManager = NebuloPlayerEngine.shared
     
     @State private var showControls = true
@@ -24,13 +22,13 @@ struct CustomVideoPlayerView: SwiftUI.View {
     @State private var currentStreamURL: URL?
     @Environment(\.scenePhase) var scenePhase
     
-    // Quick Switcher
+    
     @State private var quickSwitcherOffset: CGFloat = 200
     @State private var switcherCategory: StreamCategory = StreamCategory(id: -2, name: "Recently Watched")
     @State private var showCategoryPicker = false
     @State private var frozenRecentIDs: [Int] = []
     
-    // Menu Interaction State
+    
     @State private var isMenuOpen = false
     @State private var showSubtitlePanel = false
     @State private var showResolutionPanel = false
@@ -38,10 +36,10 @@ struct CustomVideoPlayerView: SwiftUI.View {
     @State private var captionContainerSize: CGSize = CGSize(width: 600, height: 150)
     @State private var isCaptionResizeMode = false
     
-    // Safety for dismissal race conditions
+    
     @State private var dismissalTask: Task<Void, Never>? = nil
     
-    // Progress Bar State
+    
     @State private var isScrubbing = false
     @State private var draggingProgress: Double? = nil
     
@@ -52,13 +50,13 @@ struct CustomVideoPlayerView: SwiftUI.View {
         ZStack {
             Color.black.ignoresSafeArea()
             
-            // THE PLAYER VIEW (Bridge to KSPlayer/VLC)
+            
             UnifiedPlayerViewBridge()
                 .applyIf(namespace != nil) { $0.matchedGeometryEffect(id: "videoPlayer", in: namespace!) }
                 .ignoresSafeArea()
                 .persistentSystemOverlays(.hidden)
             
-            // CONTROLS OVERLAY
+            
             PlayerControlsView(
                 playerManager: playerManager,
                 channel: channel,
@@ -77,7 +75,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
                 seekBackward: { playerManager.seek(to: playerManager.currentTime - 15); resetTimer() }
             )
             
-            // BUFFERING INDICATOR (On Top)
+            
             if playerManager.isBuffering {
                 CustomSpinner(color: .white, lineWidth: 5, size: 50)
                     .frame(width: 82, height: 82)
@@ -86,7 +84,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
                     .allowsHitTesting(false)
             }
             
-            // QUICK SWITCHER (Channel Guide)
+            
             if showQuickSwitcher {
                 Color.black.opacity(0.01).ignoresSafeArea().onTapGesture { withAnimation { showQuickSwitcher = false } }
                 
@@ -154,7 +152,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
                                                     .lineLimit(1)
                                                     .frame(width: 140, alignment: .leading)
                                             } else {
-                                                // Placeholder to maintain height
+                                                
                                                 Text(" ")
                                                     .font(.caption2)
                                                     .frame(width: 140, alignment: .leading)
@@ -186,7 +184,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
                 )
             }
             
-            // SUBTITLE SETTINGS PANEL
+            
             if showSubtitlePanel {
                 settingsPanelOverlay {
                     VStack(spacing: 0) {
@@ -214,7 +212,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
                 } onClose: { showSubtitlePanel = false }
             }
             
-            // RESOLUTION SETTINGS PANEL
+            
             if showResolutionPanel {
                 settingsPanelOverlay {
                     VStack(spacing: 0) {
@@ -244,7 +242,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
                 } onClose: { showResolutionPanel = false }
             }
             
-            // ASPECT RATIO PANEL
+            
             if showAspectRatioPanel {
                 settingsPanelOverlay {
                     VStack(spacing: 0) {
@@ -281,7 +279,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
         .offset(y: offset.height)
         .gesture(DragGesture().onChanged { val in
             if showQuickSwitcher { return }
-            // Safe area for Notification Center (ignore swipes starting at the very top)
+            
             if val.startLocation.y < 60 { return }
             
             if val.translation.height > 0 && abs(val.translation.height) > abs(val.translation.width) { offset = val.translation }
@@ -291,7 +289,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
             if val.startLocation.y < 60 { return }
             
             if val.translation.height > 100 && abs(val.translation.height) > abs(val.translation.width) { 
-                // Instead of full dismissal, trigger the mini-player
+                
                 withAnimation(.easeInOut(duration: 0.35)) {
                     viewModel?.miniPlayerChannel = channel
                     onDismiss?()
@@ -323,8 +321,8 @@ struct CustomVideoPlayerView: SwiftUI.View {
         }
         .onDisappear {
             dismissalTask?.cancel()
-            // Stop ONLY if app is active (meaning user navigated away)
-            // If backgrounded, phase is not .active
+            
+            
             if scenePhase == .active && viewModel?.miniPlayerChannel == nil && viewModel?.triggerMultiView != true {
                 playerManager.stop()
             }
@@ -351,7 +349,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
         }
     }
     
-    // MARK: - LOGIC
+    
     
     @ViewBuilder
     private func settingsPanelOverlay<Content: View>(@ViewBuilder content: () -> Content, onClose: @escaping () -> Void) -> some View {
@@ -424,12 +422,12 @@ struct CustomVideoPlayerView: SwiftUI.View {
     func setupPlayer() {
         KSOptions.isAutoPlay = true
         Task {
-            // Check for active recording handoff
+            
             if let localURL = RecordingManager.shared.getActiveRecordingURL(for: channel) {
                 print("⏺️ [Player] Playing from active recording file: \(localURL.lastPathComponent)")
                 await MainActor.run {
                     self.currentStreamURL = localURL
-                    // Force play local file (treat as new content to avoid resume logic skipping it)
+                    
                     playerManager.play(url: localURL)
                     
                     let prog = viewModel?.getCurrentProgram(for: channel)?.title
@@ -441,16 +439,16 @@ struct CustomVideoPlayerView: SwiftUI.View {
             let resolvedURLString = await viewModel?.resolveStalkerStream(channel) ?? channel.streamURL
             guard let targetURL = URL(string: resolvedURLString) else { return }
             
-            // Give the UI a moment to settle and renderView to get its frame
-            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s delay
+            
+            try? await Task.sleep(nanoseconds: 500_000_000) 
             
             await MainActor.run {
                 self.currentStreamURL = targetURL
                 
-                // Smart Resume Logic: Prevent restarting stream if already loaded
-                // 1. Check exact match
-                // 2. Check path match (ignore tokens)
-                // 3. Check ID match (handle Xtream Codes /live/ vs /timeshift/ difference)
+                
+                
+                
+                
                 
                 var shouldResume = false
                 
@@ -460,7 +458,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
                     } else if current.path == targetURL.path {
                         shouldResume = true
                     } else {
-                        // Check if filenames (Stream IDs) match, ignoring extension
+                        
                         let currentID = current.deletingPathExtension().lastPathComponent
                         let targetID = targetURL.deletingPathExtension().lastPathComponent
                         if !currentID.isEmpty && currentID == targetID {
@@ -470,18 +468,18 @@ struct CustomVideoPlayerView: SwiftUI.View {
                 }
                 
                 if shouldResume {
-                    // Backend is active and content matches.
-                    // If not playing (paused in mini-player), simply resume to preserve time-shift buffer.
+                    
+                    
                     if !playerManager.isPlaying && !playerManager.isBuffering {
                         playerManager.resume()
                     }
-                    // If already playing/buffering, do nothing (seamless transition)
+                    
                 } else {
-                    // Different content or fully stopped -> Force load (resets buffer)
+                    
                     playerManager.play(url: targetURL)
                 }
                 
-                // Always update metadata
+                
                 let prog = viewModel?.getCurrentProgram(for: channel)?.title
                 playerManager.updateNowPlayingMetadata(title: channel.name, subtitle: prog, imageURL: channel.icon)
             }

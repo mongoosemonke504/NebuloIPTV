@@ -2,7 +2,6 @@ import SwiftUI
 import KSPlayer
 import MobileVLCKit
 
-// MARK: - MULTI VIEW
 struct MultiViewScreen: View {
     @ObservedObject var viewModel: ChannelViewModel; @Binding var showMultiView: Bool; @State private var focusedIndex: Int = 0; @State private var showControls = true; @State private var controlTimer: Timer?; @State private var showSearchSheet = false; @State private var hasAppeared = false; @State private var isExiting = false
     var activeIndices: [Int] { viewModel.multiViewSlots.enumerated().compactMap { $0.element != nil ? $0.offset : nil } }
@@ -37,17 +36,17 @@ struct MultiViewScreen: View {
             if indices.contains(index) {
                 let isFirst = indices.first == index
                 if isLandscape {
-                    // Side-by-Side in Landscape
+                    
                     return CGRect(x: isFirst ? 0 : w/2, y: 0, width: w/2, height: h)
                 } else {
-                    // Top-Bottom in Portrait
+                    
                     return CGRect(x: 0, y: isFirst ? 0 : h/2, width: w, height: h/2)
                 }
             }
             return CGRect(x: w/2, y: h/2, width: 0, height: 0)
         }
         
-        // 3 or 4 streams: 2x2 Grid
+        
         let halfW = w / 2, halfH = h / 2, row = CGFloat(index / 2), col = CGFloat(index % 2)
         return CGRect(x: col * halfW, y: row * halfH, width: halfW, height: halfH)
     }
@@ -91,7 +90,7 @@ struct MultiViewSlot: View {
         .contentShape(Rectangle())
         .onTapGesture { onTap() }
         .clipShape(RoundedRectangle(cornerRadius: 24))
-        .padding(2) // Add spacing for cleaner grid
+        .padding(2) 
     }
 }
 
@@ -139,8 +138,8 @@ struct GridVLCPlayer: UIViewRepresentable {
         func playURL(_ url: URL) {
             currentURL = url
             let media = VLCMedia(url: url)
-            // Consistent robust options optimized for Multi-View
-            // Enable hardware decoding to reduce CPU load with 4 streams
+            
+            
             media.addOptions([
                 "network-caching": 2000,
                 "clock-jitter": 0,
@@ -158,16 +157,16 @@ struct GridVLCPlayer: UIViewRepresentable {
                 playURL(url)
             }
             
-            // Handle Audio
-            // Note: VLCMediaPlayer doesn't have a simple isMuted property exposed in all bindings?
-            // We use audio volume. 0 = Muted.
-            // But we need to check if 'audio' property is accessible.
-            // Assuming standard MobileVLCKit.
+            
+            
+            
+            
+            
             if let audio = player.audio {
                 audio.volume = isMuted ? 0 : 100
             }
             
-            // Handle Play/Pause
+            
             if isPlaying {
                 if !player.isPlaying { player.play() }
             } else {
@@ -181,17 +180,17 @@ struct GridVLCPlayer: UIViewRepresentable {
                 guard let self = self else { return }
                 guard self.parent.isPlaying else { return }
                 
-                // If time hasn't moved for 6 seconds (3 checks * 2s), reload
-                // player.time.intValue is in ms
+                
+                
                 let currentTime = self.player.time.intValue
                 
-                // Check if valid time (sometimes -1 or 0 at start)
-                // We only count stuck if it's > 0 or if we've been trying to start for a while?
-                // Let's rely on change.
                 
-                if abs(currentTime - self.lastTime) < 100 { // Less than 100ms change
+                
+                
+                
+                if abs(currentTime - self.lastTime) < 100 { 
                     self.stuckCount += 1
-                    if self.stuckCount >= 5 { // 10 seconds stuck
+                    if self.stuckCount >= 5 { 
                         print("♻️ [MultiView-VLC] Stream stuck, reloading: \(self.currentURL?.lastPathComponent ?? "")")
                         self.stuckCount = 0
                         if let url = self.currentURL {

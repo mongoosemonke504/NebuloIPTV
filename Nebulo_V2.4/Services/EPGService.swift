@@ -12,7 +12,7 @@ class EPGService: NSObject, XMLParserDelegate {
     
     private let dateFormatter: DateFormatter = {
         let df = DateFormatter()
-        // XMLTV format: 20231027120000 +0000
+        
         df.dateFormat = "yyyyMMddHHmmss Z"
         return df
     }()
@@ -59,12 +59,12 @@ class EPGService: NSObject, XMLParserDelegate {
                 let (data, _) = try await URLSession.shared.data(from: url)
                 let result = await parseEPGData(data)
                 
-                // Merge Map
+                
                 for (name, id) in result.map {
                     mergedMap[name] = id
                 }
                 
-                // Merge EPG
+                
                 for (channelID, programs) in result.epg {
                     if mergedEPG[channelID] == nil {
                         mergedEPG[channelID] = programs
@@ -106,10 +106,9 @@ class EPGService: NSObject, XMLParserDelegate {
     }
 }
 
-// Separate delegate class to avoid state pollution during concurrent merges if any
 nonisolated class EPGParserDelegate: NSObject, XMLParserDelegate {
     var epgData: [String: [EPGProgram]] = [:]
-    var channelNameMap: [String: String] = [:] // Name -> ID
+    var channelNameMap: [String: String] = [:] 
     
     private static let fallbackFormatter: DateFormatter = {
         let df = DateFormatter()
@@ -123,7 +122,7 @@ nonisolated class EPGParserDelegate: NSObject, XMLParserDelegate {
         return df
     }()
     
-    // Default XMLTV formatter
+    
     private static let xmltvFormatter: DateFormatter = {
         let df = DateFormatter()
         df.dateFormat = "yyyyMMddHHmmss Z"

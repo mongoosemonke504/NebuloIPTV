@@ -1,9 +1,4 @@
-//
-//  ContentView.swift
-//  Nebulo_V2.4
-//
-//  Created by Robert Hillhouse on 1/5/26.
-//
+
 
 import SwiftUI
 
