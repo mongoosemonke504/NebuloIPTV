@@ -126,19 +126,64 @@ class ScoreViewModel: ObservableObject {
             do {
                 // Fetch ALL sports concurrently
                 await withTaskGroup(of: (SportType, [ESPNEvent]?, [SoccerGameSection]?).self) { group in
-                    // 1. Add task for Soccer (special handling)
+                    
+                    // 1. Soccer Leagues
                     group.addTask {
+                        let leagues = [
+                            ("eng.1", "Premier League"), ("esp.1", "La Liga"), ("ger.1", "Bundesliga"),
+                            ("ita.1", "Serie A"), ("fra.1", "Ligue 1"), ("usa.1", "MLS"),
+                            ("eng.2", "EFL Championship"), ("mex.1", "Liga MX"), ("ned.1", "Eredivisie"),
+                            ("por.1", "Primeira Liga"), ("sco.1", "Scottish Premiership"), ("bra.1", "Brasileirão"), ("arg.1", "Argentine Primera")
+                        ]
                         do {
-                            let (sections, games) = try await self.fetchSoccerInternal()
-                            return (.soccer, games, sections)
-                        } catch {
-                            print("Error fetching soccer: \(error)")
-                            return (.soccer, nil, nil)
-                        }
+                            let (sections, games) = try await self.fetchSoccerInternal(leagues: leagues)
+                            return (.soccerLeagues, games, sections)
+                        } catch { return (.soccerLeagues, nil, nil) }
                     }
                     
-                    // 2. Add tasks for all other sports
-                    for sport in SportType.allCases where sport != .soccer {
+                    // 2. Domestic Cups
+                    group.addTask {
+                        let leagues = [
+                            ("eng.fa", "FA Cup"), ("eng.league_cup", "Carabao Cup"), ("esp.copa_del_rey", "Copa del Rey"),
+                            ("ger.dfb_pokal", "DFB-Pokal"), ("ita.coppa_italia", "Coppa Italia"), ("fra.coupe_de_france", "Coupe de France"),
+                            ("usa.open", "US Open Cup")
+                        ]
+                        do {
+                            let (sections, games) = try await self.fetchSoccerInternal(leagues: leagues)
+                            return (.domesticCups, games, sections)
+                        } catch { return (.domesticCups, nil, nil) }
+                    }
+                    
+                    // 3. Continental
+                    group.addTask {
+                        let leagues = [
+                            ("uefa.champions", "Champions League"), ("uefa.europa", "Europa League"), ("uefa.europa.conf", "Conference League"),
+                            ("conmebol.libertadores", "Libertadores"), ("concacaf.champions", "Concacaf Champions"), ("afc.champions", "AFC Champions")
+                        ]
+                        do {
+                            let (sections, games) = try await self.fetchSoccerInternal(leagues: leagues)
+                            return (.continental, games, sections)
+                        } catch { return (.continental, nil, nil) }
+                    }
+                    
+                    // 4. International
+                    group.addTask {
+                        let leagues = [
+                            ("fifa.world", "World Cup"), ("uefa.euro", "Euro"), ("conmebol.america", "Copa América"),
+                            ("concacaf.gold", "Gold Cup"), ("uefa.nations", "Nations League"), ("fifa.friendly", "Friendlies"),
+                            ("fifa.cwc", "Club World Cup")
+                        ]
+                        do {
+                            let (sections, games) = try await self.fetchSoccerInternal(leagues: leagues)
+                            return (.international, games, sections)
+                        } catch { return (.international, nil, nil) }
+                    }
+                    
+                    // 5. Add tasks for all other sports (Standard Endpoints)
+                    for sport in SportType.allCases {
+                        // Skip the specialized ones handled above
+                        if sport == .soccerLeagues || sport == .domesticCups || sport == .continental || sport == .international { continue }
+                        
                         group.addTask {
                             guard let url = URL(string: sport.endpoint) else { return (sport, nil, nil) }
                             do {
@@ -151,16 +196,19 @@ class ScoreViewModel: ObservableObject {
                         }
                     }
                     
-                    // 3. Collect results
-                    for await (sport, events, soccerSections) in group {
+                    // 6. Collect results
+                    for await (sport, events, sections) in group {
                         await MainActor.run {
                             if let events = events {
                                 self.masterGames[sport] = events
                                 self.filteredGames[sport] = events
                             }
-                            if sport == .soccer, let sections = soccerSections {
-                                self.masterSoccerSections = sections
-                                self.soccerSections = sections
+                            // Store sections for soccer types
+                            if (sport == .soccerLeagues || sport == .domesticCups || sport == .continental || sport == .international), let secs = sections {
+                                // We need a map for sections? Currently 'soccerSections' is a single list.
+                                // We should probably store a map of [SportType: [SoccerGameSection]]
+                                // For now, I'll update the model to support this.
+                                self.sectionsMap[sport] = secs
                             }
                         }
                     }
@@ -181,56 +229,11 @@ class ScoreViewModel: ObservableObject {
         }
     }
     
-    private func fetchEvents(url: URL) async throws -> [ESPNEvent] {
-        let (data, _) = try await URLSession.shared.data(from: url)
-        let response = try JSONDecoder().decode(ESPNResponse.self, from: data)
-        var events = response.events ?? []
-        // Sort: Live (Recent Start First) > Upcoming (Soonest First) > Finished (Recent Finish First)
-        events.sort { a, b in
-            let aState = a.status.type.state
-            let bState = b.status.type.state
-            
-            // 1. Live games always at the very top
-            if aState == "in" && bState != "in" { return true }
-            if aState != "in" && bState == "in" { return false }
-            
-            // 2. Both live? Closest to current time at top (Descending Start Date)
-            if aState == "in" && bState == "in" {
-                return a.gameDate > b.gameDate
-            }
-            
-            // 3. Upcoming games (pre) before finished games (post)
-            if aState == "pre" && bState == "post" { return true }
-            if aState == "post" && bState == "pre" { return false }
-            
-            // 4. Both upcoming? Soonest games at top (Ascending Start Date)
-            if aState == "pre" && bState == "pre" {
-                return a.gameDate > b.gameDate
-            }
-            
-            // 5. Both finished? Most recently finished at top of finished section (Descending Start Date)
-            if aState == "post" && bState == "post" {
-                return a.gameDate > b.gameDate
-            }
-            
-            return a.gameDate > b.gameDate
-        }
-        return events
-    }
+    // Add a map to store sections per sport type
+    @Published var sectionsMap: [SportType: [SoccerGameSection]] = [:]
     
-    // Extracted internal fetch for Soccer to return data instead of setting state directly
-    private func fetchSoccerInternal() async throws -> ([SoccerGameSection], [ESPNEvent]) {
-        let leagues = [
-            ("eng.1", "Premier League"),
-            ("esp.1", "La Liga"),
-            ("ger.1", "Bundesliga"),
-            ("ita.1", "Serie A"),
-            ("fra.1", "Ligue 1"),
-            ("usa.1", "MLS"),
-            ("uefa.champions", "Champions League"),
-            ("uefa.europa", "Europa League")
-        ]
-        
+    // Extracted internal fetch for Soccer categories
+    private func fetchSoccerInternal(leagues: [(String, String)]) async throws -> ([SoccerGameSection], [ESPNEvent]) {
         var allSections: [SoccerGameSection] = []
         var allGames: [ESPNEvent] = []
         
