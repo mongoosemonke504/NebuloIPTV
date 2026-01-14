@@ -665,8 +665,7 @@ struct UpdatesCard: View {
                 
                 if updateService.checkingForUpdate {
                     HStack {
-                        ProgressView()
-                            .tint(.white)
+                        CustomSpinner(color: .white, lineWidth: 3, size: 20)
                         Text("Checking...")
                             .foregroundColor(.white.opacity(0.7))
                     }

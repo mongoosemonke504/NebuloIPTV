@@ -170,8 +170,7 @@ struct CachedAsyncImage: View {
                 ZStack {
                     Color.white.opacity(0.1) // Placeholder bg
                     if size != nil {
-                        ProgressView()
-                            .scaleEffect(0.5)
+                        CustomSpinner(color: .white.opacity(0.5), lineWidth: 2, size: 15)
                     }
                 }
             }
