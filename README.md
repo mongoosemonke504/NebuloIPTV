@@ -1,38 +1,38 @@
-# 🚀 Nebulo V2.0 - The Ultimate iOS IPTV Experience
+# Nebulo V2.0 - The Cleanest Sports iOS IPTV App
 
-**Nebulo V2.0** is here! This is a complete rewrite and a massive leap forward, bringing a ton of new features to your iPhone and iPad. With a stunning glassmorphism UI, Multi-View support, and a dedicated Sports Center, Nebulo is a refreshing upgrade to how IPTV should look and feel on iOS.
+**Nebulo V2.3** is here! NEW features include recording, captions, new homescreen, better sports search logic in sports section, support for multiple playlists and epgs at once, custom background, custom buttons, new faster and smoother playback (VLC and KSplayer), in app updates, and much more!
 
-## ✨ New Features
+## Main Features
 
-### 📺 **Multi-View Mode**
-Watch up to **4 streams simultaneously**! Perfect for sports days or tracking multiple news channels.
+###**Multi-View Mode**
+Watch up to **4 streams simultaneously**! Perfect for sports or tracking multiple news channels.
 - Grid layout for 2x2 viewing.
 - Seamlessly add channels from the player or context menus.
 - Audio focus switching with a simple tap.
 
-### ⏯️ **All-New Custom Video Player**
-Built on top of `AVKit` for maximum performance and battery efficiency.
-- **Smart Picture-in-Picture (PiP):** Now with refined logic—PiP only activates when *you* want it and automatically dismisses when you switch streams.
-- **Quick Switcher:** Click the channels button to surf channels without leaving the stream.
-- **Quality Indicators:** Auto-detects 4K, 1080p, 720p, and SD streams.
-- **Mini Player:** Keep watching in-app while browsing the guide.
+###**All-New Custom Video Players**
+Built with VLC and KSPlayer for maximum compatibility and smooth playback
+- **In app mini-player + PiP out of app:** Now with refined logic—PiP only activates when *you* want it and automatically dismisses when you switch streams.
+- **Quick Switcher:** Swipe up from the bottom of a stream to surf channels without leaving the stream.
+- **Captions support:** Auto-detects if captions are available and allows user to use them.
+- **Swipe gestures to switch to adjacent channel:** Allows the user to swipe from the left or right of the screen to move to the next channel over in its category.
 
-### ⚽ **Sports Center & Smart EPG**
-- **Sports Hub:** A dedicated view to find live events quickly.
-- **Dynamic EPG:** Live program updates with a "Dynamic Island" style loading indicator.
+###**Sports Section & Robust EPG support**
+- **Sports Section:** A dedicated view to find live events quickly and watch them with just one click.
 - **Smart Search:** Find channels, categories, and current programs instantly.
-- **Powerful Game Search Engine:** When clicking on a game, it will automatically bring up the best stream to view the game.
+- **Powerful Game Search Engine:** When clicking on a game, it will automatically bring up the best stream to view the game. Now with support for preffered language and quality of stream.
 
-### 🎨 **Stunning UI/UX**
-- **Nebula Backgrounds:** Dynamic, colorful backgrounds that breathe with the app.
+###**Customizable UI/UX**
+- **Nebula Backgrounds:** Dynamic, colorful backgrounds within the app.
 - **Custom Photo Backgrounds:** Choose your own background from files or camera role and add blur.
-- **Adaptive Layouts:** Optimized interfaces for both iPhone (Standard) and iPad (Sidebar/Landscape).
+- **Adaptive Layouts:** Optimized interfaces for both landscape and portrait mode.
 - **Glassmorphism:** Modern, translucent aesthetics throughout the app.
+- **Customizable Buttons:** Change the look of the glassomorphism buttons within the app.
 
 ## 🛠 Under the Hood
 - **Performance:** Significant optimizations in stream loading and memory management.
 - **Stability:** Fixed issues with background audio and stream switching.
-- **Stack:** 100% SwiftUI & Combine.
+- **Stack:** 100% SwiftUI.
 
 ---
 
