@@ -232,8 +232,28 @@ class ScoreViewModel: ObservableObject {
     // Add a map to store sections per sport type
     @Published var sectionsMap: [SportType: [SoccerGameSection]] = [:]
     
+    nonisolated private func fetchEvents(url: URL) async throws -> [ESPNEvent] {
+        let (data, _) = try await URLSession.shared.data(from: url)
+        let response = try JSONDecoder().decode(ESPNResponse.self, from: data)
+        var events = response.events ?? []
+        // Sort logic
+        events.sort { a, b in
+            let aState = a.status.type.state
+            let bState = b.status.type.state
+            if aState == "in" && bState != "in" { return true }
+            if aState != "in" && bState == "in" { return false }
+            if aState == "in" && bState == "in" { return a.gameDate > b.gameDate }
+            if aState == "pre" && bState == "post" { return true }
+            if aState == "post" && bState == "pre" { return false }
+            if aState == "pre" && bState == "pre" { return a.gameDate > b.gameDate }
+            if aState == "post" && bState == "post" { return a.gameDate > b.gameDate }
+            return a.gameDate > b.gameDate
+        }
+        return events
+    }
+    
     // Extracted internal fetch for Soccer categories
-    private func fetchSoccerInternal(leagues: [(String, String)]) async throws -> ([SoccerGameSection], [ESPNEvent]) {
+    nonisolated private func fetchSoccerInternal(leagues: [(String, String)]) async throws -> ([SoccerGameSection], [ESPNEvent]) {
         var allSections: [SoccerGameSection] = []
         var allGames: [ESPNEvent] = []
         
@@ -246,8 +266,6 @@ class ScoreViewModel: ObservableObject {
                         let (data, _) = try await URLSession.shared.data(from: url)
                         let res = try JSONDecoder().decode(ESPNResponse.self, from: data)
                         var events = res.events ?? []
-                        
-                        // Sort: Live (Recent Start First) > Upcoming (Soonest First) > Finished (Recent Finish First)
                         events.sort { a, b in
                             let aState = a.status.type.state
                             let bState = b.status.type.state
@@ -260,19 +278,15 @@ class ScoreViewModel: ObservableObject {
                             if aState == "post" && bState == "post" { return a.gameDate > b.gameDate }
                             return a.gameDate < b.gameDate
                         }
-                        
                         let tagged = events.map { e -> ESPNEvent in
                             var copy = e
                             copy.leagueLabel = name
                             return copy
                         }
                         return (name, tagged)
-                    } catch {
-                        return (name, nil)
-                    }
+                    } catch { return (name, nil) }
                 }
             }
-            
             for await (name, events) in group {
                 if let evs = events, !evs.isEmpty {
                     allSections.append(SoccerGameSection(league: name, games: evs))
@@ -280,28 +294,12 @@ class ScoreViewModel: ObservableObject {
                 }
             }
         }
-        
         allSections.sort { a, b in
             let idxA = leagues.firstIndex { $0.1 == a.league } ?? 999
             let idxB = leagues.firstIndex { $0.1 == b.league } ?? 999
             return idxA < idxB
         }
-        
         return (allSections, allGames)
-    }
-    
-    private func fetchSoccer() async throws {
-        // Wrapper for legacy or specific calls if needed, but fetchScores now handles it.
-        // Keeping this implementation to satisfy any other internal calls or just delegating.
-        let (sections, games) = try await fetchSoccerInternal()
-        await MainActor.run {
-            self.masterSoccerSections = sections
-            self.soccerSections = sections
-            self.masterGames[.soccer] = games
-            self.filteredGames[.soccer] = games
-            self.isLoading = false
-            self.lastFetchTime = Date()
-        }
     }
     
     func applyFilter(text: String) {
