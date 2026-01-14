@@ -18,7 +18,6 @@ enum SportType: String, CaseIterable, Identifiable, Sendable {
     case domesticCups = "Domestic Soccer Cups"
     case continental = "Continental Soccer"
     case international = "International Soccer"
-    case ucl = "Champions League", europa = "Europa League" // Keeping distinct if desired, or merge into continental
     case cbb = "NCAAB", cfb = "NCAAF", nfl = "NFL", nba = "NBA", wnba = "WNBA", nhl = "NHL", mlb = "MLB"
     case f1 = "Formula 1"
     case tennis = "Tennis", golf = "Golf", mma = "MMA"
@@ -33,8 +32,6 @@ enum SportType: String, CaseIterable, Identifiable, Sendable {
         case .wnba: return "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/scoreboard"
         case .cbb: return "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard"
         case .cfb: return "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard"
-        case .ucl: return "https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions/scoreboard"
-        case .europa: return "https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.europa/scoreboard"
         case .soccerLeagues, .domesticCups, .continental, .international: return "" // Handled internally
         case .f1: return "https://site.api.espn.com/apis/site/v2/sports/racing/f1/scoreboard"
         case .tennis: return "https://site.api.espn.com/apis/site/v2/sports/tennis/atp/scoreboard" // Default to ATP, logic can expand
