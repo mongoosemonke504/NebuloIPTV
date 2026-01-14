@@ -16,6 +16,7 @@ class ScoreViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var lastFetchTime = Date.distantPast
     private var fetchTask: Task<Void, Never>?
+    private var hasPreloadedImages = false
     
     init() {
         loadCachedData()
@@ -71,6 +72,7 @@ class ScoreViewModel: ObservableObject {
     }
     
     private func preloadImages() async {
+        if hasPreloadedImages { return }
         print("🚀 [ScoreViewModel] Starting sports image preload...")
         var urls = Set<String>()
         
@@ -109,6 +111,7 @@ class ScoreViewModel: ObservableObject {
             }
         }
         print("✅ [ScoreViewModel] Sports image preload complete.")
+        hasPreloadedImages = true
     }
     
     func fetchScores(forceRefresh: Bool = false, silent: Bool = false) async {
