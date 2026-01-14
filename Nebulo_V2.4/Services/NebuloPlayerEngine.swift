@@ -306,17 +306,15 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                 self.updatePlaybackState()
             }
         }
-                ksPlayerView.onFinish = { [weak self] error in if error != nil { self?.handleKSPlayerError() } }
-                KSOptions.isAutoPlay = true
-                KSOptions.isSecondOpen = false
-                KSOptions.maxBufferDuration = 300.0 // Keep max buffer high
-                KSOptions.preferredForwardBufferDuration = 0.1 // Play immediately, don't wait to fill buffer
-                KSOptions.isAccurateSeek = false // Disable accurate seek to speed up recovery
-                
-                ksPlayerView.allowNativeControls = useNativeBridge
-            }
-    }
-    
+                        ksPlayerView.onFinish = { [weak self] error in if error != nil { self?.handleKSPlayerError() } }
+                        KSOptions.isAutoPlay = true
+                        KSOptions.isSecondOpen = false
+                        KSOptions.maxBufferDuration = 300.0 // Keep max buffer high
+                        KSOptions.preferredForwardBufferDuration = 0.1 // Play immediately, don't wait to fill buffer
+                        KSOptions.isAccurateSeek = false // Disable accurate seek to speed up recovery
+                        
+                        ksPlayerView.allowNativeControls = useNativeBridge
+                    }    
     private func setupAudioSession() {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [.allowAirPlay, .allowBluetoothA2DP])
         try? AVAudioSession.sharedInstance().setActive(true)
@@ -495,9 +493,6 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             // Use basic resource, relying on global KSOptions and Watchdog for stability
             let resource = KSPlayerResource(url: url)
             self.ksPlayerView.set(resource: resource)
-            self.ksPlayerView.currentPlayingURL = url
-            self.applyAspectRatio(self.currentAspectRatio)
-            // Play is handled by KSOptions.isAutoPlay = true
             self.ksPlayerView.currentPlayingURL = url
             self.applyAspectRatio(self.currentAspectRatio)
             // Play is handled by KSOptions.isAutoPlay = true
