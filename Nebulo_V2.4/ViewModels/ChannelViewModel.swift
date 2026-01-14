@@ -9,7 +9,7 @@ class ChannelViewModel: ObservableObject {
     
     @Published var categories: [StreamCategory] = []
     @Published var channels: [StreamChannel] = []
-    @Published var isLoading = true
+    @Published var isLoading = false
     @Published var errorMessage: String? = nil
     
     // Split Search Results
@@ -170,9 +170,8 @@ class ChannelViewModel: ObservableObject {
                         self.channels = cachedChans
                         self.categories = cachedCats
                         self.categorizeSports()
-                        // Keep isLoading = true until EPG is also ready
-                        self.isLoading = true
-                        self.loadingStatus = "Restoring Data..."
+                        // Instant Load: Do NOT set isLoading to true if we have data
+                        self.isLoading = false 
                     }
                 } else {
                     // No cache, show loading
@@ -1130,8 +1129,8 @@ class ChannelViewModel: ObservableObject {
         let effectivelySilent = silent || !self.epgData.isEmpty
         
         await MainActor.run {
-            // isLoading controls the skeletons.
-            if !effectivelySilent {
+            // Only show full loading skeleton if we have absolutely NO data (not even from disk)
+            if !effectivelySilent && self.epgData.isEmpty {
                 self.isLoading = true
             }
             
