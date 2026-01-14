@@ -36,7 +36,7 @@ struct SportsHubView: View {
                 Button(action: {
                     Task { await scoreViewModel.fetchScores(forceRefresh: true) }
                 }) {
-                    Text("Sports Center")
+                    Text("Sports")
                         .font(.headline)
                         .foregroundStyle(.white)
                         .opacity(isRefreshingAnimation ? 0.3 : 1.0)
@@ -102,7 +102,7 @@ struct SportsHubView: View {
         let sport = scoreViewModel.selectedSport
         let games: [ESPNEvent]
         if isSoccerCategory(sport) {
-            games = scoreViewModel.sectionsMap[sport]?.flatMap { $0.games } ?? []
+            games = scoreViewModel.filteredSectionsMap[sport]?.flatMap { $0.games } ?? []
         } else {
             games = scoreViewModel.filteredGames[sport] ?? []
         }
@@ -142,7 +142,7 @@ struct SportGamesListView: View {
         ScrollView(showsIndicators: false) {
             LazyVStack(spacing: 12) {
                 if isSoccerCategory(sport) {
-                    if let sections = scoreViewModel.sectionsMap[sport], !sections.isEmpty {
+                    if let sections = scoreViewModel.filteredSectionsMap[sport], !sections.isEmpty {
                         soccerSectionsView(sections: sections)
                     } else {
                         emptyState
