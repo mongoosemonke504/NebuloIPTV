@@ -135,7 +135,8 @@ class ScoreViewModel: ObservableObject {
     func fetchScores(forceRefresh: Bool = false, silent: Bool = false) async {
         if !silent && !forceRefresh {
             // If we have data (from cache or previous fetch) and it's fresh enough (e.g., 5 mins), skip loading
-            if !masterGames.isEmpty {
+            // Check both masterGames AND sectionsMap to ensure partial cache doesn't block fetching
+            if !masterGames.isEmpty && !sectionsMap.isEmpty {
                  if Date().timeIntervalSince(lastFetchTime) < 300 { return }
             }
             if isLoading { return }
