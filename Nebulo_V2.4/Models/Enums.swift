@@ -20,7 +20,13 @@ enum SportType: String, CaseIterable, Identifiable, Sendable {
     case international = "International Soccer"
     case cbb = "NCAAB", cfb = "NCAAF", nfl = "NFL", nba = "NBA", wnba = "WNBA", nhl = "NHL", mlb = "MLB"
     case f1 = "Formula 1"
-    case tennis = "Tennis", golf = "Golf", mma = "MMA"
+    case collegeHockey = "NCAA Hockey"
+    case softball = "NCAA Softball"
+    case mLacrosse = "NCAA M-Lacrosse"
+    case wLacrosse = "NCAA W-Lacrosse"
+    case mVolleyball = "NCAA M-Volleyball"
+    case wVolleyball = "NCAA W-Volleyball"
+    case mma = "MMA"
     
     var id: String { rawValue }
     nonisolated var endpoint: String {
@@ -32,10 +38,14 @@ enum SportType: String, CaseIterable, Identifiable, Sendable {
         case .wnba: return "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/scoreboard"
         case .cbb: return "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard"
         case .cfb: return "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard"
+        case .collegeHockey: return "https://site.api.espn.com/apis/site/v2/sports/hockey/mens-college-hockey/scoreboard"
+        case .softball: return "https://site.api.espn.com/apis/site/v2/sports/baseball/college-softball/scoreboard"
+        case .mLacrosse: return "https://site.api.espn.com/apis/site/v2/sports/lacrosse/mens-college-lacrosse/scoreboard"
+        case .wLacrosse: return "https://site.api.espn.com/apis/site/v2/sports/lacrosse/womens-college-lacrosse/scoreboard"
+        case .mVolleyball: return "https://site.api.espn.com/apis/site/v2/sports/volleyball/mens-college-volleyball/scoreboard"
+        case .wVolleyball: return "https://site.api.espn.com/apis/site/v2/sports/volleyball/womens-college-volleyball/scoreboard"
         case .soccerLeagues, .domesticCups, .continental, .international: return "" // Handled internally
         case .f1: return "https://site.api.espn.com/apis/site/v2/sports/racing/f1/scoreboard"
-        case .tennis: return "https://site.api.espn.com/apis/site/v2/sports/tennis/atp/scoreboard" // Default to ATP, logic can expand
-        case .golf: return "https://site.api.espn.com/apis/site/v2/sports/golf/pga/scoreboard"
         case .mma: return "https://site.api.espn.com/apis/site/v2/sports/mma/ufc/scoreboard"
         }
     }

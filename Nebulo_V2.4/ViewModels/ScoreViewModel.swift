@@ -79,7 +79,11 @@ class ScoreViewModel: ObservableObject {
         
         // Also soccer sections
         let soccerGames = masterSoccerSections.flatMap { $0.games }
-        for game in soccerGames {
+        let mapGames = sectionsMap.values.flatMap { $0.flatMap { $0.games } }
+        
+        let allSoccerGames = soccerGames + mapGames
+        
+        for game in allSoccerGames {
             if let url = game.homeCompetitor?.team?.logo ?? game.homeCompetitor?.athlete?.flag?.href ?? game.homeCompetitor?.athlete?.headshot, !url.isEmpty {
                 urls.insert(url)
             }
