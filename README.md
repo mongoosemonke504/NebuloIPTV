@@ -1,6 +1,6 @@
-# Nebulo V2.0 - The Cleanest Sports iOS IPTV App
+# Nebulo IPTV - The Cleanest Sports iOS IPTV App
 
-**Nebulo V2.3** is here! NEW features include recording, captions, new homescreen, better sports search logic in sports section, support for multiple playlists and epgs at once, custom background, custom buttons, new faster and smoother playback (VLC and KSplayer), in app updates, and much more!
+**Nebulo V2.2** is here! NEW features include recording, captions, new homescreen, better sports search logic in sports section, support for multiple playlists and epgs at once, custom background, custom buttons, new faster and smoother playback (VLC and KSplayer), in app updates, and much more!
 
 ## Main Features
 
