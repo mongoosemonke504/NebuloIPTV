@@ -4,7 +4,7 @@
 
 ## Main Features
 
-###**Multi-View Mode**
+### **Multi-View Mode**
 Watch up to **4 streams simultaneously**! Perfect for sports or tracking multiple news channels.
 - Grid layout for 2x2 viewing.
 - Seamlessly add channels from the player or context menus.
