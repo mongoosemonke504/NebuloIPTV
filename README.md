@@ -1,6 +1,7 @@
 # Nebulo IPTV - The Cleanest Sports iOS IPTV App
 
-[![Demo Video](https://drive.google.com/file/d/1Su211wWhbT5UGKxzbXkM0pVM9FJcZT79/view?usp=sharing)](https://drive.google.com/file/d/198YeAiS9ly8JsXf4QFwh1FvBjfd8sZkR/view?usp=sharing)
+[![Demo Video](<img width="482" height="1059" alt="SCR-20260114-cbsq" src="https://github.com/user-attachments/assets/58028365-987f-44d2-836b-cccb79df852f" />
+)](https://drive.google.com/file/d/198YeAiS9ly8JsXf4QFwh1FvBjfd8sZkR/view?usp=sharing)
 
 **Nebulo V2.2** is here! NEW features include recording, captions, new homescreen, better sports search logic in sports section, support for multiple playlists and epgs at once, custom background, custom buttons, new faster and smoother playback (VLC and KSplayer), in app updates, and much more!
 
