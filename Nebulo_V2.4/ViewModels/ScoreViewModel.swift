@@ -205,9 +205,6 @@ class ScoreViewModel: ObservableObject {
                             }
                             // Store sections for soccer types
                             if (sport == .soccerLeagues || sport == .domesticCups || sport == .continental || sport == .international), let secs = sections {
-                                // We need a map for sections? Currently 'soccerSections' is a single list.
-                                // We should probably store a map of [SportType: [SoccerGameSection]]
-                                // For now, I'll update the model to support this.
                                 self.sectionsMap[sport] = secs
                             }
                         }
