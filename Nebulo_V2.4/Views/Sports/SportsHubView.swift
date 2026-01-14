@@ -110,12 +110,16 @@ struct SportGamesListView: View {
     var body: some View {
         ScrollView(showsIndicators: false) {
             LazyVStack(spacing: 12) {
-                let filtered = scoreViewModel.filteredGames[sport] ?? []
-                if filtered.isEmpty {
-                    emptyState
+                if isSoccerCategory(sport) {
+                    if let sections = scoreViewModel.sectionsMap[sport], !sections.isEmpty {
+                        soccerSectionsView(sections: sections)
+                    } else {
+                        emptyState
+                    }
                 } else {
-                    if sport == .soccer {
-                        soccerSectionsView
+                    let filtered = scoreViewModel.filteredGames[sport] ?? []
+                    if filtered.isEmpty {
+                        emptyState
                     } else {
                         ForEach(filtered) { game in
                             scoreButton(game: game, sport: sport)
@@ -129,6 +133,10 @@ struct SportGamesListView: View {
         .tag(sport)
     }
     
+    private func isSoccerCategory(_ sport: SportType) -> Bool {
+        return sport == .soccerLeagues || sport == .domesticCups || sport == .continental || sport == .international
+    }
+    
     @ViewBuilder
     private var emptyState: some View {
         if scoreViewModel.isLoading {
@@ -138,12 +146,11 @@ struct SportGamesListView: View {
         }
     }
     
-    private var soccerSectionsView: some View {
-        let sections = scoreViewModel.soccerSections
-        return ForEach(sections, id: \.league) { s in
+    private func soccerSectionsView(sections: [SoccerGameSection]) -> some View {
+        ForEach(sections, id: \.league) { s in
             Section(header: leagueHeader(s.league)) {
                 ForEach(s.games) { game in
-                    scoreButton(game: game, sport: .soccer)
+                    scoreButton(game: game, sport: .soccerLeagues) // Use generic soccer type for button action context if needed
                 }
             }
         }
