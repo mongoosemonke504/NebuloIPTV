@@ -29,20 +29,52 @@ class UpdateService: ObservableObject {
             errorMessage = nil
         }
         
-        // Simulate network delay
-        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        // GitHub API URL
+        guard let url = URL(string: "https://api.github.com/repos/mongoosemonke504/NebuloIPTV/releases/latest") else { return }
         
-        await MainActor.run {
-            // For now, we are always on the latest version after this update
-            isUpdateAvailable = false
-            latestRelease = nil
-            checkingForUpdate = false
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
             
-            if manual {
-                showUpToDate = true
-                // Auto-hide after 3 seconds
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                    self.showUpToDate = false
+            // Decode GitHub Release
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            let release = try decoder.decode(GitHubRelease.self, from: data)
+            
+            await MainActor.run {
+                self.checkingForUpdate = false
+                
+                // Version Comparison (Simple String Check)
+                // Normalize versions (remove 'v' prefix, etc)
+                let remoteVer = release.tagName.replacingOccurrences(of: "v", with: "")
+                let localVer = self.currentVersion.replacingOccurrences(of: "V", with: "").components(separatedBy: "(").first ?? ""
+                
+                // If remote string is different/newer (naïve check, should use proper semver if available)
+                // For now, if they don't match, we assume update.
+                // Ideally we'd compare Major.Minor.Patch integers.
+                
+                if remoteVer != localVer && !release.tagName.isEmpty {
+                    self.latestRelease = UpdateRelease(
+                        tagName: release.tagName,
+                        body: release.body ?? "No release notes.",
+                        htmlUrl: release.htmlUrl
+                    )
+                    self.isUpdateAvailable = true
+                } else {
+                    self.isUpdateAvailable = false
+                    if manual {
+                        self.showUpToDate = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                            self.showUpToDate = false
+                        }
+                    }
+                }
+            }
+        } catch {
+            print("Update check failed: \(error)")
+            await MainActor.run {
+                self.checkingForUpdate = false
+                if manual {
+                    self.errorMessage = "Check Failed"
                 }
             }
         }
@@ -51,6 +83,13 @@ class UpdateService: ObservableObject {
     func checkForUpdates() async {
         await checkForUpdates(manual: false)
     }
+}
+
+// GitHub API Models
+struct GitHubRelease: Codable {
+    let tagName: String
+    let body: String?
+    let htmlUrl: String
 }
 
 struct UpdateRelease {
