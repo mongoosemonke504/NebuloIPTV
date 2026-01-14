@@ -10,3 +10,5 @@ xcuserdata/
 
 # macOS
 .DS_Store
+build.log
+build_final.log
