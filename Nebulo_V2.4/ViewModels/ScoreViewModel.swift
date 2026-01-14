@@ -36,6 +36,19 @@ class ScoreViewModel: ObservableObject {
             self.filteredGames = loadedGames
         }
         
+        // Restore sections map
+        if let data = UserDefaults.standard.data(forKey: "cachedSectionsMap"),
+           let cached = try? JSONDecoder().decode([String: [SoccerGameSection]].self, from: data) {
+            var loadedMap: [SportType: [SoccerGameSection]] = [:]
+            for (key, value) in cached {
+                if let sport = SportType(rawValue: key) {
+                    loadedMap[sport] = value
+                }
+            }
+            self.sectionsMap = loadedMap
+        }
+        
+        // Legacy fallback
         if let data = UserDefaults.standard.data(forKey: "cachedSoccerSections"),
            let cached = try? JSONDecoder().decode([SoccerGameSection].self, from: data) {
             self.masterSoccerSections = cached
@@ -53,8 +66,17 @@ class ScoreViewModel: ObservableObject {
             cacheableGames[key.rawValue] = value
         }
         
+        var cacheableMap: [String: [SoccerGameSection]] = [:]
+        for (key, value) in sectionsMap {
+            cacheableMap[key.rawValue] = value
+        }
+        
         if let encoded = try? JSONEncoder().encode(cacheableGames) {
             UserDefaults.standard.set(encoded, forKey: "cachedSportsData")
+        }
+        
+        if let encoded = try? JSONEncoder().encode(cacheableMap) {
+            UserDefaults.standard.set(encoded, forKey: "cachedSectionsMap")
         }
         
         if let encoded = try? JSONEncoder().encode(masterSoccerSections) {
