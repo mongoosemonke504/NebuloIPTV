@@ -306,14 +306,15 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                 self.updatePlaybackState()
             }
         }
-        ksPlayerView.onFinish = { [weak self] error in if error != nil { self?.handleKSPlayerError() } }
-        KSOptions.isAutoPlay = true
-        KSOptions.isSecondOpen = true // Re-enable for connection speed
-        KSOptions.maxBufferDuration = 300.0 // Keep 5 Minutes Max Buffer
-        KSOptions.preferredForwardBufferDuration = 4.0 // Reduce wait-to-play threshold
-        KSOptions.isAccurateSeek = true
-        
-        ksPlayerView.allowNativeControls = useNativeBridge
+                ksPlayerView.onFinish = { [weak self] error in if error != nil { self?.handleKSPlayerError() } }
+                KSOptions.isAutoPlay = true
+                KSOptions.isSecondOpen = false
+                KSOptions.maxBufferDuration = 300.0 // Keep max buffer high
+                KSOptions.preferredForwardBufferDuration = 0.1 // Play immediately, don't wait to fill buffer
+                KSOptions.isAccurateSeek = false // Disable accurate seek to speed up recovery
+                
+                ksPlayerView.allowNativeControls = useNativeBridge
+            }
     }
     
     private func setupAudioSession() {
@@ -536,9 +537,9 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         if isPlaying && !userPaused && !isBuffering {
             let now = Date()
             
-            // If currentTime hasn't changed for > 6 seconds, assume stalled
+            // If currentTime hasn't changed for > 15 seconds, assume stalled
             if abs(currentTime - lastProgressValue) < 0.1 {
-                if let lastCheck = lastProgressCheckTime, now.timeIntervalSince(lastCheck) > 6.0 {
+                if let lastCheck = lastProgressCheckTime, now.timeIntervalSince(lastCheck) > 15.0 {
                     print("🚨 [NebuloEngine] Playback stalled (time not advancing). Triggering Watchdog.")
                     handleStuckBuffer()
                     lastProgressCheckTime = now // Reset to avoid spam
