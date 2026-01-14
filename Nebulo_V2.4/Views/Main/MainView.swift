@@ -231,13 +231,14 @@ extension MainView {
         }
         
         // General Loading Overlay
-        // Show if explicitly loading OR if we have no channels yet (initial cold start state)
-        if viewModel.isLoading || viewModel.isUpdatingEPG || viewModel.channels.isEmpty {
+        // Show if explicitly loading. isUpdatingEPG does NOT block (handled inside overlay logic or by not setting isBlocking)
+        // We only block if viewModel.isLoading is true (which means we have NO data)
+        if viewModel.isLoading || viewModel.isUpdatingEPG {
             LoadingStatusOverlay(
                 status: viewModel.loadingStatus,
                 progress: viewModel.isUpdatingEPG ? viewModel.displayEPGProgress : nil,
                 accentColor: accentColor,
-                isBlocking: true // Always block on startup/empty
+                isBlocking: viewModel.isLoading
             )
             .transition(.opacity)
             .zIndex(100)
@@ -929,7 +930,7 @@ struct LoadingStatusOverlay: View {
         .frame(maxWidth: .infinity)
         .background(
             isBlocking 
-            ? Color.black.opacity(0.6)
+            ? Color.black.opacity(0.01)
             : Color.clear
         )
         .ignoresSafeArea()
