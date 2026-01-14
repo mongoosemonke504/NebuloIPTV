@@ -1,6 +1,5 @@
 import SwiftUI
 
-// MARK: - RECENT SEARCHES COMPONENT
 struct RecentSearchesView: View {
     @ObservedObject var viewModel: ChannelViewModel
     let accentColor: Color

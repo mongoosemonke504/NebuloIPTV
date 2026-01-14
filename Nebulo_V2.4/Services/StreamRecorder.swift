@@ -11,10 +11,10 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
     private var urlSession: URLSession!
     private var dataTask: URLSessionDataTask?
     
-    // Dedicated queue for file writing to avoid blocking network threads
+    
     private let fileQueue = DispatchQueue(label: "com.nebulo.recorder.fileIO", qos: .background)
     
-    // Track downloaded segments to avoid duplicates
+    
     private var downloadedSegments = Set<String>()
     
     var onCompletion: (() -> Void)?
@@ -22,7 +22,7 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
     
     private var fileHandle: FileHandle?
     
-    // Silent Audio Player to keep app alive in background
+    
     private var silentAudioPlayer: AVAudioPlayer?
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     
@@ -32,19 +32,19 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
         super.init()
         
         let config = URLSessionConfiguration.ephemeral
-        // Use the EXACT same User-Agent as native iOS players to prevent provider disconnection
+        
         config.httpAdditionalHeaders = [
             "User-Agent": "com.apple.avfoundation.videoplayer (iPhone; iOS 17.5.1; Scale/3.00)",
             "Accept": "*/*",
             "Connection": "keep-alive"
         ]
-        // Increase timeouts for long-running streams
+        
         config.timeoutIntervalForRequest = 300 
         config.timeoutIntervalForResource = 0 
-        config.isDiscretionary = false // CRITICAL: Prevent system from deferring
+        config.isDiscretionary = false 
         config.sessionSendsLaunchEvents = true
         
-        // Use a background queue for the delegate to keep the Main thread and Player threads free
+        
         let delegateQueue = OperationQueue()
         delegateQueue.name = "com.nebulo.recorder.network"
         delegateQueue.maxConcurrentOperationCount = 1
@@ -82,9 +82,9 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
     }
     
     private func setupSilentAudio() {
-        // Create a proper silent WAV file in memory
+        
         let sampleRate: Int32 = 44100
-        let duration = 10 // seconds
+        let duration = 10 
         let numSamples = sampleRate * Int32(duration)
         let numChannels: Int16 = 1
         let bitsPerSample: Int16 = 16
@@ -95,33 +95,33 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
         
         var data = Data()
         
-        // RIFF chunk
-        data.append(contentsOf: [0x52, 0x49, 0x46, 0x46]) // "RIFF"
-        data.append(withUnsafeBytes(of: UInt32(chunkSize).littleEndian) { Data($0) })
-        data.append(contentsOf: [0x57, 0x41, 0x56, 0x45]) // "WAVE"
         
-        // fmt chunk
-        data.append(contentsOf: [0x66, 0x6D, 0x74, 0x20]) // "fmt "
-        data.append(withUnsafeBytes(of: UInt32(16).littleEndian) { Data($0) }) // chunk size 16
-        data.append(withUnsafeBytes(of: UInt16(1).littleEndian) { Data($0) }) // PCM
+        data.append(contentsOf: [0x52, 0x49, 0x46, 0x46]) 
+        data.append(withUnsafeBytes(of: UInt32(chunkSize).littleEndian) { Data($0) })
+        data.append(contentsOf: [0x57, 0x41, 0x56, 0x45]) 
+        
+        
+        data.append(contentsOf: [0x66, 0x6D, 0x74, 0x20]) 
+        data.append(withUnsafeBytes(of: UInt32(16).littleEndian) { Data($0) }) 
+        data.append(withUnsafeBytes(of: UInt16(1).littleEndian) { Data($0) }) 
         data.append(withUnsafeBytes(of: numChannels.littleEndian) { Data($0) })
         data.append(withUnsafeBytes(of: sampleRate.littleEndian) { Data($0) })
         data.append(withUnsafeBytes(of: byteRate.littleEndian) { Data($0) })
         data.append(withUnsafeBytes(of: blockAlign.littleEndian) { Data($0) })
         data.append(withUnsafeBytes(of: bitsPerSample.littleEndian) { Data($0) })
         
-        // data chunk
-        data.append(contentsOf: [0x64, 0x61, 0x74, 0x61]) // "data"
+        
+        data.append(contentsOf: [0x64, 0x61, 0x74, 0x61]) 
         data.append(withUnsafeBytes(of: dataSize.littleEndian) { Data($0) })
-        data.append(Data(count: Int(dataSize))) // Zeroed data
+        data.append(Data(count: Int(dataSize))) 
         
         do {
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers, .allowAirPlay])
             try AVAudioSession.sharedInstance().setActive(true)
             
             silentAudioPlayer = try AVAudioPlayer(data: data)
-            silentAudioPlayer?.numberOfLoops = -1 // Infinite loop
-            silentAudioPlayer?.volume = 0.01 // Almost silent, but active
+            silentAudioPlayer?.numberOfLoops = -1 
+            silentAudioPlayer?.volume = 0.01 
             silentAudioPlayer?.prepareToPlay()
             print("✅ [StreamRecorder] Silent Audio Player Ready")
         } catch {
@@ -132,7 +132,7 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
     @objc private func handleDidEnterBackground() {
         guard isRecording else { return }
         print("🌙 [StreamRecorder] App Entering Background.")
-        // Ensure silent audio is playing to keep network socket alive
+        
         if silentAudioPlayer?.isPlaying == false {
             silentAudioPlayer?.play()
         }
@@ -140,8 +140,8 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
     
     @objc private func handleWillEnterForeground() {
         print("☀️ [StreamRecorder] App Entering Foreground.")
-        // We can optionally pause silent audio here, but keeping it playing is safer for seamless transitions.
-        // If we pause, we risk being suspended if we background again quickly.
+        
+        
     }
     
     func start() {
@@ -149,7 +149,7 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
         isRecording = true
         beginBackgroundTask()
         
-        // Activate Audio Session immediately
+        
         do {
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers, .allowAirPlay])
             try AVAudioSession.sharedInstance().setActive(true)
@@ -160,7 +160,7 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
         
         print("🔴 [StreamRecorder] Starting optimized recording for \(streamURL)")
         
-        // Use a detached task for initial setup, then switch to Dispatch for loop
+        
         Task.detached(priority: .userInitiated) {
             do {
                 var request = URLRequest(url: self.streamURL)
@@ -168,7 +168,7 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
                 request.networkServiceType = .background
                 request.allowsCellularAccess = true
                 
-                // Perform peek on a background task
+                
                 let (data, response) = try await self.urlSession.data(for: request)
                 let contentString = String(data: data.prefix(1024), encoding: .utf8) ?? ""
                 
@@ -210,7 +210,7 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
     
     private func scheduleNextPoll() {
         guard isRecording else { return }
-        // Use global queue which is less likely to be throttled than Task sleep if audio is playing
+        
         DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 4.0) { [weak self] in
             guard let self = self, self.isRecording else { return }
             Task {
@@ -219,7 +219,7 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
                     self.scheduleNextPoll()
                 } catch {
                     print("⚠️ [StreamRecorder] Poll failed: \(error)")
-                    // Retry with backoff or just continue
+                    
                     self.scheduleNextPoll()
                 }
             }
@@ -247,11 +247,11 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
         }
     }
     
-    // MARK: - URLSessionDataDelegate
+    
     
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         guard isRecording else { return }
-        // Offload writing to the file queue immediately to unblock the network thread
+        
         fileQueue.async {
             self.fileHandle?.write(data)
         }
@@ -261,14 +261,14 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
         if let error = error {
             let nsError = error as NSError
             if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {
-                return // Normal cancellation
+                return 
             }
             print("❌ [StreamRecorder] Stream Task failed: \(error.localizedDescription)")
             onError?(error)
         }
     }
     
-    // MARK: - HLS Logic
+    
     
     private func processManifest(initialData: Data? = nil, response: URLResponse? = nil) async throws {
         let data: Data
@@ -333,9 +333,9 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
             }
         }
         
-        // Prune old segments to keep memory low (keep last 50)
+        
         if downloadedSegments.count > 100 {
-            // Logic for pruning goes here if needed, removing unused overflow calculation
+            
         }
     }
 }

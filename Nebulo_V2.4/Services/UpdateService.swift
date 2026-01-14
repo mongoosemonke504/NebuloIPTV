@@ -29,13 +29,13 @@ class UpdateService: ObservableObject {
             errorMessage = nil
         }
         
-        // GitHub API URL
+        
         guard let url = URL(string: "https://api.github.com/repos/mongoosemonke504/NebuloIPTV/releases/latest") else { return }
         
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             
-            // Decode GitHub Release
+            
             let decoder = JSONDecoder()
             decoder.keyDecodingStrategy = .convertFromSnakeCase
             let release = try decoder.decode(GitHubRelease.self, from: data)
@@ -43,14 +43,14 @@ class UpdateService: ObservableObject {
             await MainActor.run {
                 self.checkingForUpdate = false
                 
-                // Version Comparison (Simple String Check)
-                // Normalize versions (remove 'v' prefix, etc)
+                
+                
                 let remoteVer = release.tagName.replacingOccurrences(of: "v", with: "")
                 let localVer = self.currentVersion.replacingOccurrences(of: "V", with: "").components(separatedBy: "(").first ?? ""
                 
-                // If remote string is different/newer (naïve check, should use proper semver if available)
-                // For now, if they don't match, we assume update.
-                // Ideally we'd compare Major.Minor.Patch integers.
+                
+                
+                
                 
                 if remoteVer != localVer && !release.tagName.isEmpty {
                     self.latestRelease = UpdateRelease(
@@ -85,7 +85,6 @@ class UpdateService: ObservableObject {
     }
 }
 
-// GitHub API Models
 struct GitHubRelease: Codable {
     let tagName: String
     let body: String?

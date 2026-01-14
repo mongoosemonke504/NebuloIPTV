@@ -181,7 +181,7 @@ struct SportGamesListView: View {
         ForEach(sections, id: \.league) { s in
             Section(header: leagueHeader(s.league)) {
                 ForEach(s.games) { game in
-                    scoreButton(game: game, sport: .soccerLeagues) // Use generic soccer type for button action context if needed
+                    scoreButton(game: game, sport: .soccerLeagues) 
                 }
             }
         }
@@ -220,7 +220,7 @@ struct ManualSelectionSheet: View {
                             HStack(spacing: 6) {
                                 Text(channel.name).font(.headline).foregroundStyle(.primary)
                                 
-                                // Quality Badge
+                                
                                 let q = SmartSearchLogic.detectQuality(channel.name)
                                 if q != .sd {
                                     Text(q.rawValue.components(separatedBy: " ").first ?? "HD")
@@ -232,7 +232,7 @@ struct ManualSelectionSheet: View {
                                         .cornerRadius(4)
                                 }
                                 
-                                // Language Badge (Debug/Info)
+                                
                                 if let lang = SmartSearchLogic.detectLanguage("\(channel.name) \(viewModel.getCurrentProgram(for: channel)?.title ?? "") \(viewModel.getCurrentProgram(for: channel)?.description ?? "")") {
                                     Text(lang.rawValue.prefix(2).uppercased())
                                         .font(.system(size: 9, weight: .bold))
@@ -261,8 +261,8 @@ struct ScoreRow: View, Equatable {
     static func == (lhs: ScoreRow, rhs: ScoreRow) -> Bool { lhs.game.id == rhs.game.id }
     var body: some View { 
         VStack(spacing: 0) { 
-            if sport == .f1 {  // Changed from .f1 to .football
-                raceLayout // This would ideally be a football layout
+            if sport == .f1 {  
+                raceLayout 
             } else { 
                 teamLayout 
             } 
@@ -275,7 +275,7 @@ struct ScoreRow: View, Equatable {
     
     private var teamLayout: some View { HStack(alignment: .center, spacing: 4) { if let away = game.awayCompetitor { TeamColumn(competitor: away, align: .trailing).frame(maxWidth: .infinity) }; VStack(spacing: 6) { Text(game.status.type.detail.uppercased()).font(.system(size: 11, weight: .bold)).foregroundStyle(game.status.type.state == "in" ? .red : .secondary).multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.8).frame(minWidth: 70, maxWidth: 100); if let cn = game.broadcastName { Text(cn).font(.system(size: 10, weight: .black)).foregroundStyle(.white).padding(.horizontal, 6).padding(.vertical, 2).background(Color.white.opacity(0.15)).cornerRadius(4) }; Capsule().fill(Color.white.opacity(0.1)).frame(width: 1.5, height: 20) }; if let home = game.homeCompetitor { TeamColumn(competitor: home, align: .leading).frame(maxWidth: .infinity) } } }
     
-    // Original raceLayout - assumes it's meant for a different sport, changed from .f1 check
+    
     private var raceLayout: some View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {

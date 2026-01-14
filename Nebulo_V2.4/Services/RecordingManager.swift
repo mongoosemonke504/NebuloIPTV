@@ -6,7 +6,7 @@ class RecordingManager: NSObject, ObservableObject {
     
     @Published var recordings: [Recording] = []
     
-    // Active recorders (Recording ID -> StreamRecorder)
+    
     private var activeRecorders: [UUID: StreamRecorder] = [:]
     
     private let recordingsKey = "saved_recordings_v1"
@@ -23,11 +23,11 @@ class RecordingManager: NSObject, ObservableObject {
             let rec = recordings[i]
             if rec.status == .recording {
                 if rec.endTime > now {
-                    // Should still be recording. Resume it.
+                    
                     print("🔄 [RecordingManager] Restoring interrupted recording: \(rec.channelName)")
                     startRecording(rec)
                 } else {
-                    // Should have finished. Mark as completed/failed.
+                    
                     print("⚠️ [RecordingManager] Found stale recording: \(rec.channelName)")
                     finalizeStaleRecording(index: i)
                 }
@@ -69,7 +69,7 @@ class RecordingManager: NSObject, ObservableObject {
         recordings.append(recording)
         saveRecordings()
         
-        // Schedule timer to start
+        
         let now = Date()
         if startTime <= now {
             startRecording(recording)
@@ -84,7 +84,7 @@ class RecordingManager: NSObject, ObservableObject {
     private func startRecording(_ recording: Recording) {
         guard let index = recordings.firstIndex(where: { $0.id == recording.id }) else { return }
         
-        // Prevent duplicates
+        
         if activeRecorders[recording.id] != nil { return }
         
         recordings[index].status = .recording
@@ -95,25 +95,25 @@ class RecordingManager: NSObject, ObservableObject {
             return
         }
         
-        // Setup Output File
+        
         let filename = "\(recording.id.uuidString).ts"
         let outputURL = getDocumentsDirectory().appendingPathComponent(filename)
         
-        // --- Playback Handoff Logic ---
-        // Check if player is currently watching this stream
+        
+        
         let player = NebuloPlayerEngine.shared
         var hijackedPlayer = false
         
         if let current = player.currentURL, (current.absoluteString == url.absoluteString || current.path == url.path) {
             print("🔀 [RecordingManager] Conflict detected! Switching player to local recording file...")
-            player.stop() // Stop strictly to close the connection
+            player.stop() 
             hijackedPlayer = true
         }
-        // ------------------------------
+        
         
         let recorder = StreamRecorder(streamURL: url, outputURL: outputURL)
         
-        // Setup callbacks
+        
         recorder.onCompletion = { [weak self] in
             DispatchQueue.main.async {
                 guard let self = self, let idx = self.recordings.firstIndex(where: { $0.id == recording.id }) else { return }
@@ -121,7 +121,7 @@ class RecordingManager: NSObject, ObservableObject {
                 let url = self.getDocumentsDirectory().appendingPathComponent(filename)
                 let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
                 
-                // Require at least 1MB for a valid recording
+                
                 if size > 1024 * 1024 {
                     self.recordings[idx].status = .completed
                     self.recordings[idx].localFileName = filename
@@ -139,8 +139,8 @@ class RecordingManager: NSObject, ObservableObject {
         recorder.onError = { [weak self] error in
             DispatchQueue.main.async {
                 print("Recording error: \(error)")
-                // Don't fail immediately, maybe retrying? For now, fail.
-                // Or if partial file exists, mark completed?
+                
+                
                 self?.failRecording(recording, reason: error.localizedDescription)
                 self?.activeRecorders.removeValue(forKey: recording.id)
             }
@@ -149,7 +149,7 @@ class RecordingManager: NSObject, ObservableObject {
         activeRecorders[recording.id] = recorder
         recorder.start()
         
-        // Resume player from local file if we hijacked it
+        
         if hijackedPlayer {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                 print("▶️ [RecordingManager] Resuming player from local file: \(outputURL)")
@@ -157,7 +157,7 @@ class RecordingManager: NSObject, ObservableObject {
             }
         }
         
-        // Schedule Stop
+        
         let timeUntilEnd = recording.endTime.timeIntervalSince(Date())
         if timeUntilEnd > 0 {
             DispatchQueue.main.asyncAfter(deadline: .now() + timeUntilEnd) { [weak self] in
@@ -172,9 +172,9 @@ class RecordingManager: NSObject, ObservableObject {
         guard let index = recordings.firstIndex(where: { $0.id == id }) else { return }
         
         if let recorder = activeRecorders[id] {
-            recorder.stop() // Will trigger onCompletion
+            recorder.stop() 
         } else {
-            // Force status update if something went wrong
+            
             if recordings[index].status == .recording {
                 recordings[index].status = .completed
                 saveRecordings()
@@ -190,12 +190,12 @@ class RecordingManager: NSObject, ObservableObject {
     }
     
     func deleteRecording(_ recording: Recording) {
-        // Stop if running
+        
         if activeRecorders[recording.id] != nil {
             stopRecording(recording.id)
         }
         
-        // Delete file
+        
         if let path = recording.localFileName {
             let fileURL = getDocumentsDirectory().appendingPathComponent(path)
             try? FileManager.default.removeItem(at: fileURL)
@@ -220,7 +220,7 @@ class RecordingManager: NSObject, ObservableObject {
     }
     
     func getActiveRecordingURL(for channel: StreamChannel) -> URL? {
-        // Find an active recording for this channel
+        
         if let rec = recordings.first(where: { $0.channelName == channel.name && $0.status == .recording }) {
             let filename = "\(rec.id.uuidString).ts"
             let url = getDocumentsDirectory().appendingPathComponent(filename)
@@ -231,7 +231,7 @@ class RecordingManager: NSObject, ObservableObject {
         return nil
     }
     
-    // Persistence
+    
     private func loadRecordings() {
         if let data = UserDefaults.standard.data(forKey: recordingsKey),
            let decoded = try? JSONDecoder().decode([Recording].self, from: data) {
@@ -263,7 +263,7 @@ class RecordingManager: NSObject, ObservableObject {
         guard recording.hasArchive, let original = URL(string: recording.streamURL) else { return nil }
         let urlString = original.absoluteString
         
-        // XTREAM CODES TIMESHIFT LOGIC
+        
         if urlString.contains("/live/") {
             let durationMinutes = Int(recording.duration / 60)
             let formatter = DateFormatter()
@@ -277,7 +277,7 @@ class RecordingManager: NSObject, ObservableObject {
                 let idPart = newString[newString.index(after: lastSlash)...]
                 let streamID = idPart.components(separatedBy: ".").first ?? String(idPart)
                 
-                // Use .m3u8 for HLS Timeshift (better seeking/compatibility on iOS)
+                
                 let finalURLString = "\(prefix)/\(durationMinutes)/\(startString)/\(streamID).m3u8"
                 return URL(string: finalURLString)
             }

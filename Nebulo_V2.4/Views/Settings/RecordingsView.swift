@@ -186,7 +186,7 @@ struct RecordingPlayerView: View {
     @State private var showControls = true
     @State private var timer: AnyCancellable?
     
-    // UI state for bridge
+    
     @State private var isScrubbing = false
     @State private var draggingProgress: Double? = nil
     @State private var showSubtitlePanel = false
@@ -198,20 +198,20 @@ struct RecordingPlayerView: View {
         ZStack {
             Color.black.ignoresSafeArea()
             
-            // Re-use the main bridge
+            
             UnifiedPlayerViewBridge()
                 .ignoresSafeArea()
             
-                                            // Overlay controls (re-using PlayerControlsView for consistency)
+                                            
                                             PlayerControlsView(
                                                 playerManager: playerManager,
                                                 channel: StreamChannel(
                                                     id: 0, 
                                                     name: recording.channelName, 
-                                                    streamURL: recording.programDescription ?? "", // Hack: Pass desc here if needed or use originalName
+                                                    streamURL: recording.programDescription ?? "", 
                                                     icon: recording.channelIcon, 
                                                     categoryID: 0, 
-                                                    originalName: recording.programTitle // Pass title here
+                                                    originalName: recording.programTitle 
                                                 ),
                                                 isRecordingPlayback: true,                                showControls: $showControls,
                                 showSubtitlePanel: $showSubtitlePanel,
@@ -233,7 +233,7 @@ struct RecordingPlayerView: View {
                 CustomSpinner(color: .white, lineWidth: 5, size: 50)
             }
             
-            // SUBTITLE SETTINGS PANEL
+            
             if showSubtitlePanel {
                 settingsPanelOverlay {
                     VStack(spacing: 0) {
@@ -261,7 +261,7 @@ struct RecordingPlayerView: View {
                 } onClose: { showSubtitlePanel = false }
             }
             
-            // RESOLUTION SETTINGS PANEL
+            
             if showResolutionPanel {
                 settingsPanelOverlay {
                     VStack(spacing: 0) {
@@ -291,7 +291,7 @@ struct RecordingPlayerView: View {
                 } onClose: { showResolutionPanel = false }
             }
             
-            // ASPECT RATIO PANEL
+            
             if showAspectRatioPanel {
                 settingsPanelOverlay {
                     VStack(spacing: 0) {

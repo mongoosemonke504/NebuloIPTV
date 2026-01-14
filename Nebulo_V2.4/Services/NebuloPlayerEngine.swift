@@ -7,7 +7,6 @@ import KSPlayer
 import AVFoundation
 import MediaPlayer
 
-// MARK: - KSPlayer Helper Subclass
 public class NebuloKSVideoPlayerView: IOSVideoPlayerView {
     public var currentPlayingURL: URL?
     var onStateChange: ((KSPlayerState) -> Void)?
@@ -83,7 +82,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     @Published public var currentSubtitle: VideoSubtitle? = nil
     @Published public var activeCaption: String? = nil
     @Published public var currentResolution: String = ""
-    @Published public var activeBackendName: String = "None" // New property
+    @Published public var activeBackendName: String = "None" 
     @Published public var playbackFailed: Bool = false
     
     public let renderView = UIView()
@@ -118,13 +117,13 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         guard let url = currentURL else { return }
         
         if currentBackend == .ksplayer {
-            // Switch to VLC
+            
             print("🔄 [NebuloEngine] Manually switching to VLC...")
             ksPlayerView.pause()
             ksPlayerView.removeFromSuperview()
             playVLC(url: url)
         } else if currentBackend == .vlc {
-            // Switch to KSPlayer
+            
             print("🔄 [NebuloEngine] Manually switching to KSPlayer...")
             vlcMediaPlayer.stop()
             vlcMediaPlayer.drawable = nil
@@ -151,7 +150,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     
     private var timeObserverTimer: Timer?
     
-    // Progress Watchdog State
+    
     private var lastProgressCheckTime: Date?
     private var lastProgressValue: Double = -1
     
@@ -199,24 +198,24 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     private func setupRemoteTransportControls() {
         let commandCenter = MPRemoteCommandCenter.shared()
         
-        // Disable Scrubbing (Not Movable)
+        
         commandCenter.changePlaybackPositionCommand.isEnabled = false
         
-        // Play
+        
         commandCenter.playCommand.isEnabled = true
         commandCenter.playCommand.addTarget { [weak self] _ in 
             self?.resume()
             return .success 
         }
         
-        // Pause
+        
         commandCenter.pauseCommand.isEnabled = true
         commandCenter.pauseCommand.addTarget { [weak self] _ in 
             self?.pause()
             return .success 
         }
         
-        // Toggle
+        
         commandCenter.togglePlayPauseCommand.isEnabled = true
         commandCenter.togglePlayPauseCommand.addTarget { [weak self] _ in
             guard let self = self else { return .commandFailed }
@@ -224,7 +223,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             return .success
         }
         
-        // Backward
+        
         commandCenter.seekBackwardCommand.isEnabled = true
         commandCenter.seekBackwardCommand.addTarget { [weak self] _ in
             guard let self = self else { return .commandFailed }
@@ -232,7 +231,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             return .success
         }
         
-        // Forward
+        
         commandCenter.seekForwardCommand.isEnabled = true
         commandCenter.seekForwardCommand.addTarget { [weak self] _ in
             guard let self = self else { return .commandFailed }
@@ -271,7 +270,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     
     private func updatePlaybackState(force: Bool = false) {
         let now = Date()
-        // Throttle updates to avoid spamming the system (unless forced, e.g. state change)
+        
         if !force, let last = lastInfoUpdateTime, now.timeIntervalSince(last) < 2.0 { return }
         
         var info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [String: Any]()
@@ -280,9 +279,9 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
         info[MPNowPlayingInfoPropertyMediaType] = MPNowPlayingInfoMediaType.video.rawValue
         
-        // Force Live Stream Mode (Not Movable / Live)
+        
         info[MPNowPlayingInfoPropertyIsLiveStream] = true
-        info[MPMediaItemPropertyPlaybackDuration] = 0 // Indefinite
+        info[MPMediaItemPropertyPlaybackDuration] = 0 
         
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
         lastInfoUpdateTime = now
@@ -302,7 +301,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                 }
                 self.currentTime = current
                 self.duration = total
-                // KSPlayer sends updates frequently. We rely on the throttle in updatePlaybackState.
+                
                 self.updatePlaybackState()
             }
         }
@@ -310,9 +309,9 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         
         KSOptions.isAutoPlay = true
         KSOptions.isSecondOpen = false
-        KSOptions.maxBufferDuration = 300.0 // Keep max buffer high
-        KSOptions.preferredForwardBufferDuration = 0.1 // Play immediately, don't wait to fill buffer
-        KSOptions.isAccurateSeek = false // Disable accurate seek to speed up recovery
+        KSOptions.maxBufferDuration = 300.0 
+        KSOptions.preferredForwardBufferDuration = 0.1 
+        KSOptions.isAccurateSeek = false 
         
         ksPlayerView.allowNativeControls = useNativeBridge
     }
@@ -323,22 +322,22 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     }
     
     public func play(url: URL) {
-        setupAudioSession() // Re-assert session on every play
+        setupAudioSession() 
         if let current = currentURL, current == url, (isPlaying || isBuffering) { return }
         self.currentURL = url
-        self.ksPlayerRetryCount = 0 // Reset on new URL
+        self.ksPlayerRetryCount = 0 
         stop()
         self.isBuffering = true
         self.userPaused = false
         self.playbackFailed = false
         self.triedFallback = false
-        // Reset Watchdog state
+        
         self.lastProgressValue = -1
         self.lastProgressCheckTime = Date()
         
         if url.isFileURL { playVLC(url: url); return }
         
-        // Respect User Preference - DEFAULT TO VLC FOR NEW INSTALLS
+        
         let defaultEngine = UserDefaults.standard.string(forKey: "defaultPlayerEngine") ?? "VLC"
         if defaultEngine == "KSPlayer" {
             if attemptKSPlayerPlayback(url: url) { currentBackend = .ksplayer; return }
@@ -380,18 +379,18 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
          } else if currentBackend == .ksplayer { ksPlayerView.play() }
     }
     
-    // MARK: - Watchdog Logic
+    
     
     private func startBufferWatchdog() {
         stopBufferWatchdog()
-        // Enable watchdog for ALL backends to handle stuck states
+        
         
         bufferStartTime = Date()
         bufferWatchdogTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self = self, self.isBuffering, let start = self.bufferStartTime else { return }
             let duration = Date().timeIntervalSince(start)
             
-            // If buffering for more than 20 seconds, it's likely stuck
+            
             if duration > 20.0 {
                 self.handleStuckBuffer()
             }
@@ -413,15 +412,15 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             print("⚠️ [NebuloEngine] KSPlayer unstable. Falling back to VLC...")
             let savedTime = currentTime
             
-            // Switch to VLC
+            
             DispatchQueue.main.async {
                 self.ksPlayerView.pause()
                 self.ksPlayerView.removeFromSuperview()
                 
-                // Play VLC
+                
                 self.playVLC(url: url)
                 
-                // Seek to where we left off (VLC needs a moment to init, handled in updateState or delayed)
+                
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                     if self.currentBackend == .vlc {
                         self.vlcMediaPlayer.time = VLCTime(int: Int32(savedTime * 1000))
@@ -429,7 +428,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                 }
             }
         } else {
-            // Re-play the current URL to force a fresh connection (VLC retry)
+            
             DispatchQueue.main.async {
                 self.play(url: url)
             }
@@ -461,7 +460,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         DispatchQueue.main.async { [weak self] in
              guard let self = self else { return }
             
-            // Clean up existing view state for a truly fresh start
+            
             self.ksPlayerView.pause()
             self.ksPlayerView.removeFromSuperview()
             
@@ -473,7 +472,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             self.renderView.addSubview(playerView)
             playerView.translatesAutoresizingMaskIntoConstraints = false
             
-            // Always deactivate and re-apply constraints
+            
             if !self.playerConstraints.isEmpty { 
                 NSLayoutConstraint.deactivate(self.playerConstraints)
                 self.playerConstraints.removeAll() 
@@ -488,12 +487,12 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             NSLayoutConstraint.activate(newConstraints)
             self.playerConstraints = newConstraints
             
-            // Use basic resource, relying on global KSOptions and Watchdog for stability
+            
             let resource = KSPlayerResource(url: url)
             self.ksPlayerView.set(resource: resource)
             self.ksPlayerView.currentPlayingURL = url
             self.applyAspectRatio(self.currentAspectRatio)
-            // Play is handled by KSOptions.isAutoPlay = true
+            
         }
         return true
     }
@@ -526,24 +525,24 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     private func stopTicker() { timeObserverTimer?.invalidate(); timeObserverTimer = nil }
     
     private func updateState() {
-        // --- Playback Progress Watchdog ---
+        
         if isPlaying && !userPaused && !isBuffering {
             let now = Date()
             
-            // If currentTime hasn't changed for > 15 seconds, assume stalled
+            
             if abs(currentTime - lastProgressValue) < 0.1 {
                 if let lastCheck = lastProgressCheckTime, now.timeIntervalSince(lastCheck) > 15.0 {
                     print("🚨 [NebuloEngine] Playback stalled (time not advancing). Triggering Watchdog.")
                     handleStuckBuffer()
-                    lastProgressCheckTime = now // Reset to avoid spam
+                    lastProgressCheckTime = now 
                 }
             } else {
-                // Moving forward! Reset watchdog
+                
                 lastProgressValue = currentTime
                 lastProgressCheckTime = now
             }
         }
-        // ----------------------------------
+        
     
         if currentBackend == .vlc {
             let time = vlcMediaPlayer.time
@@ -562,7 +561,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                 }
             }
         } else if currentBackend == .ksplayer {
-            // KSPlayer track detection using AVMediaType
+            
             if let player = ksPlayerView.playerLayer?.player {
                 let tracks = player.tracks(mediaType: AVMediaType.subtitle)
                 if !tracks.isEmpty && availableSubtitles.count != tracks.count {
@@ -587,8 +586,8 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             case .readyToPlay: 
                 self.isBuffering = false
                 self.isPlaying = true
-                self.ksPlayerRetryCount = 0 // Reset on success
-                // Re-apply aspect ratio to ensure layer properties take effect
+                self.ksPlayerRetryCount = 0 
+                
                 self.applyAspectRatio(self.currentAspectRatio)
             default: self.isBuffering = false; self.isPlaying = true
             }
@@ -604,7 +603,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
                 guard let self = self, self.currentBackend == .ksplayer else { return }
-                // Re-initialize the resource connection (Hard Reload)
+                
                 _ = self.attemptKSPlayerPlayback(url: url)
             }
         } else {
@@ -644,7 +643,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     
     private func applyAspectRatio(_ ratio: VideoAspectRatio) {
         if currentBackend == .vlc {
-            // Default: Reset state to "Fit"
+            
             vlcMediaPlayer.scaleFactor = 0
             vlcMediaPlayer.videoCropGeometry = nil
             vlcMediaPlayer.videoAspectRatio = nil
@@ -657,7 +656,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             case .twentyOneNine: ratioString = "21:9"
             case .oneEightFive: ratioString = "185:100"
             case .fill:
-                // Attempt Zoom-to-Fill (Crop) first
+                
                 let vSize = vlcMediaPlayer.videoSize
                 let rSize = renderView.bounds.size
                 
@@ -667,7 +666,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                     let targetScale = max(widthScale, heightScale)
                     vlcMediaPlayer.scaleFactor = Float(targetScale)
                 } else {
-                    // Fallback: Stretch to Screen Ratio
+                    
                     if Thread.isMainThread {
                         let w = Int(renderView.bounds.width)
                         let h = Int(renderView.bounds.height)
@@ -685,7 +684,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             }
             
             if let s = ratioString {
-                // Safer pointer handling
+                
                 let charArray = s.cString(using: .utf8)!
                 charArray.withUnsafeBufferPointer { ptr in
                    vlcMediaPlayer.videoAspectRatio = UnsafeMutablePointer<Int8>(mutating: ptr.baseAddress)
@@ -695,7 +694,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 
-                // Ensure view is in hierarchy
+                
                 if self.ksPlayerView.superview != self.renderView {
                     return
                 }
@@ -735,7 +734,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                         aspect
                     ]
                     
-                    // Maximizing constraints (Low priority)
+                    
                     let wMax = view.widthAnchor.constraint(equalTo: container.widthAnchor); wMax.priority = .defaultHigh
                     let hMax = view.heightAnchor.constraint(equalTo: container.heightAnchor); hMax.priority = .defaultHigh
                     newConstraints.append(contentsOf: [wMax, hMax])
@@ -792,12 +791,12 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                      newConstraints.append(contentsOf: [wMax, hMax])
                 }
                 
-                // Helper to find and set gravity on AVPlayerLayer
+                
                 func setGravity(_ gravity: AVLayerVideoGravity, on view: UIView) {
                     if let layer = view.layer as? AVPlayerLayer { 
                         layer.videoGravity = gravity
                     } else {
-                        // Check sublayers recursively
+                        
                          func findLayer(in layers: [CALayer]) -> AVPlayerLayer? {
                             for layer in layers {
                                 if let pLayer = layer as? AVPlayerLayer { return pLayer }
@@ -816,7 +815,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                 NSLayoutConstraint.activate(newConstraints)
                 self.playerConstraints = newConstraints
                 
-                // Force Layout Update
+                
                 container.setNeedsLayout()
                 container.layoutIfNeeded()
             }
@@ -824,7 +823,6 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     }
 }
 
-// MARK: - VLC Delegate
 extension NebuloPlayerEngine: VLCMediaPlayerDelegate {
     public func mediaPlayerStateChanged(_ aNotification: Notification) {
         guard let player = aNotification.object as? VLCMediaPlayer,

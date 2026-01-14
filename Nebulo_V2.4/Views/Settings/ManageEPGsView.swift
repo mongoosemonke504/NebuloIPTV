@@ -78,7 +78,7 @@ struct ManageEPGsView: View {
         let clean = newEPGUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         if !clean.isEmpty && !account.externalEPGUrls.contains(clean) {
             account.externalEPGUrls.append(clean)
-            accountManager.saveAccount(account, makeActive: true) // Saves and updates current
+            accountManager.saveAccount(account, makeActive: true) 
         }
     }
     

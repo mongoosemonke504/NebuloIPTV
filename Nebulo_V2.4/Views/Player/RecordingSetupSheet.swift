@@ -56,10 +56,10 @@ struct RecordingSetupSheet: View {
     }
     
     func schedule() {
-        // Validate
+        
         if endTime <= startTime {
-            // Simple validation: End must be after Start
-            // Realistically we'd show an alert, but for now just bump end time
+            
+            
             endTime = startTime.addingTimeInterval(60)
         }
         

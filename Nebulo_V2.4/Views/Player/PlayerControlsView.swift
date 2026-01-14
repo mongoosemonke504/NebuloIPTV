@@ -13,20 +13,20 @@ struct PlayerControlsView: View {
     @Binding var showAspectRatioPanel: Bool
     @Binding var showFullDescription: Bool
     
-    // Progress State
+    
     @Binding var isScrubbing: Bool
     @Binding var draggingProgress: Double?
     
-    // Timeshift State
+    
     @State private var timeshiftStartTime: Date? = nil
     
-    // Pause State
+    
     @State private var isLongPaused = false
     @State private var pauseTimerTask: Task<Void, Never>? = nil
     @State private var isDescriptionExpanded = false
     @State private var showRecordingSheet = false
     
-    // Actions
+    
     var onDismiss: () -> Void
     var togglePlay: () -> Void
     var toggleControls: () -> Void
@@ -49,7 +49,7 @@ struct PlayerControlsView: View {
             }()
             
             ZStack {
-                // Tap to toggle controls (invisible layer)
+                
                 Color.black.opacity(0.01)
                     .ignoresSafeArea()
                     .onTapGesture {
@@ -60,7 +60,7 @@ struct PlayerControlsView: View {
                     }
                 
                 if showControls {
-                    // Darken background slightly when controls are visible for better contrast
+                    
                     Color.black.opacity(0.4)
                         .ignoresSafeArea()
                         .transition(.opacity)
@@ -70,7 +70,7 @@ struct PlayerControlsView: View {
                     
                     ZStack {
                         
-                        // MARK: - Center Controls (Play Button) - Layer 1
+                        
                         
                         HStack(spacing: 60) {
                             
@@ -91,11 +91,11 @@ struct PlayerControlsView: View {
                         }
                         .allowsHitTesting(!playerManager.isBuffering)
                         
-                        // MARK: - Top & Bottom Bars - Layer 2
+                        
                         
                         VStack {
                             
-                            // MARK: - Top Bar
+                            
                             Group {
                                 if isLandscape {
                                     ZStack {
@@ -114,7 +114,7 @@ struct PlayerControlsView: View {
                                             
                                             Spacer()
                                             
-                                            // Right Side Actions
+                                            
                                             HStack(spacing: 16) {
                                                 if let vm = viewModel {
                                                     Button(action: {
@@ -175,7 +175,7 @@ struct PlayerControlsView: View {
                                         
                                         Spacer()
                                         
-                                        // Right Side Actions
+                                        
                                         HStack(spacing: 16) {
                                             if let vm = viewModel {
                                                 Button(action: {
@@ -212,10 +212,10 @@ struct PlayerControlsView: View {
                             
                             Spacer()
                             
-                            // MARK: - Bottom Bar
+                            
                             VStack(spacing: 8) {
                                 
-                                // Program Meta (EPG Only)
+                                
                                 VStack(alignment: .leading, spacing: 2) {
                                     HStack(spacing: 8) {
                                         Text(isRecordingPlayback ? (channel.originalName ?? channel.name) : (currentProg?.title ?? "No Information"))
@@ -223,7 +223,7 @@ struct PlayerControlsView: View {
                                             .foregroundColor(.white)
                                             .lineLimit(1)
                                         
-                                        // Player Backend Indicator
+                                        
                                         Button(action: {
                                             playerManager.toggleBackend()
                                         }) {
@@ -259,12 +259,12 @@ struct PlayerControlsView: View {
                                     }
                                 }
                                 .shadow(radius: 2)
-                                .padding(.bottom, -4) // Pull closer to scrubber
+                                .padding(.bottom, -4) 
                                 
-                                // Program Progress Bar & Drag/Seek
+                                
                                 VStack(spacing: 4) {
                                     if isRecordingPlayback {
-                                        // Recorded Playback Scrubber (Relative Time)
+                                        
                                         let currentPos = draggingProgress ?? (playerManager.duration > 0 ? playerManager.currentTime / playerManager.duration : 0)
                                         
                                         VStack(spacing: 8) {
@@ -315,7 +315,7 @@ struct PlayerControlsView: View {
                                     } else if let prog = currentProg {
                                         let totalDuration = prog.stop.timeIntervalSince(prog.start)
                                         
-                                        // Calculate where we are visually
+                                        
                                         let currentPlaybackDate: Date = {
                                             if let start = timeshiftStartTime {
                                                 return start.addingTimeInterval(playerManager.currentTime)
@@ -327,13 +327,13 @@ struct PlayerControlsView: View {
                                         let elapsed = currentPlaybackDate.timeIntervalSince(prog.start)
                                         let actualProgress = max(0, min(1, elapsed / totalDuration))
                                         
-                                        // Live progress constraint
+                                        
                                         let liveElapsed = Date().timeIntervalSince(prog.start)
                                         let liveProgress = max(0, min(1, liveElapsed / totalDuration))
                                         
                                         let displayProgress = draggingProgress ?? actualProgress
                                         
-                                        // Time Labels
+                                        
                                         HStack {
                                             Text(formatClockTime(prog.start))
                                                 .font(.caption2.monospacedDigit())
@@ -354,21 +354,21 @@ struct PlayerControlsView: View {
                                                 .foregroundColor(.white.opacity(0.7))
                                         }
                                         
-                                        // Custom Progress Bar with Drag/Seek Capability
+                                        
                                         GeometryReader { barGeo in
                                             ZStack(alignment: .leading) {
-                                                // Background Track
+                                                
                                                 Capsule()
                                                     .fill(Color.white.opacity(channel.hasArchive ? 0.2 : 0.1))
                                                     .frame(height: 6)
                                                 
-                                                // Progress Fill
+                                                
                                                 Capsule()
                                                     .fill(timeshiftStartTime == nil ? Color.white : Color.yellow)
-                                                    .opacity(channel.hasArchive ? 1.0 : 0.3) // Grey out if not scrollable
+                                                    .opacity(channel.hasArchive ? 1.0 : 0.3) 
                                                     .frame(width: barGeo.size.width * CGFloat(displayProgress), height: 6)
                                                 
-                                                // Live point indicator
+                                                
                                                 if channel.hasArchive {
                                                     Rectangle()
                                                         .fill(Color.white.opacity(0.3))
@@ -376,7 +376,7 @@ struct PlayerControlsView: View {
                                                         .offset(x: barGeo.size.width * CGFloat(liveProgress))
                                                 }
                                                 
-                                                // Drag Thumb - Only show if catchup is supported
+                                                
                                                 if channel.hasArchive {
                                                     Circle()
                                                         .fill(Color.white)
@@ -385,7 +385,7 @@ struct PlayerControlsView: View {
                                                         .offset(x: barGeo.size.width * CGFloat(displayProgress) - 7)
                                                 }
                                             }
-                                            .frame(height: 20) // Larger hit area
+                                            .frame(height: 20) 
                                             .contentShape(Rectangle())
                                             .applyIf(channel.hasArchive) { view in
                                                 view.gesture(
@@ -393,14 +393,14 @@ struct PlayerControlsView: View {
                                                         .onChanged { value in
                                                             isScrubbing = true
                                                             let dragPercent = max(0, min(1, value.location.x / barGeo.size.width))
-                                                            // Prevent dragging past live point
+                                                            
                                                             draggingProgress = min(dragPercent, liveProgress)
                                                         }
                                                         .onEnded { value in
                                                             let dragPercent = max(0, min(1, value.location.x / barGeo.size.width))
                                                             let finalPercent = min(dragPercent, liveProgress)
                                                             
-                                                            // If near the live point, return to live stream
+                                                            
                                                             if finalPercent >= liveProgress - 0.01 {
                                                                 timeshiftStartTime = nil
                                                                 if let url = URL(string: channel.streamURL) {
@@ -411,7 +411,7 @@ struct PlayerControlsView: View {
                                                                 handleTimeshift(to: targetDate, program: prog)
                                                             }
                                                             
-                                                            // Cleanup drag state
+                                                            
                                                             isScrubbing = false
                                                             draggingProgress = nil
                                                         }
@@ -420,7 +420,7 @@ struct PlayerControlsView: View {
                                         }
                                         .frame(height: 20)
                                     } else {
-                                        // Fallback Scrubber for channels without EPG
+                                        
                                         VStack(spacing: 8) {
                                             HStack {
                                                 Text("--:--")
@@ -450,10 +450,10 @@ struct PlayerControlsView: View {
                                     }
                                 }
                                 
-                                // Bottom Action Row
+                                
                                 HStack(spacing: 8) {
                                     if !isRecordingPlayback {
-                                        // LIVE Button
+                                        
                                         Button(action: {
                                             if !isTrulyLive {
                                                 withAnimation {
@@ -482,10 +482,10 @@ struct PlayerControlsView: View {
                                         }
                                         .buttonStyle(.plain)
                                         
-                                        // Record Button
+                                        
                                         Button(action: {
                                             if isRecording {
-                                                // Stop recording
+                                                
                                                 if let rec = recordingManager.recordings.first(where: { $0.channelName == channel.name && $0.status == .recording }) {
                                                     recordingManager.stopRecording(rec.id)
                                                 }
@@ -512,11 +512,11 @@ struct PlayerControlsView: View {
                                             )
                                         }
                                         .buttonStyle(.plain)
-                                        // .disabled(isRecording)
+                                        
                                         .opacity(1.0)
                                     }
                                     
-                                    // Subtitles
+                                    
                                     Button(action: {
                                         withAnimation { showSubtitlePanel.toggle() }
                                     }) {
@@ -534,7 +534,7 @@ struct PlayerControlsView: View {
                                     .buttonStyle(.plain)
                                     .disabled(playerManager.availableSubtitles.isEmpty)
                                     
-                                    // Aspect Ratio
+                                    
                                     Button(action: {
                                         withAnimation { showAspectRatioPanel.toggle() }
                                     }) {

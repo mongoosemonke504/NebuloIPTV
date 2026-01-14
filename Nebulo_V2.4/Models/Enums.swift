@@ -1,6 +1,5 @@
 import Foundation
 
-// MARK: - MODELS
 enum ViewMode: String, CaseIterable, Sendable { case automatic = "Automatic", sidebar = "Sidebar", standard = "Standard" }
 enum AppTheme: String, CaseIterable, Identifiable, Sendable {
     case system = "System", light = "Light", dark = "Dark"
@@ -44,7 +43,7 @@ enum SportType: String, CaseIterable, Identifiable, Sendable {
         case .wLacrosse: return "https://site.api.espn.com/apis/site/v2/sports/lacrosse/womens-college-lacrosse/scoreboard"
         case .mVolleyball: return "https://site.api.espn.com/apis/site/v2/sports/volleyball/mens-college-volleyball/scoreboard"
         case .wVolleyball: return "https://site.api.espn.com/apis/site/v2/sports/volleyball/womens-college-volleyball/scoreboard"
-        case .soccerLeagues, .domesticCups, .continental, .international: return "" // Handled internally
+        case .soccerLeagues, .domesticCups, .continental, .international: return "" 
         case .f1: return "https://site.api.espn.com/apis/site/v2/sports/racing/f1/scoreboard"
         case .mma: return "https://site.api.espn.com/apis/site/v2/sports/mma/ufc/scoreboard"
         }
@@ -62,7 +61,7 @@ enum StreamQuality: String, CaseIterable, Identifiable, Sendable {
     
     var scoreWeight: Int {
         switch self {
-        case .best: return 0 // Dynamic
+        case .best: return 0 
         case .fourK: return 400
         case .fhd: return 300
         case .hd: return 200

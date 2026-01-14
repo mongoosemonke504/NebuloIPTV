@@ -1,6 +1,5 @@
 import SwiftUI
 
-// MARK: - SHIMMER EFFECT (SKELETON LOADING)
 struct ShimmerModifier: ViewModifier {
     @State private var phase: CGFloat = 0
     

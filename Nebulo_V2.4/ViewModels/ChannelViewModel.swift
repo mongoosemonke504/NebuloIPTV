@@ -2,7 +2,6 @@ import SwiftUI
 import Combine
 import UIKit
 
-// MARK: - VIEW MODELS
 @MainActor
 class ChannelViewModel: ObservableObject {
     static let shared = ChannelViewModel()
@@ -12,7 +11,7 @@ class ChannelViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String? = nil
     
-    // Split Search Results
+    
     @Published var filteredEPGChannels: [StreamChannel] = []
     @Published var filteredNameChannels: [StreamChannel] = []
     @Published var filteredCategories: [StreamCategory] = []
@@ -48,17 +47,17 @@ class ChannelViewModel: ObservableObject {
     @Published var miniPlayerChannel: StreamChannel? = nil
     @Published var currentTime: Date = Date()
     
-    // Manual Sort Order
+    
     @Published var manualChannelOrder: [Int] = []
     
-    // EPG State
+    
     @Published var epgData: [String: [EPGProgram]] = [:]
-    private var epgNameMap: [String: String] = [:] // Channel Name -> EPG ID
+    private var epgNameMap: [String: String] = [:] 
     @Published var epgProgress: Double = 0
     @Published var isUpdatingEPG: Bool = false
-    @Published var loadingStatus: String = "Loading..." // New status property
+    @Published var loadingStatus: String = "Loading..." 
     
-    // Preferences
+    
     @Published var preferredLanguage: LanguagePreference = .us {
         didSet { UserDefaults.standard.set(preferredLanguage.rawValue, forKey: settingsPrefix + "preferredLanguage") }
     }
@@ -66,7 +65,7 @@ class ChannelViewModel: ObservableObject {
         didSet { UserDefaults.standard.set(preferredQuality.rawValue, forKey: settingsPrefix + "preferredQuality") }
     }
     
-    // Boot State
+    
     private var lastFullLoadTime: Date? {
         get {
             guard let interval = UserDefaults.standard.object(forKey: settingsPrefix + "lastFullLoadTime") as? TimeInterval else { return nil }
@@ -82,12 +81,12 @@ class ChannelViewModel: ObservableObject {
     }
     @Published var lastImageCacheTime: Date? = nil
     
-    // Multi-Account State
+    
     var activeAccountsMap: [UUID: Account] = [:]
-    // Stalker Token Map
+    
     var stalkerTokens: [UUID: String] = [:]
     
-    private var currentLoadTask: Task<Void, Never>? // Guard against redundant loads
+    private var currentLoadTask: Task<Void, Never>? 
     
     private var lastEPGUpdateTime: Date? {
         get {
@@ -103,7 +102,7 @@ class ChannelViewModel: ObservableObject {
         }
     }
     
-    // Smoothing / Fake Progress state
+    
     @Published private var visualProgress: Double = 0
     private var epgClockTimer: AnyCancellable?
     private var smoothingTimer: AnyCancellable?
@@ -121,7 +120,7 @@ class ChannelViewModel: ObservableObject {
         loadSettings()
         startEPGClock()
         
-        // Observe Account Changes (Active/Inactive or List updates)
+        
         AccountManager.shared.$accounts
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
@@ -129,13 +128,13 @@ class ChannelViewModel: ObservableObject {
             }
             .store(in: &cancellables)
             
-        // Initial Load
+        
         Task { await loadActiveAccounts() }
     }
     
     func checkReloadNeeded() async {
         let now = Date()
-        // Reload if last load was > 30 minutes ago, or never loaded
+        
         if let last = lastFullLoadTime, now.timeIntervalSince(last) < 1800 {
             return
         }
@@ -145,36 +144,36 @@ class ChannelViewModel: ObservableObject {
     }
 
     func loadActiveAccounts(silent: Bool = false) async {
-        // Debounce: If already loading, and this is a silent refresh, skip it.
+        
         if isLoading && silent { return }
         
-        // Cancel any existing load task to restart fresh or handle the new request
+        
         currentLoadTask?.cancel()
         
         currentLoadTask = Task {
             let startTime = Date()
             let accounts = AccountManager.shared.accounts.filter { $0.isActive }
             
-            // If no active accounts in manager, fallback to legacy load check if not already attempted
+            
             if accounts.isEmpty {
                 return
             }
             
             if Task.isCancelled { return }
             
-            // 1. Check Cache First (for instant load)
-            // If not silent (meaning user is waiting), try to load from disk first
+            
+            
             if !silent {
                 if let (cachedChans, cachedCats) = self.loadFromCache() {
                     await MainActor.run {
                         self.channels = cachedChans
                         self.categories = cachedCats
                         self.categorizeSports()
-                        // Instant Load: Do NOT set isLoading to true if we have data
+                        
                         self.isLoading = false 
                     }
                 } else {
-                    // No cache, show loading
+                    
                     await MainActor.run {
                         self.isLoading = true
                         self.loadingStatus = "Loading Playlists..."
@@ -183,8 +182,8 @@ class ChannelViewModel: ObservableObject {
                 }
             }
             
-            // 2. Perform Network Sync (Always update in background to keep fresh)
-            // If we didn't load from cache, ensure isLoading is true
+            
+            
             if self.channels.isEmpty {
                 await MainActor.run {
                     if !silent { self.isLoading = true }
@@ -192,9 +191,9 @@ class ChannelViewModel: ObservableObject {
             }
             
             await MainActor.run {
-                // Reset data before merging (only if we are going to replace it)
-                // Actually, if we loaded from cache, we don't want to reset immediately and flash empty.
-                // We should fetch new data into temp vars, then swap.
+                
+                
+                
                 self.activeAccountsMap = Dictionary(uniqueKeysWithValues: accounts.map { ($0.id, $0) })
             }
             
@@ -221,7 +220,7 @@ class ChannelViewModel: ObservableObject {
             
             await MainActor.run {
                 self.channels = allChannels
-                // Sort categories by order to respect playlist/account structure
+                
                 self.categories = allCategories.sorted { $0.order < $1.order }
                 
                 self.categorizeSports()
@@ -229,9 +228,9 @@ class ChannelViewModel: ObservableObject {
             }
             
             await self.preloadImages()
-            await self.updateEPGFromURLs(epgUrls, silent: silent || !self.channels.isEmpty) // Silent if we already have data
+            await self.updateEPGFromURLs(epgUrls, silent: silent || !self.channels.isEmpty) 
             
-            // Ensure Minimum 3s Delay if visible loading was actually shown (i.e. no cache)
+            
             if !silent && self.isLoading {
                 let elapsed = Date().timeIntervalSince(startTime)
                 if elapsed < 3.0 {
@@ -251,10 +250,10 @@ class ChannelViewModel: ObservableObject {
         await currentLoadTask?.value
     }
     
-    // Helper to fetch data for a single account with namespacing
+    
     func fetchAccountData(_ account: Account) async -> ([StreamChannel], [StreamCategory], [URL]) {
         let offset = account.stableID * 100_000_000
-        let prefix = "acc_\(account.stableID)_" // specific prefix for settings
+        let prefix = "acc_\(account.stableID)_" 
         
         var fetchedChannels: [StreamChannel] = []
         var fetchedCategories: [StreamCategory] = []
@@ -266,21 +265,21 @@ class ChannelViewModel: ObservableObject {
                 let user = account.username ?? ""
                 let pass = account.password ?? ""
                 
-                // Cats
+                
                 let catUrl = try await ChannelViewModel.buildApiUrl(base: baseURL, user: user, pass: pass, action: "get_live_categories")
                 let (cData, _) = try await URLSession.shared.data(from: catUrl)
                 let cats = try JSONDecoder().decode([StreamCategory].self, from: cData)
                 let processedCats = await ChannelViewModel.processCategories(cats, prefix: prefix, idOffset: offset)
                 fetchedCategories = processedCats
                 
-                // Streams
+                
                 let streamUrl = try await ChannelViewModel.buildApiUrl(base: baseURL, user: user, pass: pass, action: "get_live_streams")
                 let (sData, _) = try await URLSession.shared.data(from: streamUrl)
                 let raw = try JSONDecoder().decode([StreamChannel].self, from: sData)
                 let processedChans = await ChannelViewModel.processChannels(raw, safeURL: account.url, user: user, pass: pass, prefix: prefix, idOffset: offset, accountID: account.id)
                 fetchedChannels = processedChans
                 
-                // EPG
+                
                 let epgUrl = baseURL.appendingPathComponent("xmltv.php")
                 var c = URLComponents(url: epgUrl, resolvingAgainstBaseURL: false)
                 c?.queryItems = [URLQueryItem(name: "username", value: user), URLQueryItem(name: "password", value: pass)]
@@ -295,7 +294,7 @@ class ChannelViewModel: ObservableObject {
                     self.stalkerTokens[account.id] = token
                 }
             } else {
-                // M3U
+                
                 guard let baseURL = URL(string: account.url) else { return ([], [], []) }
                 let (data, _) = try await URLSession.shared.data(from: baseURL)
                 if let content = String(data: data, encoding: .utf8) {
@@ -306,7 +305,7 @@ class ChannelViewModel: ObservableObject {
                 }
             }
             
-            // External EPGs
+            
             for ext in account.externalEPGUrls {
                 if let u = URL(string: ext) { fetchedEPGs.append(u) }
             }
@@ -370,7 +369,7 @@ class ChannelViewModel: ObservableObject {
         
         guard !url.isEmpty, let baseURL = URL(string: url) else { return .noData }
         
-        // Force update EPG in background (silent)
+        
         await updateEPG(baseURL: baseURL, user: user, pass: pass, force: true, silent: true)
         return .newData
     }
@@ -384,7 +383,7 @@ class ChannelViewModel: ObservableObject {
     func getCurrentProgram(for channel: StreamChannel) -> EPGProgram? {
         let eID: String? = {
             if let id = channel.epgID, epgData[id] != nil { return id }
-            // Fallback: Check name map
+            
             return epgNameMap[channel.name.lowercased()]
         }()
         
@@ -405,7 +404,7 @@ class ChannelViewModel: ObservableObject {
         return schedule.filter { $0.start >= current.stop }.sorted { $0.start < $1.start }.first
     }
 
-    // High performance search logic
+    
     private func performSearch() {
         searchTask?.cancel()
         
@@ -424,7 +423,7 @@ class ChannelViewModel: ObservableObject {
         searchTask = Task.detached(priority: .userInitiated) { [weak self, searchQuery] in
             guard let self = self else { return }
             
-            // Debounce manually inside the task
+            
             try? await Task.sleep(nanoseconds: 200_000_000)
             guard !Task.isCancelled else { return }
             
@@ -484,7 +483,7 @@ class ChannelViewModel: ObservableObject {
                 self.filteredCategories = finalCatMatches
                 self.isSearching = false
                 
-                // Add to recent queries if it actually returned results and is long enough
+                
                 if (!sortedEPG.isEmpty || !sortedName.isEmpty || !finalCatMatches.isEmpty) && searchQuery.count > 2 {
                     self.addRecentQuery(searchQuery)
                 }
@@ -511,7 +510,7 @@ class ChannelViewModel: ObservableObject {
     }
 
     nonisolated static func prioritySort(_ channels: [StreamChannel], order: [Int], precomputedOrderMap: [Int: Int]? = nil) -> [StreamChannel] {
-        // Optimally use a lookup
+        
         let orderMap: [Int: Int]
         if let p = precomputedOrderMap {
             orderMap = p
@@ -525,19 +524,19 @@ class ChannelViewModel: ObservableObject {
             let idxA = orderMap[a.id]
             let idxB = orderMap[b.id]
             
-            // If both are manually ordered, respect that order
+            
             if let iA = idxA, let iB = idxB { return iA < iB }
-            // If only one is manually ordered, it takes precedence (pushed to top)
+            
             if idxA != nil { return true }
             if idxB != nil { return false }
             
-            // Fallback to quality score
+            
             if a.qualityScore != b.qualityScore { return a.qualityScore > b.qualityScore }
             return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
         }
     }
 
-    // Cache for pre-resolved games
+    
     @Published var preResolvedCache: [String: StreamChannel] = [:]
 
     private struct GameSearchInfo: Sendable {
@@ -548,7 +547,7 @@ class ChannelViewModel: ObservableObject {
     }
 
     func preResolveGames(_ games: [ESPNEvent]) {
-        // Extract data on Main Actor to avoid isolation issues
+        
         let infos: [GameSearchInfo] = games.map {
             let h = $0.homeCompetitor?.team?.shortDisplayName ?? $0.homeCompetitor?.athlete?.shortName ?? ""
             let a = $0.awayCompetitor?.team?.shortDisplayName ?? $0.awayCompetitor?.athlete?.shortName ?? ""
@@ -572,7 +571,7 @@ class ChannelViewModel: ObservableObject {
                 if let best = ChannelViewModel.resolveBestMatch(home: info.home, away: info.away, network: info.network, channels: inputChannels, hiddenIDs: inputHidden, hiddenCatIDs: hiddenCatIDs, epg: currentEPG, now: now, preferredLanguage: pLang, preferredQuality: pQual) {
                     await MainActor.run {
                         self.preResolvedCache[info.id] = best
-                        // Smarters Logic: Warm up the connection immediately
+                        
                         self.prewarmChannel(best)
                     }
                 }
@@ -599,12 +598,12 @@ class ChannelViewModel: ObservableObject {
             
             var score = 0
             
-            // 1. Network Match
+            
             if !targetNetwork.isEmpty && channel.name.localizedCaseInsensitiveContains(targetNetwork) {
                 score += 1000
             }
             
-            // 2. Content Match
+            
             var epgTitle = ""
             var epgDesc = ""
             
@@ -632,32 +631,32 @@ class ChannelViewModel: ObservableObject {
             let totalA = nameA + titleA + descA
             if totalH > 0 && totalA > 0 { score += 300 }
             
-            // 3. Preferences
-            // Language
+            
+            
             if score > 0 {
                 let combinedText = "\(channel.name) \(epgTitle) \(epgDesc)"
                 
                 if SmartSearchLogic.checkLanguageMatch(combinedText, preference: preferredLanguage) {
                     score += 2000
                 } else if preferredLanguage != .any && preferredLanguage != .us && preferredLanguage != .uk && preferredLanguage != .ca {
-                    // If we want a specific non-English language (e.g. French), and we detect English, penalize.
+                    
                     if let detected = SmartSearchLogic.detectLanguage(combinedText), (detected == .us || detected == .uk || detected == .ca) {
                         score -= 1000
                     }
                 }
             }
             
-            // Quality
+            
             let q = SmartSearchLogic.detectQuality(channel.name)
             if preferredQuality == .best {
-                // Higher is better
+                
                 if q == .fourK { score += 40 }
                 else if q == .fhd { score += 30 }
                 else if q == .hd { score += 20 }
             } else {
-                // Match is better
+                
                 if q == preferredQuality { score += 50 }
-                // Close match? e.g. FHD when HD wanted is okay, but maybe less points
+                
             }
             
             score += channel.qualityScore
@@ -668,12 +667,12 @@ class ChannelViewModel: ObservableObject {
             }
         }
         
-        // Only return if High Confidence (Perfect Match)
+        
         return bestScore >= 1300 ? bestChannel : nil
     }
 
     func runSmartSearch(gameID: String? = nil, home: String, away: String, sport: SportType, network: String? = nil) {
-        // 1. Check Pre-Resolved Cache (Instant Play)
+        
         if let gid = gameID, let cached = preResolvedCache[gid] {
             self.isSearchingGame = false
             withAnimation(.easeInOut(duration: 0.4)) { self.channelToAutoPlay = cached }
@@ -720,16 +719,16 @@ class ChannelViewModel: ObservableObject {
                 if SmartSearchLogic.isBanner(channel.name) { continue }
                 
                 var score = 0
-                var isNetMatch = false // This variable is no longer needed and can be removed
+                var isNetMatch = false 
                 var isContMatch = false
                 
-                // 1. Network Match
+                
                 if !targetNetwork.isEmpty && channel.name.localizedCaseInsensitiveContains(targetNetwork) {
                     score += 1000
-                    isNetMatch = true // This assignment is now unused
+                    isNetMatch = true 
                 }
                 
-                // 2. Content Match (EPG & Name)
+                
                 var epgTitle = ""
                 var epgDesc = ""
                 
@@ -748,52 +747,52 @@ class ChannelViewModel: ObservableObject {
                 let descH = matchCount(epgDesc, tokens: homeTokens)
                 let descA = matchCount(epgDesc, tokens: awayTokens)
                 
-                // Scoring Weights
-                // EPG Title is most reliable for specific game
+                
+                
                 if titleH > 0 { score += 500; isContMatch = true }
                 if titleA > 0 { score += 500; isContMatch = true }
                 
-                // EPG Description is next best
+                
                 if descH > 0 { score += 300; isContMatch = true }
                 if descA > 0 { score += 300; isContMatch = true }
                 
-                // Channel Name is good but can be generic (e.g. "Team Channel")
+                
                 if nameH > 0 { score += 200; isContMatch = true }
                 if nameA > 0 { score += 200; isContMatch = true }
                 
-                // Bonus for matching both teams in any combination
+                
                 let totalH = nameH + titleH + descH
                 let totalA = nameA + titleA + descA
                 if totalH > 0 && totalA > 0 { score += 300 }
                 
-                // 3. Preferences
-                // Language
+                
+                
                 if score > 0 {
                     let combinedText = "\(channel.name) \(epgTitle) \(epgDesc)"
                     
                     if SmartSearchLogic.checkLanguageMatch(combinedText, preference: pLang) {
                         score += 2000
                     } else if pLang != .any && pLang != .us && pLang != .uk && pLang != .ca {
-                         // If we want a specific non-English language (e.g. French), and we detect English, penalize.
+                         
                         if let detected = SmartSearchLogic.detectLanguage(combinedText), (detected == .us || detected == .uk || detected == .ca) {
                             score -= 1000
                         }
                     }
                 }
                 
-                // Quality
+                
                 let q = SmartSearchLogic.detectQuality(channel.name)
                 if pQual == .best {
-                    // Higher is better
+                    
                     if q == .fourK { score += 40 }
                     else if q == .fhd { score += 30 }
                     else if q == .hd { score += 20 }
                 } else {
-                    // Match is better
+                    
                     if q == pQual { score += 50 }
                 }
                 
-                // Quality & Language Adjustments
+                
                 score += channel.qualityScore
                 
                 if score > 0 || isNetMatch {
@@ -801,42 +800,42 @@ class ChannelViewModel: ObservableObject {
                 }
             }
             
-            // Sort by score descending
+            
             scoredChannels.sort { $0.score > $1.score }
             
-            // --- Decision Logic ---
             
-            // Check for Perfect Match (Network Match AND Content Match AND High Confidence)
-            // A score > 1500 typically implies Network (1000) + Content (500+)
+            
+            
+            
             if let best = scoredChannels.first, best.score >= 1300 {
                 let winner = best.channel
                 await MainActor.run {
                     self.isSearchingGame = false
                     self.suggestedChannels = [winner] 
                     withAnimation(.easeInOut(duration: 0.4)) { self.channelToAutoPlay = winner }
-                    // Optimization: Pre-warm
+                    
                     self.prewarmChannel(winner)
-                    // Update cache for future
+                    
                     if let gid = gameID { self.preResolvedCache[gid] = winner }
                 }
                 return
             }
             
-            // Fallback: 5 Options
+            
             
             let networkMatches = scoredChannels.filter { $0.isNetworkMatch }
-            let contentMatches = scoredChannels.filter { $0.isContentMatch && !$0.isNetworkMatch } // Exclude duplicates primarily
+            let contentMatches = scoredChannels.filter { $0.isContentMatch && !$0.isNetworkMatch } 
             
             var finalSelection: [StreamChannel] = []
             var usedIDs = Set<Int>()
             
-            // Take top 3 Network matches
+            
             for item in networkMatches.prefix(3) {
                 finalSelection.append(item.channel)
                 usedIDs.insert(item.channel.id)
             }
             
-            // Take top 2 Content matches
+            
             var addedContent = 0
             for item in contentMatches {
                 if addedContent >= 2 { break }
@@ -847,7 +846,7 @@ class ChannelViewModel: ObservableObject {
                 }
             }
             
-            // If we still don't have 5, fill with remaining best matches (any type)
+            
             if finalSelection.count < 5 {
                 for item in scoredChannels {
                     if finalSelection.count >= 5 { break }
@@ -858,7 +857,7 @@ class ChannelViewModel: ObservableObject {
                 }
             }
             
-            // Final Sort: Apply Manual Order or Quality Sort on the selected subset
+            
             let finalSorted = ChannelViewModel.prioritySort(finalSelection, order: manualOrder, precomputedOrderMap: orderMap)
             
             await MainActor.run {
@@ -868,7 +867,7 @@ class ChannelViewModel: ObservableObject {
                 } else {
                     self.suggestedChannels = finalSorted
                     self.showSelectionSheet = true
-                    // Optimization: Pre-warm top 3
+                    
                     for ch in finalSorted.prefix(3) {
                         self.prewarmChannel(ch)
                     }
@@ -878,17 +877,17 @@ class ChannelViewModel: ObservableObject {
     }
     
     func moveChannelInSearch(from source: StreamChannel, to destination: StreamChannel, save: Bool = true) {
-        // Identify which list we are modifying
+        
         var isNameList = false
         if let _ = filteredNameChannels.firstIndex(of: source) { isNameList = true }
-        else if filteredEPGChannels.firstIndex(of: source) == nil { return } // Item not found
+        else if filteredEPGChannels.firstIndex(of: source) == nil { return } 
         
-        // Update UI List immediately
+        
         withAnimation {
             if isNameList {
                 guard let fromIdx = filteredNameChannels.firstIndex(of: source),
                       let toIdx = filteredNameChannels.firstIndex(of: destination) else { return }
-                // Move logic for Array
+                
                 if fromIdx != toIdx {
                     var list = filteredNameChannels
                     let item = list.remove(at: fromIdx)
@@ -907,18 +906,18 @@ class ChannelViewModel: ObservableObject {
             }
         }
         
-        // Update Global Manual Order
+        
         var currentOrder = manualChannelOrder
         
-        // Remove source if present
+        
         if let idx = currentOrder.firstIndex(of: source.id) { currentOrder.remove(at: idx) }
         
-        // Find destination index in global order
+        
         if let destIdx = currentOrder.firstIndex(of: destination.id) {
-            // Insert source at destination's index (taking its spot)
+            
             currentOrder.insert(source.id, at: destIdx)
         } else {
-            // Destination wasn't manually ordered.
+            
             currentOrder.append(destination.id)
             currentOrder.insert(source.id, at: currentOrder.count - 1)
         }
@@ -945,7 +944,7 @@ class ChannelViewModel: ObservableObject {
         let currentChannels = self.channels
         let currentConfigs = self.sportsConfigs
         let currentExclusions = self.excludedSportsIDs
-        // Capture EPG snapshots for background sorting
+        
         let currentEPG = self.epgData
         let currentMap = self.epgNameMap
         let now = self.currentTime
@@ -960,16 +959,16 @@ class ChannelViewModel: ObservableObject {
                 }
             }
             
-            // Helper for sorting
+            
             func getSortDate(for channel: StreamChannel) -> Date {
                 let eID = channel.epgID ?? currentMap[channel.name.lowercased()]
                 guard let id = eID, let schedule = currentEPG[id] else { return Date.distantFuture }
                 
-                // Priority 1: Currently Live
+                
                 if let current = schedule.first(where: { now >= $0.start && now <= $0.stop }) {
                     return current.start
                 }
-                // Priority 2: Upcoming
+                
                 if let next = schedule.first(where: { $0.start > now }) {
                     return next.start
                 }
@@ -982,12 +981,12 @@ class ChannelViewModel: ObservableObject {
                     let dateA = getSortDate(for: a)
                     let dateB = getSortDate(for: b)
                     
-                    // If both have valid EPG dates (not distantFuture), sort by Date ASC
+                    
                     if dateA != Date.distantFuture || dateB != Date.distantFuture {
                         if dateA != dateB { return dateA < dateB }
                     }
                     
-                    // Fallback: Name Heuristics
+                    
                     let aLive = NameCleaner.isLiveGameOrPPV(a.name)
                     let bLive = NameCleaner.isLiveGameOrPPV(b.name)
                     if aLive != bLive { return aLive }
@@ -1001,16 +1000,16 @@ class ChannelViewModel: ObservableObject {
     }
     
     func loadData(url: String, user: String, pass: String, mac: String? = nil, type: LoginType, silent: Bool = false) async {
-        // If we have active accounts in AccountManager, ignore this legacy call (unless it's empty)
+        
         if !AccountManager.shared.accounts.isEmpty {
             await loadActiveAccounts(silent: silent)
             return
         }
         
-        // Legacy: Create a temporary account and load it
+        
         let tempAccount = Account(name: "Main", type: type, url: url, username: user, password: pass, macAddress: mac, isActive: true, stableID: 0)
         
-        // Save it to manager so we migrate to new system
+        
         await MainActor.run {
             AccountManager.shared.saveAccount(tempAccount, makeActive: true)
         }
@@ -1018,26 +1017,26 @@ class ChannelViewModel: ObservableObject {
     
     func preloadImages() async {
         let now = Date()
-        // Check if we ran this recently (e.g. within 24 hours)
+        
         if let last = await MainActor.run(body: { return self.lastImageCacheTime }), now.timeIntervalSince(last) < 86400 {
             return
         }
         
         await MainActor.run { self.loadingStatus = "Smart Caching Images..." }
         
-        // Capture data on MainActor to avoid isolation issues
+        
         let allChannels = self.channels
         let favorites = self.favoriteIDs
         let recents = self.recentIDs
         
-        // Build Priority Set (Smart Cache Strategy)
+        
         var targetIDs = Set<Int>()
         
-        // 1. Favorites & Recents (High Priority)
+        
         targetIDs.formUnion(favorites)
         targetIDs.formUnion(recents)
         
-        // 2. Top 100 Channels (Buffer for initial lists)
+        
         targetIDs.formUnion(allChannels.prefix(100).map { $0.id })
         
         print("🚀 [ChannelViewModel] Starting Smart Cache for \(targetIDs.count) priority channels...")
@@ -1047,11 +1046,11 @@ class ChannelViewModel: ObservableObject {
             let limit = 50 
             
             for channel in allChannels {
-                // FILTER: Only process priority channels
+                
                 if !targetIDs.contains(channel.id) { continue }
                 
                 if let icon = channel.icon, !icon.isEmpty {
-                    // FAST CHECK: Skip if already on disk
+                    
                     if ImageCache.shared.hasImage(forKey: icon) { continue }
                     
                     if active >= limit { await group.next(); active -= 1 }
@@ -1070,9 +1069,9 @@ class ChannelViewModel: ObservableObject {
 
     func updateEPG(baseURL: URL, user: String, pass: String, force: Bool = false, silent: Bool = false) async {
         let now = Date()
-        let isStale = lastEPGUpdateTime == nil || now.timeIntervalSince(lastEPGUpdateTime!) >= 14400 // 4 Hours
+        let isStale = lastEPGUpdateTime == nil || now.timeIntervalSince(lastEPGUpdateTime!) >= 14400 
         
-        // If not forced and data is fresh, just load from disk and skip update
+        
         if !force && !isStale {
             if let cached = EPGService().loadFromDisk(), !cached.epg.isEmpty {
                 await MainActor.run { 
@@ -1083,7 +1082,7 @@ class ChannelViewModel: ObservableObject {
             }
         }
 
-        // Primary EPG
+        
         var urls: [URL] = []
         let epgUrl = baseURL.appendingPathComponent("xmltv.php")
         var c = URLComponents(url: epgUrl, resolvingAgainstBaseURL: false)
@@ -1096,19 +1095,19 @@ class ChannelViewModel: ObservableObject {
             }
         }
         
-        // Pass 'isStale' to determine if we should be silent (background update) or blocking (if force/first load)
-        // If it's stale but we have data (silent is true), we do it in background.
-        // If force is true, we show UI (silent passed as false usually).
-        // Here we respect the passed 'silent' parameter but could override if needed.
+        
+        
+        
+        
         
         await updateEPGFromURLs(urls, silent: silent)
     }
     
     func updateEPGFromURLs(_ urls: [URL], silent: Bool = false) async {
         let now = Date()
-        let isStale = lastEPGUpdateTime == nil || now.timeIntervalSince(lastEPGUpdateTime!) >= 14400 // 4 Hours
+        let isStale = lastEPGUpdateTime == nil || now.timeIntervalSince(lastEPGUpdateTime!) >= 14400 
         
-        // 1. Load from disk first if we don't have data in memory
+        
         if self.epgData.isEmpty {
              if let cached = EPGService().loadFromDisk(), !cached.epg.isEmpty {
                 await MainActor.run {
@@ -1118,18 +1117,18 @@ class ChannelViewModel: ObservableObject {
             }
         }
         
-        // 2. If data is fresh (not stale) AND we have data, SKIP network update
+        
         if !isStale && !self.epgData.isEmpty {
             print("✅ [EPG] Data is fresh. Skipping network fetch.")
             return
         }
         
-        // 3. Otherwise, proceed with network fetch
-        // If we have data now (either from cache or previous load), we can be silent
+        
+        
         let effectivelySilent = silent || !self.epgData.isEmpty
         
         await MainActor.run {
-            // Only show full loading skeleton if we have absolutely NO data (not even from disk)
+            
             if !effectivelySilent && self.epgData.isEmpty {
                 self.isLoading = true
             }
@@ -1138,7 +1137,7 @@ class ChannelViewModel: ObservableObject {
             self.epgProgress = 0
             self.loadingStatus = "Updating Guide..."
             
-            // isUpdatingEPG controls the dropdown. We always show it during the fetch.
+            
             withAnimation(.spring()) { self.isUpdatingEPG = true }
         }
         
@@ -1164,12 +1163,12 @@ class ChannelViewModel: ObservableObject {
         }
     }
     
-    // Legacy support (redirects to list version)
+    
     func updateEPGFromURL(_ url: URL, silent: Bool = false) async {
         await updateEPGFromURLs([url], silent: silent)
     }
     
-    // Exposed property for the UI to use the smooth progress
+    
     var displayEPGProgress: Double {
         return visualProgress
     }
@@ -1184,7 +1183,7 @@ class ChannelViewModel: ObservableObject {
         self.excludedSportsIDs = Set(load("excludedSportsIDs", type: [Int].self) ?? [])
         self.favoriteIDs = Set(load("favoriteChannelIDs", type: [Int].self) ?? [])
         self.hiddenIDs = Set(load("hiddenChannelIDs", type: [Int].self) ?? [])
-        // Deduplicate recentIDs while preserving order
+        
         let loadedRecents = load("recentChannelIDs", type: [Int].self) ?? []
         self.recentIDs = loadedRecents.reduce(into: [Int]()) { if !$0.contains($1) { $0.append($1) } }
         self.manualChannelOrder = load("manualChannelOrder", type: [Int].self) ?? []
@@ -1251,7 +1250,7 @@ class ChannelViewModel: ObservableObject {
                 let catID = abs(group.hashValue)
                 if !catNames.contains(group) { categories.append(StreamCategory(id: catID, name: group)); catNames.insert(group) }
                 
-                // M3U original ID is essentially the index or a hash
+                
                 let originalID = i 
                 current = StreamChannel(id: originalID + idOffset, name: name, streamURL: "", icon: logo, categoryID: catID + idOffset, originalName: name, epgID: eID, hasArchive: false, originalID: originalID, accountID: accountID)
             } else if !line.hasPrefix("#") && !line.isEmpty && current != nil {
@@ -1272,40 +1271,40 @@ class ChannelViewModel: ObservableObject {
         var mutable = loadedCats; let data = UserDefaults.standard.data(forKey: prefix + "renamedCategories") ?? Data()
         let renames = (try? JSONDecoder().decode([Int: String].self, from: data)) ?? [:]
         
-        // Also load hidden/saved state using the prefix
+        
         struct Wrapper: Codable { let id: Int; var name: String; var isHidden: Bool; var order: Int }
         if let savedData = UserDefaults.standard.data(forKey: prefix + "savedCategoriesanda"),
            let saved = try? JSONDecoder().decode([Wrapper].self, from: savedData) {
             
-            // Map saved settings to loaded categories
+            
             let savedMap = Dictionary(uniqueKeysWithValues: saved.map { ($0.id, $0) })
             
             for i in 0..<mutable.count {
                 let originalID = mutable[i].id
-                // Offset ID
+                
                 mutable[i] = StreamCategory(id: originalID + idOffset, name: mutable[i].name)
                 
                 if let s = savedMap[originalID] {
                     var c = mutable[i]
                     c.isHidden = s.isHidden
                     c.order = s.order
-                    // Use saved name if available, or rename override
+                    
                     if let custom = renames[originalID] { c.name = custom }
-                    else { c.name = s.name } // Use saved name (might be same as original)
+                    else { c.name = s.name } 
                     mutable[i] = c
                 } else {
-                     // Not saved, apply rename if exists
+                     
                     if let custom = renames[originalID] { mutable[i].name = custom }
-                    mutable[i].order = 9999 + i // Default order for new categories
+                    mutable[i].order = 9999 + i 
                 }
             }
-            // Sort by order
+            
              return mutable.sorted { $0.order < $1.order }
         }
         
         for i in 0..<mutable.count { 
             let originalID = mutable[i].id
-            // Offset ID
+            
             mutable[i] = StreamCategory(id: originalID + idOffset, name: mutable[i].name)
             if let custom = renames[originalID] { mutable[i].name = custom }
             mutable[i].order = i + idOffset
@@ -1320,8 +1319,8 @@ class ChannelViewModel: ObservableObject {
             var c = $0
             c.originalID = c.id
             c.accountID = accountID
-            c.id = c.id + idOffset // Apply Namespace Offset
-            c.categoryID = c.categoryID + idOffset // Apply Category Offset
+            c.id = c.id + idOffset 
+            c.categoryID = c.categoryID + idOffset 
             c.streamURL = "\(safeURL)/live/\(user)/\(pass)/\($0.id).m3u8"
             c.originalName = c.name
             if let custom = renames[c.originalID ?? 0] { c.name = custom } 
@@ -1330,11 +1329,11 @@ class ChannelViewModel: ObservableObject {
         }
     }
     
-    // Stalker State
+    
     @Published var stalkerToken: String? = nil
     @Published var stalkerPortalURL: URL? = nil
 
-    // Stalker / MAC Implementation
+    
     nonisolated static func fetchStalkerData(portalURL: URL, mac: String, prefix: String, idOffset: Int, accountID: UUID) async throws -> ([StreamChannel], [StreamCategory], String) {
         let components = URLComponents(url: portalURL.appendingPathComponent("portal.php"), resolvingAgainstBaseURL: false)
         
@@ -1357,7 +1356,7 @@ class ChannelViewModel: ObservableObject {
             return req
         }
         
-        // Handshake
+        
         let handshakeReq = try createRequest(action: "handshake")
         let (hData, _) = try await URLSession.shared.data(for: handshakeReq)
         
@@ -1369,7 +1368,7 @@ class ChannelViewModel: ObservableObject {
         let hRes = try JSONDecoder().decode(StalkerResponse.self, from: hData)
         guard let token = hRes.js?.token else { throw URLError(.userAuthenticationRequired) }
         
-        // Fetch Categories
+        
         let catReq = try createRequest(action: "get_genres", token: token)
         let (cData, _) = try await URLSession.shared.data(for: catReq)
         
@@ -1390,7 +1389,7 @@ class ChannelViewModel: ObservableObject {
         }
         categories = await processCategories(loadedCats, prefix: prefix, idOffset: idOffset)
         
-        // Fetch Channels
+        
         let chReq = try createRequest(action: "get_all_channels", token: token)
         let (chData, _) = try await URLSession.shared.data(for: chReq)
         
@@ -1414,7 +1413,7 @@ class ChannelViewModel: ObservableObject {
             guard let sid = c.id, let intID = Int(sid) else { return nil }
             guard let catID = Int(c.tv_genre_id ?? "0") else { return nil }
             
-            // Keep the cmd as is for Stalker, we resolve it later if needed
+            
             let url = c.cmd ?? ""
             
             var name = c.name
@@ -1428,13 +1427,13 @@ class ChannelViewModel: ObservableObject {
     }
     
     func resolveStalkerStream(_ channel: StreamChannel) async -> String {
-        // Multi-Account resolution
+        
         guard let accID = channel.accountID, let account = activeAccountsMap[accID] else { return channel.streamURL }
         
         if account.type == .xtream { return channel.streamURL }
         if account.type == .m3u { return channel.streamURL }
         
-        // Stalker Logic
+        
         guard let token = stalkerTokens[accID], let portalURL = URL(string: account.url) else { return channel.streamURL }
         
         if channel.streamURL.hasPrefix("http") && !channel.streamURL.contains("ffmpeg") { return channel.streamURL }
@@ -1467,11 +1466,11 @@ class ChannelViewModel: ObservableObject {
     }
     
     func buildTimeshiftURL(channel: StreamChannel, targetDate: Date, program: EPGProgram) async -> URL? {
-        // Resolve account first
+        
         guard let accID = channel.accountID, let account = activeAccountsMap[accID] else { return nil }
         
         if account.type == .mac {
-            // Stalker logic using stored token
+            
             let resolvedURL = await resolveStalkerStream(channel)
             guard let url = URL(string: resolvedURL) else { return nil }
             let offset = Int(targetDate.timeIntervalSince(program.start))
@@ -1483,7 +1482,7 @@ class ChannelViewModel: ObservableObject {
             return components?.url
         }
         
-        // Handle Xtream Codes
+        
         guard let original = URL(string: channel.streamURL) else { return nil }
         let urlString = original.absoluteString
         
@@ -1494,15 +1493,15 @@ class ChannelViewModel: ObservableObject {
             formatter.timeZone = TimeZone(secondsFromGMT: 0)
             let startString = formatter.string(from: targetDate)
             
-            // Format: http://domain:port/timeshift/user/pass/duration/timestamp/id.ts
-            // Note: channel.streamURL is constructed as /live/user/pass/id.m3u8
-            // We need to inject duration/timestamp before the ID.
+            
+            
+            
             
             let newString = urlString.replacingOccurrences(of: "/live/", with: "/timeshift/")
             if let lastSlash = newString.lastIndex(of: "/") {
                 let prefix = newString[..<lastSlash]
-                // The part after last slash is "id.m3u8"
-                // We need just the ID
+                
+                
                 let idPart = newString[newString.index(after: lastSlash)...]
                 let streamID = idPart.components(separatedBy: ".").first ?? String(idPart)
                 

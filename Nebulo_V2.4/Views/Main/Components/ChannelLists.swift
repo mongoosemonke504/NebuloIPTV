@@ -1,6 +1,5 @@
 import SwiftUI
 
-// MARK: - HORIZONTAL SEARCH LIST
 struct HorizontalSearchList: View {
     let channels: [StreamChannel]
     let viewModel: ChannelViewModel
@@ -106,7 +105,7 @@ struct HorizontalPreviewList: View {
                                         .font(.system(size: 12))
                                 }
                             }
-                            .frame(width: 192, height: 40, alignment: .topLeading) // Constrain text width to image width and fix height
+                            .frame(width: 192, height: 40, alignment: .topLeading) 
                             .padding(.horizontal, 4)
                         }
                     }.buttonStyle(.plain)
@@ -121,7 +120,7 @@ struct HorizontalPreviewList: View {
                 }
             }.padding(.horizontal)
         }
-        .frame(height: 175) // Increased height to fit text
+        .frame(height: 175) 
         .alert(item: $channelForDescription) { channel in
             Alert(
                 title: Text("Program Description"),

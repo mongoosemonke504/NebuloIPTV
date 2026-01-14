@@ -14,7 +14,7 @@ struct AddPlaylistSheet: View {
     
     var accountToEdit: Account? = nil
     
-    // Namespace for matched geometry if we want animation, but simple state switch is fine for sheet
+    
     
     var body: some View {
         NavigationStack {
@@ -29,9 +29,9 @@ struct AddPlaylistSheet: View {
                             .foregroundStyle(.white)
                             .padding(.top, 40)
                         
-                        // Main Card
+                        
                         VStack(spacing: 24) {
-                            // Picker
+                            
                             HStack(spacing: 0) {
                                 ForEach(LoginType.allCases) { t in
                                     Button(action: {
@@ -58,7 +58,7 @@ struct AddPlaylistSheet: View {
                             .background(Color.white.opacity(0.1))
                             .cornerRadius(14)
                             
-                            // Input Fields
+                            
                             VStack(spacing: 16) {
                                 PlaylistGlassTextField(icon: "tag.fill", placeholder: "Playlist Name (Optional)", text: $playlistNameInput)
                                 
@@ -78,7 +78,7 @@ struct AddPlaylistSheet: View {
                                 }
                             }
                             
-                            // Save Button
+                            
                             Button(action: save) {
                                 Text(accountToEdit != nil ? "Save Changes" : "Add Playlist")
                                     .font(.headline)
@@ -127,7 +127,7 @@ struct AddPlaylistSheet: View {
     func parseM3ULink(_ input: String) { guard input.contains("username=") && input.contains("password="), let c = URLComponents(string: input) else { return }; if let u = c.queryItems?.first(where: { $0.name == "username" })?.value { usernameInput = u }; if let p = c.queryItems?.first(where: { $0.name == "password" })?.value { passwordInput = p }; if let sc = c.scheme, let h = c.host { var b = "\(sc)://\(h)"; if let po = c.port { b += ":\(po)" }; urlInput = b } }
     
     func save() {
-        // Temporary interception for Stalker/MAC
+        
         if selectedLoginType == .mac {
             errorMessage = "Stalker/MAC Portal support is currently under construction."
             showError = true
@@ -155,11 +155,11 @@ struct AddPlaylistSheet: View {
             updated.password = passwordInput
             updated.macAddress = macInput
             
-            // Only update active if not set (or keep existing)
-            // saveAccount updates by ID
+            
+            
             AccountManager.shared.saveAccount(updated, makeActive: false)
         } else {
-            // Create Account
+            
             let newAccount = Account(
                 name: playlistNameInput.isEmpty ? "Playlist \(Int.random(in: 1...100))" : playlistNameInput,
                 type: selectedLoginType,
@@ -174,7 +174,6 @@ struct AddPlaylistSheet: View {
     }
 }
 
-// Duplicated for standalone usage in sheet
 struct PlaylistGlassTextField: View {
     let icon: String
     let placeholder: String

@@ -1,6 +1,5 @@
 import SwiftUI
 
-// MARK: - REVAMPED LOGIN VIEW
 struct LoginView: View {
     @AppStorage("isLoggedIn") private var isLoggedIn = false
     @AppStorage("xstreamURL") private var xstreamURL = ""
@@ -26,7 +25,7 @@ struct LoginView: View {
                 
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 30) {
-                        // Branding Section
+                        
                         VStack(spacing: 12) {
                             ZStack {
                                 Circle()
@@ -53,9 +52,9 @@ struct LoginView: View {
                         }
                         .padding(.top, 60)
                         
-                        // Main Login Card
+                        
                         VStack(spacing: 24) {
-                            // Picker
+                            
                             HStack(spacing: 0) {
                                 ForEach(LoginType.allCases) { t in
                                     Button(action: {
@@ -86,7 +85,7 @@ struct LoginView: View {
                             .background(Color.white.opacity(0.1))
                             .cornerRadius(14)
                             
-                            // Input Fields
+                            
                             VStack(spacing: 16) {
                                 GlassTextField(icon: "tag.fill", placeholder: "Playlist Name (Optional)", text: $playlistNameInput)
                                 
@@ -126,7 +125,7 @@ struct LoginView: View {
                                 }
                             }
                             
-                            // Login Button
+                            
                             Button(action: login) {
                                 Text("Connect to Server")
                                     .font(.headline)
@@ -174,7 +173,7 @@ struct LoginView: View {
     func parseM3ULink(_ input: String) { guard input.contains("username=") && input.contains("password="), let c = URLComponents(string: input) else { return }; if let u = c.queryItems?.first(where: { $0.name == "username" })?.value { usernameInput = u }; if let p = c.queryItems?.first(where: { $0.name == "password" })?.value { passwordInput = p }; if let sc = c.scheme, let h = c.host { var b = "\(sc)://\(h)"; if let po = c.port { b += ":\(po)" }; urlInput = b } }
     
     func login() {
-        // Temporary interception for Stalker/MAC
+        
         if selectedLoginType == .mac {
             errorMessage = "Stalker/MAC Portal support is currently under construction."
             showError = true
@@ -193,7 +192,7 @@ struct LoginView: View {
             guard !safe.isEmpty else { errorMessage = "Please enter a valid Playlist URL."; showError = true; return }
         }
         
-        // Create Account
+        
         let newAccount = Account(
             name: playlistNameInput.isEmpty ? "Playlist \(Int.random(in: 1...100))" : playlistNameInput,
             type: selectedLoginType,
@@ -208,7 +207,6 @@ struct LoginView: View {
     }
 }
 
-// MARK: - LOGIN SUBCOMPONENTS
 struct GlassTextField: View {
     let icon: String
     let placeholder: String
