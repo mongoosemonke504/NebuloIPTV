@@ -56,6 +56,7 @@ struct SportsHubView: View {
         .task { 
             await scoreViewModel.fetchScores()
             scoreViewModel.applyFilter(text: viewModel.searchText)
+            triggerPreResolution()
         }
         .onAppear {
             if scoreViewModel.isLoading {
@@ -73,16 +74,46 @@ struct SportsHubView: View {
                 withAnimation(.default) {
                     isRefreshingAnimation = false
                 }
+                triggerPreResolution()
             }
         }
         .onChangeCompat(of: scenePhase) { phase in
             if phase == .active {
-                Task { await scoreViewModel.fetchScores(forceRefresh: true, silent: true) }
+                Task { 
+                    await scoreViewModel.fetchScores(forceRefresh: true, silent: true)
+                    triggerPreResolution()
+                }
             }
         }
-        .onChangeCompat(of: scoreViewModel.selectedSport) { _ in Task { await scoreViewModel.fetchScores() } }
-        .onChangeCompat(of: viewModel.searchText) { text in scoreViewModel.applyFilter(text: text) }
+        .onChangeCompat(of: scoreViewModel.selectedSport) { _ in 
+            Task { 
+                await scoreViewModel.fetchScores()
+                triggerPreResolution()
+            } 
+        }
+        .onChangeCompat(of: viewModel.searchText) { text in 
+            scoreViewModel.applyFilter(text: text)
+            triggerPreResolution()
+        }
         .sheet(isPresented: $viewModel.showSelectionSheet) { ManualSelectionSheet(viewModel: viewModel, accentColor: accentColor, playAction: playAction) }
+    }
+    
+    private func triggerPreResolution() {
+        let sport = scoreViewModel.selectedSport
+        let games: [ESPNEvent]
+        if isSoccerCategory(sport) {
+            games = scoreViewModel.sectionsMap[sport]?.flatMap { $0.games } ?? []
+        } else {
+            games = scoreViewModel.filteredGames[sport] ?? []
+        }
+        
+        if !games.isEmpty {
+            viewModel.preResolveGames(games)
+        }
+    }
+    
+    private func isSoccerCategory(_ sport: SportType) -> Bool {
+        return sport == .soccerLeagues || sport == .domesticCups || sport == .continental || sport == .international
     }
     
     private var loadingOverlay: some View {
