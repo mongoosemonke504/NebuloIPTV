@@ -221,8 +221,8 @@ class ChannelViewModel: ObservableObject {
             
             await MainActor.run {
                 self.channels = allChannels
-                // Sort categories by name to interleave them
-                self.categories = allCategories.sorted { $0.name < $1.name }
+                // Sort categories by order to respect playlist/account structure
+                self.categories = allCategories.sorted { $0.order < $1.order }
                 
                 self.categorizeSports()
                 self.saveToCache()
@@ -1258,7 +1258,7 @@ class ChannelViewModel: ObservableObject {
                 var fin = current!; fin.streamURL = line; fin.name = NameCleaner.clean(fin.name); channels.append(fin); current = nil
             }
         }
-        return (channels, categories.sorted { $0.name < $1.name }, epgUrl)
+        return (channels, categories, epgUrl)
     }
     
     nonisolated static private func buildApiUrl(base: URL, user: String, pass: String, action: String) async throws -> URL {
@@ -1308,7 +1308,7 @@ class ChannelViewModel: ObservableObject {
             // Offset ID
             mutable[i] = StreamCategory(id: originalID + idOffset, name: mutable[i].name)
             if let custom = renames[originalID] { mutable[i].name = custom }
-            mutable[i].order = i 
+            mutable[i].order = i + idOffset
         }
         return mutable.sorted { $0.order < $1.order }
     }
