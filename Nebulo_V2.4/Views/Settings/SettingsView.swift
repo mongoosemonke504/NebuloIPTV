@@ -63,8 +63,8 @@ struct SettingsView: View {
                         SettingsSectionHeader(title: "Playback")
                         PlaybackCard()
                         
-                        // MARK: - SPORTS CENTER
-                        SettingsSectionHeader(title: "Sports Center")
+                        // MARK: - SPORTS
+                        SettingsSectionHeader(title: "Sports")
                         SportsPreferencesCard(viewModel: viewModel)
                         
                         // MARK: - CONTENT MANAGEMENT
