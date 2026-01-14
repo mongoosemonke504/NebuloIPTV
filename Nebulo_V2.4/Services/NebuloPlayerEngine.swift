@@ -310,7 +310,8 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         KSOptions.isAutoPlay = true
         KSOptions.isSecondOpen = true // Re-enable for connection speed
         KSOptions.maxBufferDuration = 300.0 // Keep 5 Minutes Max Buffer
-        KSOptions.preferredForwardBufferDuration = 15.0 // Reduce to 15s to allow quicker start/resume
+        KSOptions.preferredForwardBufferDuration = 4.0 // Reduce wait-to-play threshold
+        KSOptions.isAccurateSeek = true
         
         ksPlayerView.allowNativeControls = useNativeBridge
     }
