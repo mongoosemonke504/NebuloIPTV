@@ -1069,7 +1069,7 @@ class ChannelViewModel: ObservableObject {
 
     func updateEPG(baseURL: URL, user: String, pass: String, force: Bool = false, silent: Bool = false) async {
         let now = Date()
-        let isStale = lastEPGUpdateTime == nil || now.timeIntervalSince(lastEPGUpdateTime!) >= 14400 
+        let isStale = lastEPGUpdateTime == nil || now.timeIntervalSince(lastEPGUpdateTime!) >= 86400 
         
         
         if !force && !isStale {
@@ -1105,7 +1105,7 @@ class ChannelViewModel: ObservableObject {
     
     func updateEPGFromURLs(_ urls: [URL], silent: Bool = false) async {
         let now = Date()
-        let isStale = lastEPGUpdateTime == nil || now.timeIntervalSince(lastEPGUpdateTime!) >= 14400 
+        let isStale = lastEPGUpdateTime == nil || now.timeIntervalSince(lastEPGUpdateTime!) >= 86400 
         
         
         if self.epgData.isEmpty {
@@ -1138,7 +1138,9 @@ class ChannelViewModel: ObservableObject {
             self.loadingStatus = "Updating Guide..."
             
             
-            withAnimation(.spring()) { self.isUpdatingEPG = true }
+            if !effectivelySilent {
+                withAnimation(.spring()) { self.isUpdatingEPG = true }
+            }
         }
         
         let result = await EPGService().fetchAndMergeEPGs(urls: urls) { progress in

@@ -56,28 +56,36 @@ class EPGService: NSObject, XMLParserDelegate {
             print("⏳ [EPGService] Fetching EPG: \(url.absoluteString)")
             
             do {
-                let (data, _) = try await URLSession.shared.data(from: url)
-                let result = await parseEPGData(data)
-                
-                
-                for (name, id) in result.map {
-                    mergedMap[name] = id
+                // Report progress during download (0.0 to 0.9 of this file's share)
+                let fileURL = try await downloadFileWithProgress(url: url) { fileProgress in
+                    let base = Double(index) / total
+                    let share = (1.0 / total) * 0.9
+                    progress(base + (fileProgress * share))
                 }
                 
-                
-                for (channelID, programs) in result.epg {
-                    if mergedEPG[channelID] == nil {
-                        mergedEPG[channelID] = programs
-                    } else {
-                        var existing = mergedEPG[channelID] ?? []
-                        existing.append(contentsOf: programs)
-                        existing.sort { $0.start < $1.start }
-                        
-                        var seen = Set<Date>()
-                        mergedEPG[channelID] = existing.filter { prog in
-                            if seen.contains(prog.start) { return false }
-                            seen.insert(prog.start)
-                            return true
+                // Parsing (0.9 to 1.0 of this file's share)
+                if let data = try? Data(contentsOf: fileURL) {
+                    let result = await parseEPGData(data)
+                    try? FileManager.default.removeItem(at: fileURL)
+                    
+                    for (name, id) in result.map {
+                        mergedMap[name] = id
+                    }
+                    
+                    for (channelID, programs) in result.epg {
+                        if mergedEPG[channelID] == nil {
+                            mergedEPG[channelID] = programs
+                        } else {
+                            var existing = mergedEPG[channelID] ?? []
+                            existing.append(contentsOf: programs)
+                            existing.sort { $0.start < $1.start }
+                            
+                            var seen = Set<Date>()
+                            mergedEPG[channelID] = existing.filter { prog in
+                                if seen.contains(prog.start) { return false }
+                                seen.insert(prog.start)
+                                return true
+                            }
                         }
                     }
                 }
@@ -95,6 +103,14 @@ class EPGService: NSObject, XMLParserDelegate {
         return (mergedEPG, mergedMap)
     }
     
+    private func downloadFileWithProgress(url: URL, onProgress: @escaping (Double) -> Void) async throws -> URL {
+        try await withCheckedThrowingContinuation { continuation in
+            let delegate = EPGDownloadDelegate(onProgress: onProgress, continuation: continuation)
+            let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+            session.downloadTask(with: url).resume()
+        }
+    }
+    
     private func parseEPGData(_ data: Data) async -> (epg: [String: [EPGProgram]], map: [String: String]) {
         return await Task.detached(priority: .userInitiated) {
             let parser = XMLParser(data: data)
@@ -103,6 +119,47 @@ class EPGService: NSObject, XMLParserDelegate {
             parser.parse()
             return (delegate.epgData, delegate.channelNameMap)
         }.value
+    }
+}
+
+class EPGDownloadDelegate: NSObject, URLSessionDownloadDelegate {
+    let onProgress: (Double) -> Void
+    let continuation: CheckedContinuation<URL, Error>
+    private var isResumed = false
+    
+    init(onProgress: @escaping (Double) -> Void, continuation: CheckedContinuation<URL, Error>) {
+        self.onProgress = onProgress
+        self.continuation = continuation
+    }
+    
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+        if totalBytesExpectedToWrite > 0 {
+            let p = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
+            onProgress(p)
+        }
+    }
+    
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        guard !isResumed else { return }
+        
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        do {
+            try FileManager.default.copyItem(at: location, to: tempURL)
+            isResumed = true
+            continuation.resume(returning: tempURL)
+        } catch {
+            isResumed = true
+            continuation.resume(throwing: error)
+        }
+        session.finishTasksAndInvalidate()
+    }
+    
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error = error, !isResumed {
+            isResumed = true
+            continuation.resume(throwing: error)
+            session.finishTasksAndInvalidate()
+        }
     }
 }
 

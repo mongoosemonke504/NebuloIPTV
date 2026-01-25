@@ -18,7 +18,7 @@ struct MainView: SwiftUI.View {
     @State private var selectedRecording: Recording?
     @State private var isPlayerActive: Bool = false
     
-    let refreshTimer = Timer.publish(every: 14400, on: .main, in: .common).autoconnect()
+    let refreshTimer = Timer.publish(every: 86400, on: .main, in: .common).autoconnect()
     var accentColor: Color { Color(hex: customAccentHex) ?? .blue }
     
     var body: some SwiftUI.View {
