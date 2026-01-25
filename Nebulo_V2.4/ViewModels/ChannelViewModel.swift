@@ -132,48 +132,35 @@ class ChannelViewModel: ObservableObject {
         Task { await loadActiveAccounts() }
     }
     
-    func checkReloadNeeded() async {
-        let now = Date()
-        
-        if let last = lastFullLoadTime, now.timeIntervalSince(last) < 1800 {
-            return
-        }
-        
-        print("🔄 [ChannelViewModel] Resume detected, triggering full reload...")
-        await loadActiveAccounts(silent: false)
+    func handleAppActivation() async {
+        print("🔄 [ChannelViewModel] App activated, checking for necessary updates...")
+        await loadActiveAccounts(silent: false, performEpgCheck: true)
     }
 
-    func loadActiveAccounts(silent: Bool = false, force: Bool = false) async {
+    func loadActiveAccounts(silent: Bool = false, force: Bool = false, performEpgCheck: Bool = false) async {
         
         if isLoading && silent { return }
-        
         
         currentLoadTask?.cancel()
         
         currentLoadTask = Task {
             let startTime = Date()
-            let accounts = AccountManager.shared.accounts.filter { $0.isActive }
-            
-            
-            if accounts.isEmpty {
-                return
-            }
-            
-            if Task.isCancelled { return }
-            
-            
+            var hadCachedChannels = false
             
             if !silent && !force {
                 if let (cachedChans, cachedCats) = self.loadFromCache() {
-                    await MainActor.run {
-                        self.channels = cachedChans
-                        self.categories = cachedCats
-                        self.categorizeSports()
-                        
-                        self.isLoading = false 
+                    if !cachedChans.isEmpty {
+                        hadCachedChannels = true
+                        await MainActor.run {
+                            self.channels = cachedChans
+                            self.categories = cachedCats
+                            self.categorizeSports()
+                            self.isLoading = false
+                        }
                     }
-                } else {
-                    
+                }
+                
+                if !hadCachedChannels {
                     await MainActor.run {
                         self.isLoading = true
                         self.loadingStatus = "Loading Playlists..."
@@ -182,7 +169,24 @@ class ChannelViewModel: ObservableObject {
                 }
             }
             
-            
+            let showProgress = performEpgCheck && hadCachedChannels && !force
+            if showProgress {
+                await MainActor.run {
+                    self.isUpdatingEPG = true
+                    self.loadingStatus = "Checking for updates..."
+                    self.startSmoothingTimer()
+                }
+            }
+
+            let accounts = AccountManager.shared.accounts.filter { $0.isActive }
+            if accounts.isEmpty {
+                if showProgress { await MainActor.run { self.isUpdatingEPG = false; self.stopSmoothingTimer() } }
+                return
+            }
+            if Task.isCancelled {
+                if showProgress { await MainActor.run { self.isUpdatingEPG = false; self.stopSmoothingTimer() } }
+                return
+            }
             
             if self.channels.isEmpty {
                 await MainActor.run {
@@ -191,9 +195,6 @@ class ChannelViewModel: ObservableObject {
             }
             
             await MainActor.run {
-                
-                
-                
                 self.activeAccountsMap = Dictionary(uniqueKeysWithValues: accounts.map { ($0.id, $0) })
             }
             
@@ -216,34 +217,56 @@ class ChannelViewModel: ObservableObject {
                 }
             }
             
-            if Task.isCancelled { return }
+            if Task.isCancelled {
+                if showProgress { await MainActor.run { self.isUpdatingEPG = false; self.stopSmoothingTimer() } }
+                return
+            }
             
             await MainActor.run {
                 self.channels = allChannels
-                
                 self.categories = allCategories.sorted { $0.order < $1.order }
-                
                 self.categorizeSports()
                 self.saveToCache()
             }
             
-            await self.preloadImages()
-            await self.updateEPGFromURLs(epgUrls, force: force, silent: silent || (!self.channels.isEmpty && !force)) 
+            let silentEpg = silent || (hadCachedChannels && !force)
             
+            if performEpgCheck {
+                let now = Date()
+                let isEpgStale = self.lastEPGUpdateTime == nil || now.timeIntervalSince(self.lastEPGUpdateTime!) >= 86400
+
+                if isEpgStale {
+                    await self.preloadImages()
+                    await self.updateEPGFromURLs(epgUrls, force: force, silent: silentEpg)
+                } else {
+                    await self.updateEPGFromURLs(epgUrls, force: force, silent: silentEpg)
+                    await self.preloadImages()
+                }
+            } else {
+                await self.preloadImages()
+                await self.updateEPGFromURLs(epgUrls, force: force, silent: silentEpg)
+            }
             
             if !silent && self.isLoading {
                 let elapsed = Date().timeIntervalSince(startTime)
-                if elapsed < 3.0 {
-                    let remaining = 3.0 - elapsed
+                if elapsed < 1.5 {
+                    let remaining = 1.5 - elapsed
                     try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
                 }
             }
             
-            if Task.isCancelled { return }
+            if Task.isCancelled {
+                if showProgress { await MainActor.run { self.isUpdatingEPG = false; self.stopSmoothingTimer() } }
+                return
+            }
             
             await MainActor.run {
                 self.lastFullLoadTime = Date()
                 self.isLoading = false
+                if showProgress {
+                    self.isUpdatingEPG = false
+                    self.stopSmoothingTimer()
+                }
             }
         }
         
@@ -1022,48 +1045,60 @@ class ChannelViewModel: ObservableObject {
             return
         }
         
-        await MainActor.run { self.loadingStatus = "Smart Caching Images..." }
-        
-        
         let allChannels = self.channels
         let favorites = self.favoriteIDs
         let recents = self.recentIDs
         
-        
         var targetIDs = Set<Int>()
-        
-        
         targetIDs.formUnion(favorites)
         targetIDs.formUnion(recents)
-        
-        
         targetIDs.formUnion(allChannels.prefix(100).map { $0.id })
         
-        print("🚀 [ChannelViewModel] Starting Smart Cache for \(targetIDs.count) priority channels...")
+        let urlsToPrefetch: [String] = allChannels.compactMap { channel in
+            guard targetIDs.contains(channel.id) else { return nil }
+            guard let icon = channel.icon, !icon.isEmpty else { return nil }
+            guard !ImageCache.shared.hasImage(forKey: icon) else { return nil }
+            return icon
+        }
+
+        if urlsToPrefetch.isEmpty {
+            return
+        }
+
+        await MainActor.run {
+            self.loadingStatus = "Smart Caching Images..."
+            self.epgProgress = 0
+            self.visualProgress = 0
+        }
         
+        print("🚀 [ChannelViewModel] Starting Smart Cache for \(urlsToPrefetch.count) priority images...")
+        
+        let total = urlsToPrefetch.count
+        
+        actor ProgressCounter {
+            var count = 0
+            func incrementAndGet() -> Int {
+                count += 1
+                return count
+            }
+        }
+        let counter = ProgressCounter()
+
         await withTaskGroup(of: Void.self) { group in
-            var active = 0
-            let limit = 50 
-            
-            for channel in allChannels {
-                
-                if !targetIDs.contains(channel.id) { continue }
-                
-                if let icon = channel.icon, !icon.isEmpty {
-                    
-                    if ImageCache.shared.hasImage(forKey: icon) { continue }
-                    
-                    if active >= limit { await group.next(); active -= 1 }
-                    
-                    group.addTask {
-                        await ImageCache.prefetchAndWait(urlString: icon, size: CGSize(width: 50, height: 50))
+            for url in urlsToPrefetch {
+                group.addTask {
+                    await ImageCache.prefetchAndWait(urlString: url, size: CGSize(width: 50, height: 50))
+                    let completed = await counter.incrementAndGet()
+                    await MainActor.run {
+                        self.epgProgress = Double(completed) / Double(total)
                     }
-                    active += 1
                 }
             }
         }
         
-        await MainActor.run { self.lastImageCacheTime = now }
+        await MainActor.run {
+            self.lastImageCacheTime = now
+        }
         print("✅ [ChannelViewModel] Smart Cache complete.")
     }
 
@@ -1140,13 +1175,13 @@ class ChannelViewModel: ObservableObject {
             
             if !effectivelySilent {
                 withAnimation(.spring()) { self.isUpdatingEPG = true }
+                self.startSmoothingTimer()
             }
         }
         
         let result = await EPGService().fetchAndMergeEPGs(urls: urls) { progress in
             Task { @MainActor in
                 self.epgProgress = progress
-                self.visualProgress = progress
             }
         }
         
@@ -1159,6 +1194,7 @@ class ChannelViewModel: ObservableObject {
             
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                 withAnimation(.spring()) { self.isUpdatingEPG = false }
+                self.stopSmoothingTimer()
             }
             
             self.isLoading = false 
@@ -1513,5 +1549,29 @@ class ChannelViewModel: ObservableObject {
         }
         
         return nil
+    }
+    
+    private func startSmoothingTimer() {
+        stopSmoothingTimer() 
+        self.visualProgress = 0
+        self.epgProgress = 0
+        smoothingTimer = Timer.publish(every: 0.016, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                guard let self = self else { return }
+                if self.isUpdatingEPG {
+                    let diff = self.epgProgress - self.visualProgress
+                    if abs(diff) > 0.001 {
+                        self.visualProgress += diff * 0.04
+                    } else {
+                        self.visualProgress = self.epgProgress
+                    }
+                }
+            }
+    }
+
+    private func stopSmoothingTimer() {
+        smoothingTimer?.cancel()
+        smoothingTimer = nil
     }
 }

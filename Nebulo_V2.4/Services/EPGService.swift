@@ -96,7 +96,8 @@ class EPGService: NSObject, XMLParserDelegate {
                             let elapsed = Date().timeIntervalSince(startTime)
                             
                             // Linear progress based on expected duration, capped at 99%
-                            let estimatedProgress = min(elapsed / expectedParseTime, 0.99)
+                            let progressFactor = elapsed / expectedParseTime
+                            let estimatedProgress = min(1.0 - exp(-2.5 * progressFactor), 0.99)
                             
                             let totalFileProgress = downloadShare + (estimatedProgress * parseShare)
                             progress(base + (totalFileProgress * fileShare))

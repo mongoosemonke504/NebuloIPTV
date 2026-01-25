@@ -25,7 +25,7 @@ struct Nebulo_V2_4App: App {
                 }
                 .onChange(of: scenePhase) { phase in
                     if phase == .active {
-                        Task { await channelViewModel.checkReloadNeeded() }
+                        Task { await channelViewModel.handleAppActivation() }
                     }
                 }
                 .onReceive(timer) { _ in
