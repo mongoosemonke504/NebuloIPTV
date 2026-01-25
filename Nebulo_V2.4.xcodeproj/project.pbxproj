@@ -146,7 +146,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\necho \"Checking for libshaderc_combined.framework Info.plist...\"\nPLIST_PATH=\"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/libshaderc_combined.framework/Info.plist\"\necho \"Expected path: $PLIST_PATH\"\nif [ -f \"$PLIST_PATH\" ]; then\n    echo \"Found Info.plist, fixing CFBundleIdentifier...\"\n    /usr/libexec/PlistBuddy -c \"Set :CFBundleIdentifier com.kintan.ksplayer.libshaderc-combined\" \"$PLIST_PATH\"\n    echo \"Successfully fixed CFBundleIdentifier.\"\nelse\n    echo \"Info.plist not found at expected path. Skipping.\"\nfi\n";
+			shellScript = "set -e\necho \"Checking for libshaderc_combined.framework Info.plist...\"\nPLIST_PATH=\"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/libshaderc_combined.framework/Info.plist\"\necho \"Expected path: $PLIST_PATH\"\nif [ -f \"$PLIST_PATH\" ]; then\n    echo \"Found Info.plist, fixing CFBundleIdentifier...\"\n    /usr/libexec/PlistBuddy -c \"Set :CFBundleIdentifier com.kintan.ksplayer.libshaderc-combined\" \"$PLIST_PATH\"\n    echo \"Successfully fixed CFBundleIdentifier.\"\n    codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" \"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/libshaderc_combined.framework\"\nelse\n    echo \"Info.plist not found at expected path. Skipping.\"\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
