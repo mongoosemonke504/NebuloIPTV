@@ -237,7 +237,13 @@ extension MainView {
                 status: viewModel.loadingStatus,
                 progress: viewModel.isUpdatingEPG ? viewModel.displayEPGProgress : nil,
                 accentColor: accentColor,
-                isBlocking: viewModel.isLoading
+                isBlocking: viewModel.isLoading,
+                onDismiss: {
+                    withAnimation {
+                        viewModel.isLoading = false
+                        viewModel.isUpdatingEPG = false
+                    }
+                }
             )
             .transition(.opacity)
             .zIndex(100)
@@ -884,50 +890,63 @@ struct LoadingStatusOverlay: View {
     var progress: Double? = nil
     let accentColor: Color
     var isBlocking: Bool = true
+    var onDismiss: (() -> Void)? = nil
     
     var body: some View {
-        VStack {
-            VStack(spacing: 12) {
-                HStack(spacing: 12) {
-                    CustomSpinner(color: .white, lineWidth: 3, size: 25)
-                    
-                    Text(status)
-                        .font(.subheadline.bold())
-                        .foregroundColor(.white)
-                        .shadow(radius: 2)
-                }
-                
-                if let progress = progress {
-                    VStack(spacing: 4) {
-                        ProgressView(value: progress, total: 1.0)
-                            .tint(accentColor)
-                            .background(Color.white.opacity(0.1))
-                            .clipShape(Capsule())
-                            .frame(width: 150)
+        GeometryReader { geo in
+            let isLandscape = geo.size.width > geo.size.height
+            
+            VStack {
+                VStack(spacing: 12) {
+                    HStack(spacing: 12) {
+                        CustomSpinner(color: .white, lineWidth: 3, size: 25)
                         
-                        Text("\(Int(progress * 100))%")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundColor(.white.opacity(0.7))
+                        Text(status)
+                            .font(.subheadline.bold())
+                            .foregroundColor(.white)
+                            .shadow(radius: 2)
+                    }
+                    
+                    if let progress = progress {
+                        VStack(spacing: 4) {
+                            ProgressView(value: progress, total: 1.0)
+                                .tint(accentColor)
+                                .background(Color.white.opacity(0.1))
+                                .clipShape(Capsule())
+                                .frame(width: 150)
+                            
+                            Text("\(Int(progress * 100))%")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(.white.opacity(0.7))
+                        }
                     }
                 }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
+                .background(Material.ultraThin)
+                .cornerRadius(20)
+                .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.2), lineWidth: 1))
+                .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 5)
+                .padding(.top, isLandscape ? 20 : 60)
+                .gesture(
+                    DragGesture()
+                        .onEnded { value in
+                            if value.translation.height < -20 {
+                                onDismiss?()
+                            }
+                        }
+                )
+                
+                Spacer()
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 16)
-            .background(Material.ultraThin)
-            .cornerRadius(20)
-            .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.2), lineWidth: 1))
-            .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 5)
-            .padding(.top, 60) 
-            
-            Spacer()
+            .frame(maxWidth: .infinity)
+            .background(
+                isBlocking 
+                ? Color.black.opacity(0.01)
+                : Color.clear
+            )
+            .ignoresSafeArea()
+            .allowsHitTesting(isBlocking || onDismiss != nil) 
         }
-        .frame(maxWidth: .infinity)
-        .background(
-            isBlocking 
-            ? Color.black.opacity(0.01)
-            : Color.clear
-        )
-        .ignoresSafeArea()
-        .allowsHitTesting(isBlocking) 
     }
 }

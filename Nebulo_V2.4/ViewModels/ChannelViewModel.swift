@@ -143,7 +143,7 @@ class ChannelViewModel: ObservableObject {
         await loadActiveAccounts(silent: false)
     }
 
-    func loadActiveAccounts(silent: Bool = false) async {
+    func loadActiveAccounts(silent: Bool = false, force: Bool = false) async {
         
         if isLoading && silent { return }
         
@@ -163,7 +163,7 @@ class ChannelViewModel: ObservableObject {
             
             
             
-            if !silent {
+            if !silent && !force {
                 if let (cachedChans, cachedCats) = self.loadFromCache() {
                     await MainActor.run {
                         self.channels = cachedChans
@@ -228,7 +228,7 @@ class ChannelViewModel: ObservableObject {
             }
             
             await self.preloadImages()
-            await self.updateEPGFromURLs(epgUrls, silent: silent || !self.channels.isEmpty) 
+            await self.updateEPGFromURLs(epgUrls, force: force, silent: silent || (!self.channels.isEmpty && !force)) 
             
             
             if !silent && self.isLoading {
@@ -1103,7 +1103,7 @@ class ChannelViewModel: ObservableObject {
         await updateEPGFromURLs(urls, silent: silent)
     }
     
-    func updateEPGFromURLs(_ urls: [URL], silent: Bool = false) async {
+    func updateEPGFromURLs(_ urls: [URL], force: Bool = false, silent: Bool = false) async {
         let now = Date()
         let isStale = lastEPGUpdateTime == nil || now.timeIntervalSince(lastEPGUpdateTime!) >= 86400 
         
@@ -1118,14 +1118,14 @@ class ChannelViewModel: ObservableObject {
         }
         
         
-        if !isStale && !self.epgData.isEmpty {
+        if !force && !isStale && !self.epgData.isEmpty {
             print("✅ [EPG] Data is fresh. Skipping network fetch.")
             return
         }
         
         
         
-        let effectivelySilent = silent || !self.epgData.isEmpty
+        let effectivelySilent = silent || (!self.epgData.isEmpty && !force)
         
         await MainActor.run {
             
@@ -1167,7 +1167,7 @@ class ChannelViewModel: ObservableObject {
     
     
     func updateEPGFromURL(_ url: URL, silent: Bool = false) async {
-        await updateEPGFromURLs([url], silent: silent)
+        await updateEPGFromURLs([url], force: false, silent: silent)
     }
     
     

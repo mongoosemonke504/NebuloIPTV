@@ -587,7 +587,7 @@ struct ContentManagementCard: View {
                 Button(action: {
                     dismiss()
                     Task {
-                        await viewModel.loadActiveAccounts(silent: false)
+                        await viewModel.loadActiveAccounts(silent: false, force: true)
                         await scoreViewModel.fetchScores(forceRefresh: true)
                     }
                 }) {

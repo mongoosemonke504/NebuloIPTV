@@ -52,20 +52,67 @@ class EPGService: NSObject, XMLParserDelegate {
         var mergedMap: [String: String] = [:]
         
         let total = Double(urls.count)
+        
+        // Split progress: 20% for download, 80% for parsing (since parsing is the bottleneck)
+        let downloadShare = 0.2
+        let parseShare = 0.8
+        
         for (index, url) in urls.enumerated() {
             print("⏳ [EPGService] Fetching EPG: \(url.absoluteString)")
             
+            // Retrieve cached size & parse time for better progress estimation
+            let sizeKey = "epg_size_" + url.absoluteString
+            let timeKey = "epg_parse_time_" + url.absoluteString
+            
+            let cachedSize = UserDefaults.standard.integer(forKey: sizeKey)
+            let cachedTime = UserDefaults.standard.double(forKey: timeKey)
+            
+            let expectedSize = cachedSize > 0 ? Int64(cachedSize) : nil
+            let expectedParseTime = cachedTime > 0 ? cachedTime : 20.0 // Default to 20s if unknown
+            
+            let base = Double(index) / total
+            let fileShare = 1.0 / total
+            
             do {
-                // Report progress during download (0.0 to 0.9 of this file's share)
-                let fileURL = try await downloadFileWithProgress(url: url) { fileProgress in
-                    let base = Double(index) / total
-                    let share = (1.0 / total) * 0.9
-                    progress(base + (fileProgress * share))
+                // Report progress during download (0.0 to 0.2 of this file's share)
+                let fileURL = try await downloadFileWithProgress(url: url, expectedSize: expectedSize) { fileProgress in
+                    let currentFileProgress = fileProgress * downloadShare
+                    progress(base + (currentFileProgress * fileShare))
                 }
                 
-                // Parsing (0.9 to 1.0 of this file's share)
+                // Cache the downloaded file size
+                if let attr = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+                   let fileSize = attr[.size] as? Int64 {
+                    UserDefaults.standard.set(Int(fileSize), forKey: sizeKey)
+                }
+                
+                // Parsing (0.2 to 1.0 of this file's share)
                 if let data = try? Data(contentsOf: fileURL) {
+                    
+                    // Start a "smart ticker" that uses historical parse time
+                    let ticker = Task {
+                        let startTime = Date()
+                        while !Task.isCancelled {
+                            let elapsed = Date().timeIntervalSince(startTime)
+                            
+                            // Linear progress based on expected duration, capped at 99%
+                            let estimatedProgress = min(elapsed / expectedParseTime, 0.99)
+                            
+                            let totalFileProgress = downloadShare + (estimatedProgress * parseShare)
+                            progress(base + (totalFileProgress * fileShare))
+                            
+                            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+                        }
+                    }
+                    
+                    let parseStart = Date()
                     let result = await parseEPGData(data)
+                    ticker.cancel() // Stop the ticker
+                    
+                    // Cache the actual parse duration for next time
+                    let actualDuration = Date().timeIntervalSince(parseStart)
+                    UserDefaults.standard.set(actualDuration, forKey: timeKey)
+                    
                     try? FileManager.default.removeItem(at: fileURL)
                     
                     for (name, id) in result.map {
@@ -103,9 +150,9 @@ class EPGService: NSObject, XMLParserDelegate {
         return (mergedEPG, mergedMap)
     }
     
-    private func downloadFileWithProgress(url: URL, onProgress: @escaping (Double) -> Void) async throws -> URL {
+    private func downloadFileWithProgress(url: URL, expectedSize: Int64?, onProgress: @escaping (Double) -> Void) async throws -> URL {
         try await withCheckedThrowingContinuation { continuation in
-            let delegate = EPGDownloadDelegate(onProgress: onProgress, continuation: continuation)
+            let delegate = EPGDownloadDelegate(onProgress: onProgress, continuation: continuation, expectedSize: expectedSize)
             let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
             session.downloadTask(with: url).resume()
         }
@@ -125,18 +172,23 @@ class EPGService: NSObject, XMLParserDelegate {
 class EPGDownloadDelegate: NSObject, URLSessionDownloadDelegate {
     let onProgress: (Double) -> Void
     let continuation: CheckedContinuation<URL, Error>
+    let expectedSize: Int64?
     private var isResumed = false
     
-    init(onProgress: @escaping (Double) -> Void, continuation: CheckedContinuation<URL, Error>) {
+    init(onProgress: @escaping (Double) -> Void, continuation: CheckedContinuation<URL, Error>, expectedSize: Int64?) {
         self.onProgress = onProgress
         self.continuation = continuation
+        self.expectedSize = expectedSize
     }
     
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-        if totalBytesExpectedToWrite > 0 {
-            let p = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
-            onProgress(p)
+        var total = Double(totalBytesExpectedToWrite)
+        if total <= 0 {
+            total = Double(expectedSize ?? 10_000_000)
         }
+        
+        let p = min(Double(totalBytesWritten) / total, 0.99)
+        onProgress(p)
     }
     
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
