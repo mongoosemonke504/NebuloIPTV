@@ -309,8 +309,8 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         
         KSOptions.isAutoPlay = true
         KSOptions.isSecondOpen = true // Enable hardware acceleration/fast open
-        KSOptions.maxBufferDuration = 300.0 
-        KSOptions.preferredForwardBufferDuration = 0 
+        KSOptions.maxBufferDuration = 600.0 
+        KSOptions.preferredForwardBufferDuration = 5.0
         KSOptions.isAccurateSeek = false
         
         ksPlayerView.allowNativeControls = useNativeBridge
@@ -356,6 +356,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     }
     
     public func resume() {
+         setupAudioSession()
          userPaused = false 
          if let pauseDate = lastPauseDate, -pauseDate.timeIntervalSinceNow > 15 {
              if let url = currentURL, !url.absoluteString.contains("/timeshift/") {
@@ -376,7 +377,11 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
           if currentBackend == .vlc {
              if !vlcMediaPlayer.isPlaying { vlcMediaPlayer.play() }
              isPlaying = true
-         } else if currentBackend == .ksplayer { ksPlayerView.play() }
+         } else if currentBackend == .ksplayer {
+             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                 self.ksPlayerView.play()
+             }
+         }
     }
     
     
@@ -582,7 +587,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             case .error: self.isBuffering = false; self.handleKSPlayerError()
             case .paused:
                 self.isBuffering = false
-                if !self.userPaused { self.resume() } else { self.isPlaying = false }
+                self.isPlaying = false
             case .readyToPlay: 
                 self.isBuffering = false
                 self.isPlaying = true
