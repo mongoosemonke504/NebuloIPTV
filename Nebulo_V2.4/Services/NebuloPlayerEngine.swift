@@ -414,21 +414,24 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         stopBufferWatchdog()
         
         if currentBackend == .ksplayer {
-            print("⚠️ [NebuloEngine] KSPlayer unstable. Falling back to VLC...")
-            let savedTime = currentTime
-            
-            
-            DispatchQueue.main.async {
-                self.ksPlayerView.pause()
-                self.ksPlayerView.removeFromSuperview()
+            if ksPlayerRetryCount < maxKSPlayerRetries {
+                print("⚠️ [NebuloEngine] KSPlayer stalled. Reloading...")
+                ksPlayerRetryCount += 1
+                _ = attemptKSPlayerPlayback(url: url)
+            } else {
+                print("⚠️ [NebuloEngine] KSPlayer unstable. Falling back to VLC...")
+                let savedTime = currentTime
                 
-                
-                self.playVLC(url: url)
-                
-                
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    if self.currentBackend == .vlc {
-                        self.vlcMediaPlayer.time = VLCTime(int: Int32(savedTime * 1000))
+                DispatchQueue.main.async {
+                    self.ksPlayerView.pause()
+                    self.ksPlayerView.removeFromSuperview()
+                    
+                    self.playVLC(url: url)
+                    
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        if self.currentBackend == .vlc {
+                            self.vlcMediaPlayer.time = VLCTime(int: Int32(savedTime * 1000))
+                        }
                     }
                 }
             }
@@ -536,7 +539,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             
             
             if abs(currentTime - lastProgressValue) < 0.1 {
-                if let lastCheck = lastProgressCheckTime, now.timeIntervalSince(lastCheck) > 15.0 {
+                if let lastCheck = lastProgressCheckTime, now.timeIntervalSince(lastCheck) > 30.0 {
                     print("🚨 [NebuloEngine] Playback stalled (time not advancing). Triggering Watchdog.")
                     handleStuckBuffer()
                     lastProgressCheckTime = now 
@@ -587,7 +590,14 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             case .error: self.isBuffering = false; self.handleKSPlayerError()
             case .paused:
                 self.isBuffering = false
-                self.isPlaying = false
+                if !self.userPaused {
+                    print("⚠️ [NebuloEngine] KSPlayer paused unexpectedly. Attempting auto-resume...")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        if !self.userPaused { self.resume() }
+                    }
+                } else {
+                    self.isPlaying = false
+                }
             case .readyToPlay: 
                 self.isBuffering = false
                 self.isPlaying = true
