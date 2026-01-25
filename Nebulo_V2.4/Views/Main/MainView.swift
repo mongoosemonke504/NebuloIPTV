@@ -207,7 +207,7 @@ extension MainView {
         }
         
         if let channel = selectedChannel { 
-            CustomVideoPlayerView(channel: channel, viewModel: viewModel, onDismiss: { 
+            CustomVideoPlayerView(channel: channel, viewModel: viewModel, epgTime: viewModel.currentTime, onDismiss: { 
                 if selectedChannel?.id == channel.id { 
                     withAnimation(.easeInOut(duration: 0.4)) { 
                         selectedChannel = nil

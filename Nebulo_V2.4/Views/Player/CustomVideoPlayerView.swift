@@ -5,6 +5,7 @@ import KSPlayer
 struct CustomVideoPlayerView: SwiftUI.View {
     let channel: StreamChannel
     var viewModel: ChannelViewModel? = nil
+    var epgTime: Date = Date()
     var namespace: Namespace.ID? = nil
     var onDismiss: (() -> Void)? = nil
     var onPlayChannel: ((StreamChannel) -> Void)? = nil
@@ -338,7 +339,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
                 resetTimer()
             }
         }
-        .onChangeCompat(of: viewModel?.currentTime) { _ in
+        .onChangeCompat(of: epgTime) { _ in
             updateMetadata()
         }
         .onChangeCompat(of: showQuickSwitcher) { isOpen in 
