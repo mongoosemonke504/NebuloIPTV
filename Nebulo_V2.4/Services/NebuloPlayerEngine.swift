@@ -308,10 +308,10 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         ksPlayerView.onFinish = { [weak self] error in if error != nil { self?.handleKSPlayerError() } }
         
         KSOptions.isAutoPlay = true
-        KSOptions.isSecondOpen = true // Enable hardware acceleration/fast open
+        KSOptions.isSecondOpen = true // Enable hardware acceleration to avoid FFmpeg HTTPS issues
         KSOptions.maxBufferDuration = 300.0 
-        KSOptions.preferredForwardBufferDuration = 30.0 
-        KSOptions.isAccurateSeek = false 
+        KSOptions.preferredForwardBufferDuration = 60.0 
+        KSOptions.isAccurateSeek = false
         
         ksPlayerView.allowNativeControls = useNativeBridge
     }

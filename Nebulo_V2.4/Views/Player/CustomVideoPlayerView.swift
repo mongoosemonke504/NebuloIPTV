@@ -338,6 +338,9 @@ struct CustomVideoPlayerView: SwiftUI.View {
                 resetTimer()
             }
         }
+        .onChangeCompat(of: viewModel?.currentTime) { _ in
+            updateMetadata()
+        }
         .onChangeCompat(of: showQuickSwitcher) { isOpen in 
             if isOpen { 
                 frozenRecentIDs = viewModel?.recentIDs ?? []
@@ -346,6 +349,15 @@ struct CustomVideoPlayerView: SwiftUI.View {
                 quickSwitcherOffset = 200 
                 resetTimer()
             } 
+        }
+    }
+    
+    func updateMetadata() {
+        let prog = viewModel?.getCurrentProgram(for: channel)?.title
+        if let p = prog, !p.isEmpty {
+            playerManager.updateNowPlayingMetadata(title: p, subtitle: channel.name, imageURL: channel.icon)
+        } else {
+            playerManager.updateNowPlayingMetadata(title: channel.name, subtitle: nil, imageURL: channel.icon)
         }
     }
     
