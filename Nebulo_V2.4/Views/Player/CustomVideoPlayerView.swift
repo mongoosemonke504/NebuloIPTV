@@ -431,7 +431,11 @@ struct CustomVideoPlayerView: SwiftUI.View {
                     playerManager.play(url: localURL)
                     
                     let prog = viewModel?.getCurrentProgram(for: channel)?.title
-                    playerManager.updateNowPlayingMetadata(title: channel.name, subtitle: prog, imageURL: channel.icon)
+                    if let p = prog, !p.isEmpty {
+                        playerManager.updateNowPlayingMetadata(title: p, subtitle: channel.name, imageURL: channel.icon)
+                    } else {
+                        playerManager.updateNowPlayingMetadata(title: channel.name, subtitle: nil, imageURL: channel.icon)
+                    }
                 }
                 return
             }
@@ -481,7 +485,11 @@ struct CustomVideoPlayerView: SwiftUI.View {
                 
                 
                 let prog = viewModel?.getCurrentProgram(for: channel)?.title
-                playerManager.updateNowPlayingMetadata(title: channel.name, subtitle: prog, imageURL: channel.icon)
+                if let p = prog, !p.isEmpty {
+                    playerManager.updateNowPlayingMetadata(title: p, subtitle: channel.name, imageURL: channel.icon)
+                } else {
+                    playerManager.updateNowPlayingMetadata(title: channel.name, subtitle: nil, imageURL: channel.icon)
+                }
             }
         }
     }
