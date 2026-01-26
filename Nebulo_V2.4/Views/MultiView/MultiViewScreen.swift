@@ -1,6 +1,7 @@
 import SwiftUI
 import KSPlayer
 import MobileVLCKit
+import AVFoundation
 
 struct MultiViewScreen: View {
     @ObservedObject var viewModel: ChannelViewModel
@@ -282,7 +283,7 @@ struct MultiViewSlot: View {
             Color.black
             
             if let c = channel {
-                GridVLCPlayer(url: URL(string: c.streamURL)!, isMuted: !isFocused, isPlaying: $isPlaying)
+                SmartGridPlayer(url: URL(string: c.streamURL)!, isMuted: !isFocused, isPlaying: $isPlaying)
                     .allowsHitTesting(false)
                 
                 // Gradient overlay for better control visibility
@@ -387,7 +388,7 @@ struct MultiViewSearchSheet: View {
     var body: some View { VStack(spacing: 0) { HStack { Text("Add Stream").font(.headline); Spacer(); Button("Done") { dismiss() }.fontWeight(.bold) }.padding(); HStack { Image(systemName: "magnifyingglass").foregroundColor(.gray); TextField("Search channels...", text: $localSearchText).textFieldStyle(.plain).submitLabel(.search); if !localSearchText.isEmpty { Button(action: { localSearchText = "" }) { Image(systemName: "xmark.circle.fill").foregroundColor(.gray) } } }.padding(10).background(Color.primary.opacity(0.05)).cornerRadius(10).padding(.horizontal).padding(.bottom, 10); List { let res = viewModel.channels.filter { localSearchText.isEmpty || $0.name.localizedCaseInsensitiveContains(localSearchText) }; ForEach(res.prefix(100)) { c in Button(action: { onSelect(c) }) { HStack(spacing: 12) { CachedAsyncImage(urlString: c.icon ?? "", size: CGSize(width: 35, height: 35)).frame(width: 35, height: 35).padding(2).cornerRadius(6); Text(c.name).font(.body).foregroundColor(.primary) } } } }.listStyle(.plain) }.presentationDetents([.medium, .large]) }
 }
 
-struct GridVLCPlayer: UIViewRepresentable {
+struct SmartGridPlayer: UIViewRepresentable {
     let url: URL; let isMuted: Bool; @Binding var isPlaying: Bool
     
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -395,7 +396,7 @@ struct GridVLCPlayer: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         view.backgroundColor = .black
-        context.coordinator.setupPlayer(view: view, url: url)
+        context.coordinator.setup(view: view, url: url)
         return view
     }
     
@@ -404,62 +405,169 @@ struct GridVLCPlayer: UIViewRepresentable {
     }
     
     static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
-        coordinator.player.stop()
-        coordinator.player.drawable = nil
+        coordinator.stopAll()
     }
     
     class Coordinator: NSObject, VLCMediaPlayerDelegate {
-        var parent: GridVLCPlayer
-        let player = VLCMediaPlayer()
-        var currentURL: URL?
-        var watchdogTimer: Timer?
-        var lastTime: Int32 = -1
-        var stuckCount = 0
+        var parent: SmartGridPlayer
+        weak var containerView: UIView?
         
-        init(_ parent: GridVLCPlayer) {
+        // KSPlayer
+        var ksPlayerView: NebuloKSVideoPlayerView?
+        
+        // VLC
+        var vlcPlayer: VLCMediaPlayer?
+        
+        var currentURL: URL?
+        var isVLCFallback = false
+        var retryCount = 0
+        
+        init(_ parent: SmartGridPlayer) {
             self.parent = parent
             super.init()
-            player.delegate = self
         }
         
-        func setupPlayer(view: UIView, url: URL) {
-            player.drawable = view
-            playURL(url)
-            startWatchdog()
-        }
-        
-        func playURL(_ url: URL) {
-            currentURL = url
-            let media = VLCMedia(url: url)
-            
-            
-            media.addOptions([
-                "network-caching": 2000,
-                "clock-jitter": 0,
-                "clock-synchro": 0,
-                "avcodec-hw": "any",
-                "videotoolbox": 1,
-                "framedrop": 1
-            ])
-            player.media = media
-            player.play()
+        func setup(view: UIView, url: URL) {
+            self.containerView = view
+            self.currentURL = url
+            startKSPlayer(url: url)
         }
         
         func update(url: URL, isMuted: Bool, isPlaying: Bool) {
             if currentURL != url {
-                playURL(url)
+                stopAll()
+                isVLCFallback = false // Reset fallback on new URL
+                currentURL = url
+                startKSPlayer(url: url)
             }
             
+            if isVLCFallback {
+                updateVLC(isMuted: isMuted, isPlaying: isPlaying)
+            } else {
+                updateKSPlayer(isMuted: isMuted, isPlaying: isPlaying)
+            }
+        }
+        
+        // MARK: - KSPlayer Logic
+        
+        func startKSPlayer(url: URL) {
+            guard let container = containerView else { return }
             
+            let player = NebuloKSVideoPlayerView()
+            player.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(player)
             
+            NSLayoutConstraint.activate([
+                player.topAnchor.constraint(equalTo: container.topAnchor),
+                player.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+                player.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                player.trailingAnchor.constraint(equalTo: container.trailingAnchor)
+            ])
             
+            player.backgroundColor = .black
             
+            // Configure KSPlayer options
+            // Note: Global options like isAutoPlay are managed by NebuloPlayerEngine
+            let options = KSOptions()
             
+            let resource = KSPlayerResource(url: url, options: options)
+            player.set(resource: resource)
+            
+            // Handle State Changes for Fallback
+            player.onStateChange = { [weak self] state in
+                guard let self = self else { return }
+                if state == .error {
+                    print("⚠️ [MultiView] KSPlayer Error: \(state). Retrying/Fallback...")
+                    self.handleKSFailure()
+                }
+            }
+            
+            // Also listen for finish/error
+            player.onFinish = { [weak self] error in
+                if let err = error {
+                    print("⚠️ [MultiView] KSPlayer Finished with Error: \(err)")
+                    self?.handleKSFailure()
+                }
+            }
+            
+            self.ksPlayerView = player
+        }
+        
+        func updateKSPlayer(isMuted: Bool, isPlaying: Bool) {
+            guard let player = ksPlayerView, let avPlayer = player.playerLayer?.player else { return }
+            
+            // Mute logic - Enforce both isMuted and volume
+            avPlayer.isMuted = isMuted
+            if let realPlayer = avPlayer as? AVPlayer {
+                realPlayer.volume = isMuted ? 0 : 1.0
+            }
+            
+            // Play/Pause logic
+            if isPlaying {
+                if !avPlayer.isPlaying { player.play() }
+            } else {
+                if avPlayer.isPlaying { player.pause() }
+            }
+        }
+        
+        func handleKSFailure() {
+            if retryCount < 1 {
+                retryCount += 1
+                print("🔄 [MultiView] Retrying KSPlayer...")
+                if let url = currentURL {
+                    ksPlayerView?.set(resource: KSPlayerResource(url: url))
+                }
+            } else {
+                print("🚨 [MultiView] KSPlayer Failed. Switching to VLC...")
+                switchToVLC()
+            }
+        }
+        
+        // MARK: - VLC Logic
+        
+        func switchToVLC() {
+            DispatchQueue.main.async {
+                self.ksPlayerView?.pause()
+                self.ksPlayerView?.removeFromSuperview()
+                self.ksPlayerView = nil
+                self.isVLCFallback = true
+                
+                if let url = self.currentURL {
+                    self.startVLC(url: url)
+                }
+            }
+        }
+        
+        func startVLC(url: URL) {
+            guard let container = containerView else { return }
+            
+            let player = VLCMediaPlayer()
+            player.delegate = self
+            player.drawable = container
+            
+            let media = VLCMedia(url: url)
+            media.addOptions([
+                "network-caching": 1500,
+                "clock-jitter": 0,
+                "clock-synchro": 0,
+                "avcodec-hw": "any",
+                "videotoolbox": 1
+            ])
+            player.media = media
+            player.play()
+            
+            self.vlcPlayer = player
+        }
+        
+        func updateVLC(isMuted: Bool, isPlaying: Bool) {
+            guard let player = vlcPlayer else { return }
+            
+            // Mute
             if let audio = player.audio {
                 audio.volume = isMuted ? 0 : 100
             }
             
-            
+            // Play/Pause
             if isPlaying {
                 if !player.isPlaying { player.play() }
             } else {
@@ -467,39 +575,24 @@ struct GridVLCPlayer: UIViewRepresentable {
             }
         }
         
-        func startWatchdog() {
-            watchdogTimer?.invalidate()
-            watchdogTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-                guard let self = self else { return }
-                guard self.parent.isPlaying else { return }
-                
-                
-                
-                let currentTime = self.player.time.intValue
-                
-                
-                
-                
-                
-                if abs(currentTime - self.lastTime) < 100 { 
-                    self.stuckCount += 1
-                    if self.stuckCount >= 5 { 
-                        print("♻️ [MultiView-VLC] Stream stuck, reloading: \(self.currentURL?.lastPathComponent ?? "")")
-                        self.stuckCount = 0
-                        if let url = self.currentURL {
-                            self.playURL(url)
-                        }
-                    }
-                } else {
-                    self.stuckCount = 0
-                }
-                self.lastTime = currentTime
-            }
+        func mediaPlayerStateChanged(_ aNotification: Notification) {
+            // Optional: Handle VLC errors if needed
+        }
+        
+        // MARK: - Cleanup
+        
+        func stopAll() {
+            ksPlayerView?.pause()
+            ksPlayerView?.removeFromSuperview()
+            ksPlayerView = nil
+            
+            vlcPlayer?.stop()
+            vlcPlayer?.drawable = nil
+            vlcPlayer = nil
         }
         
         deinit {
-            watchdogTimer?.invalidate()
-            player.stop()
+            stopAll()
         }
     }
 }
