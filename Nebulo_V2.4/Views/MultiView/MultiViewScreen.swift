@@ -57,11 +57,35 @@ struct MultiViewScreen: View {
                                                 // Smoothly animate frame changes
                                                 .animation(.spring(response: 0.4, dampingFraction: 0.75), value: rect)
                                                 .transition(.opacity)
-                                                .onDrag {
-                                                    return NSItemProvider(object: String(i) as NSString)
-                                                }
-                                                .onDrop(of: ["public.text"], isTargeted: nil) { providers in
-                                                    if let first = providers.first {
+                                                                            .onDrag {
+                                                                                return NSItemProvider(object: String(i) as NSString)
+                                                                            } preview: {
+                                                                                // High-quality Drag Preview
+                                                                                if let channel = viewModel.multiViewSlots[i] {
+                                                                                    VStack(spacing: 12) {
+                                                                                        CachedAsyncImage(urlString: channel.icon ?? "", size: CGSize(width: 60, height: 60))
+                                                                                            .cornerRadius(12)
+                                                                                            .shadow(radius: 5)
+                                                                                        
+                                                                                        Text(channel.name)
+                                                                                            .font(.system(size: 14, weight: .bold))
+                                                                                            .foregroundColor(.white)
+                                                                                            .lineLimit(1)
+                                                                                            .padding(.horizontal, 8)
+                                                                                    }
+                                                                                    .padding(16)
+                                                                                    .frame(width: 160, height: 120)
+                                                                                    .background(
+                                                                                        ZStack {
+                                                                                            Color.black.opacity(0.8)
+                                                                                            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                                                                                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                                                                        }
+                                                                                    )
+                                                                                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                                                                                }
+                                                                            }
+                                                                            .onDrop(of: ["public.text"], isTargeted: nil) { providers in                                                    if let first = providers.first {
                                                         _ = first.loadObject(ofClass: NSString.self) { sourceStr, _ in
                                                             if let str = sourceStr as? String, let sourceIndex = Int(str) {
                                                                 DispatchQueue.main.async {
