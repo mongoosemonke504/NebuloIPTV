@@ -40,25 +40,48 @@ struct MultiViewScreen: View {
                     let rect = getRect(for: i, size: geo.size)
                     let isVisible = shouldShow(index: i)
                     
-                    if isVisible {
-                        MultiViewSlot(
-                            channel: viewModel.multiViewSlots[i],
-                            isFocused: focusedIndex == i,
-                            showControls: showControls,
-                            onTap: {
-                                focusedIndex = i
-                                toggleControls()
-                            },
-                            onAdd: { showSearchSheet = true },
-                            onRemove: { viewModel.updateMultiViewSlot(index: i, channel: nil) }
-                        )
-                        .frame(width: rect.width, height: rect.height)
-                        .position(x: rect.midX, y: rect.midY)
-                        // Smoothly animate frame changes
-                        .animation(.spring(response: 0.4, dampingFraction: 0.75), value: rect)
-                        .transition(.opacity)
-                    }
-                }
+                                            if isVisible {
+                                                MultiViewSlot(
+                                                    channel: viewModel.multiViewSlots[i],
+                                                    isFocused: focusedIndex == i,
+                                                    showControls: showControls,
+                                                    onTap: {
+                                                        focusedIndex = i
+                                                        toggleControls()
+                                                    },
+                                                    onAdd: { showSearchSheet = true },
+                                                    onRemove: { viewModel.updateMultiViewSlot(index: i, channel: nil) }
+                                                )
+                                                .frame(width: rect.width, height: rect.height)
+                                                .position(x: rect.midX, y: rect.midY)
+                                                // Smoothly animate frame changes
+                                                .animation(.spring(response: 0.4, dampingFraction: 0.75), value: rect)
+                                                .transition(.opacity)
+                                                .onDrag {
+                                                    return NSItemProvider(object: String(i) as NSString)
+                                                }
+                                                .onDrop(of: ["public.text"], isTargeted: nil) { providers in
+                                                    if let first = providers.first {
+                                                        _ = first.loadObject(ofClass: NSString.self) { sourceStr, _ in
+                                                            if let str = sourceStr as? String, let sourceIndex = Int(str) {
+                                                                DispatchQueue.main.async {
+                                                                    withAnimation {
+                                                                        viewModel.swapMultiViewSlots(from: sourceIndex, to: i)
+                                                                        // Update focus if needed
+                                                                        if focusedIndex == sourceIndex {
+                                                                            focusedIndex = i
+                                                                        } else if focusedIndex == i {
+                                                                            focusedIndex = sourceIndex
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        return true
+                                                    }
+                                                    return false
+                                                }
+                                            }                }
                 
                 // Empty State / "Add First Stream"
                 if activeIndices.isEmpty {

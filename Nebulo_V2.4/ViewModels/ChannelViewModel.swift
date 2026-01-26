@@ -969,6 +969,12 @@ class ChannelViewModel: ObservableObject {
     }
 
     func updateMultiViewSlot(index: Int, channel: StreamChannel?) { guard index >= 0 && index < 4 else { return }; multiViewSlots[index] = channel }
+    func swapMultiViewSlots(from sourceIndex: Int, to destIndex: Int) {
+        guard sourceIndex >= 0, sourceIndex < 4, destIndex >= 0, destIndex < 4, sourceIndex != destIndex else { return }
+        let temp = multiViewSlots[sourceIndex]
+        multiViewSlots[sourceIndex] = multiViewSlots[destIndex]
+        multiViewSlots[destIndex] = temp
+    }
     func addToMultiView(_ channel: StreamChannel) { if let firstEmpty = multiViewSlots.firstIndex(where: { $0 == nil }) { multiViewSlots[firstEmpty] = channel } else { multiViewSlots[3] = channel } }
     func triggerMultiViewFromPlayer(with channel: StreamChannel) { if let firstEmpty = multiViewSlots.firstIndex(where: { $0 == nil }) { multiViewSlots[firstEmpty] = channel } else { multiViewSlots[0] = channel }; triggerMultiView = true }
     func promptRename(name: String, onConfirm: @escaping (String) -> Void) { self.renameInput = name; self.onRenameConfirm = onConfirm; self.showRenameAlert = true }
