@@ -109,6 +109,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     private var userPaused = false
     private var triedFallback = false
     private var ksPlayerRetryCount = 0
+    private var unexpectedPauseCount = 0
     private let maxKSPlayerRetries = 10 
     
     public private(set) var currentURL: URL?
@@ -309,8 +310,8 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         
         KSOptions.isAutoPlay = true
         KSOptions.isSecondOpen = true // Enable hardware acceleration/fast open
-        KSOptions.maxBufferDuration = 600.0 
-        KSOptions.preferredForwardBufferDuration = 5.0
+        KSOptions.maxBufferDuration = 100.0 
+        KSOptions.preferredForwardBufferDuration = 3.0
         KSOptions.isAccurateSeek = false
         
         ksPlayerView.allowNativeControls = useNativeBridge
@@ -326,6 +327,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         if let current = currentURL, current == url, (isPlaying || isBuffering) { return }
         self.currentURL = url
         self.ksPlayerRetryCount = 0 
+        self.unexpectedPauseCount = 0
         stop()
         self.isBuffering = true
         self.userPaused = false
@@ -591,17 +593,26 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             case .paused:
                 self.isBuffering = false
                 if !self.userPaused {
-                    print("⚠️ [NebuloEngine] KSPlayer paused unexpectedly. Attempting auto-resume...")
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                        if !self.userPaused { self.resume() }
+                    self.unexpectedPauseCount += 1
+                    if self.unexpectedPauseCount > 5 {
+                        print("🚨 [NebuloEngine] KSPlayer stuck in pause loop. Performing hard reload...")
+                        self.unexpectedPauseCount = 0
+                        self.handleKSPlayerError()
+                    } else {
+                        print("⚠️ [NebuloEngine] KSPlayer paused unexpectedly (\(self.unexpectedPauseCount)). Attempting auto-resume...")
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                            if !self.userPaused { self.resume() }
+                        }
                     }
                 } else {
                     self.isPlaying = false
+                    self.unexpectedPauseCount = 0
                 }
             case .readyToPlay: 
                 self.isBuffering = false
                 self.isPlaying = true
                 self.ksPlayerRetryCount = 0 
+                self.unexpectedPauseCount = 0
                 
                 self.applyAspectRatio(self.currentAspectRatio)
             default: self.isBuffering = false; self.isPlaying = true
