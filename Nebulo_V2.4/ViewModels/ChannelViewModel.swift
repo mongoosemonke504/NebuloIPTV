@@ -133,6 +133,19 @@ class ChannelViewModel: ObservableObject {
     }
     
     func handleAppActivation() async {
+        let now = Date()
+        
+        // If we have no channels, always reload immediately
+        if self.channels.isEmpty {
+            print("🔄 [ChannelViewModel] No channels found, triggering immediate load...")
+            await loadActiveAccounts(silent: false, performEpgCheck: true)
+            return
+        }
+
+        if let last = lastFullLoadTime, now.timeIntervalSince(last) < 1800 {
+            return
+        }
+        
         print("🔄 [ChannelViewModel] App activated, checking for necessary updates...")
         await loadActiveAccounts(silent: false, performEpgCheck: true)
     }
