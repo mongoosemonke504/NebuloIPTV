@@ -45,14 +45,10 @@ class UpdateService: ObservableObject {
                 
                 
                 
-                let remoteVer = release.tagName.replacingOccurrences(of: "v", with: "")
-                let localVer = self.currentVersion.replacingOccurrences(of: "V", with: "").components(separatedBy: "(").first ?? ""
+                let remoteVer = release.tagName.replacingOccurrences(of: "v", with: "").replacingOccurrences(of: "V", with: "")
+                let localVer = self.currentVersion.replacingOccurrences(of: "v", with: "").replacingOccurrences(of: "V", with: "").components(separatedBy: "(").first ?? ""
                 
-                
-                
-                
-                
-                if remoteVer != localVer && !release.tagName.isEmpty {
+                if self.isNewer(remote: remoteVer, local: localVer) && !release.tagName.isEmpty {
                     self.latestRelease = UpdateRelease(
                         tagName: release.tagName,
                         body: release.body ?? "No release notes.",
@@ -78,6 +74,18 @@ class UpdateService: ObservableObject {
                 }
             }
         }
+    }
+    
+    func isNewer(remote: String, local: String) -> Bool {
+        let rComponents = remote.split(separator: ".").compactMap { Int($0) }
+        let lComponents = local.split(separator: ".").compactMap { Int($0) }
+        
+        for i in 0..<max(rComponents.count, lComponents.count) {
+            let r = i < rComponents.count ? rComponents[i] : 0
+            let l = i < lComponents.count ? lComponents[i] : 0
+            if r != l { return r > l }
+        }
+        return false
     }
     
     func checkForUpdates() async {
