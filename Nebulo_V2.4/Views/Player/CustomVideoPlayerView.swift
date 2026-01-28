@@ -453,7 +453,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
                 return
             }
             
-            let resolvedURLString = await viewModel?.resolveStalkerStream(channel) ?? channel.streamURL
+            let resolvedURLString = channel.streamURL
             guard let targetURL = URL(string: resolvedURLString) else { return }
             
             

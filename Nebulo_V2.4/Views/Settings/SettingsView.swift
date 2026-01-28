@@ -512,9 +512,9 @@ struct ContentManagementCard: View {
                                 .lineLimit(1)
                             
                             HStack(spacing: 4) {
-                                Image(systemName: account.type == .mac ? "server.rack" : "list.bullet")
+                                Image(systemName: "list.bullet")
                                     .font(.caption2)
-                                Text(account.type == .mac ? "Stalker/MAC" : (account.type == .m3u ? "M3U Playlist" : "Xtream Codes"))
+                                Text(account.type == .m3u ? "M3U Playlist" : "Xtream Codes")
                                     .font(.caption)
                             }
                             .foregroundColor(.white.opacity(0.5))
@@ -598,10 +598,6 @@ struct ContentManagementCard: View {
                 
                 NavigationLink(destination: CategoriesManagerView(categories: $categories, accentColor: accentColor, viewModel: viewModel)) {
                     SettingsRow(icon: "list.bullet.rectangle.portrait.fill", title: "Manage Categories")
-                }
-                
-                NavigationLink(destination: ManageEPGsView()) {
-                    SettingsRow(icon: "list.bullet.clipboard", title: "Manage EPGs")
                 }
                 
                 NavigationLink(destination: RecordingsView(viewModel: viewModel, playAction: { channel in

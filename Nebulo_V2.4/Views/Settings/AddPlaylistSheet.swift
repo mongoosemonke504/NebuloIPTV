@@ -6,7 +6,6 @@ struct AddPlaylistSheet: View {
     @State private var urlInput = ""
     @State private var usernameInput = ""
     @State private var passwordInput = ""
-    @State private var macInput = ""
     @State private var playlistNameInput = ""
     @State private var showError = false
     @State private var errorMessage = ""
@@ -37,7 +36,7 @@ struct AddPlaylistSheet: View {
                                     Button(action: {
                                         withAnimation(.spring()) { selectedLoginType = t }
                                     }) {
-                                        Text(t == .xtream ? "Xtream" : (t == .m3u ? "M3U" : "MAC"))
+                                        Text(t == .xtream ? "Xtream" : "M3U")
                                             .font(.system(size: 13, weight: .bold))
                                             .frame(maxWidth: .infinity)
                                             .frame(height: 38)
@@ -72,9 +71,6 @@ struct AddPlaylistSheet: View {
                                 if selectedLoginType == .xtream {
                                     PlaylistGlassTextField(icon: "person.fill", placeholder: "Username", text: $usernameInput)
                                     PlaylistGlassTextField(icon: "lock.fill", placeholder: "Password", text: $passwordInput, isSecure: true)
-                                } else if selectedLoginType == .mac {
-                                    PlaylistGlassTextField(icon: "cpu", placeholder: "00:1A:79...", text: $macInput)
-                                        .onChangeCompat(of: macInput) { nv in formatMAC(nv) }
                                 }
                             }
                             
@@ -116,32 +112,22 @@ struct AddPlaylistSheet: View {
                     urlInput = acc.url
                     usernameInput = acc.username ?? ""
                     passwordInput = acc.password ?? ""
-                    macInput = acc.macAddress ?? ""
                     selectedLoginType = acc.type
                 }
             }
         }
     }
     
-    func formatMAC(_ input: String) { let clean = input.uppercased().replacingOccurrences(of: "[^0-9A-F]", with: "", options: .regularExpression); var res = ""; for (i, c) in clean.enumerated() { if i > 0 && i % 2 == 0 && i < 12 { res.append(":") }; if i < 12 { res.append(c) } }; macInput = res }
     func parseM3ULink(_ input: String) { guard input.contains("username=") && input.contains("password="), let c = URLComponents(string: input) else { return }; if let u = c.queryItems?.first(where: { $0.name == "username" })?.value { usernameInput = u }; if let p = c.queryItems?.first(where: { $0.name == "password" })?.value { passwordInput = p }; if let sc = c.scheme, let h = c.host { var b = "\(sc)://\(h)"; if let po = c.port { b += ":\(po)" }; urlInput = b } }
     
     func save() {
         
-        if selectedLoginType == .mac {
-            errorMessage = "Stalker/MAC Portal support is currently under construction."
-            showError = true
-            return
-        }
-
         let cl = urlInput.trimmingCharacters(in: .whitespaces)
         var safe = cl
         if safe.hasSuffix("/") { safe = String(safe.dropLast()) }
         
         if selectedLoginType == .xtream {
             guard !usernameInput.isEmpty, !passwordInput.isEmpty, !safe.isEmpty else { errorMessage = "Please enter server URL, username, and password."; showError = true; return }
-        } else if selectedLoginType == .mac {
-            guard !macInput.isEmpty, macInput.count >= 17, !safe.isEmpty else { errorMessage = "Please enter valid Portal URL and MAC."; showError = true; return }
         } else {
             guard !safe.isEmpty else { errorMessage = "Please enter a valid Playlist URL."; showError = true; return }
         }
@@ -153,7 +139,6 @@ struct AddPlaylistSheet: View {
             updated.url = safe
             updated.username = usernameInput
             updated.password = passwordInput
-            updated.macAddress = macInput
             
             
             
@@ -165,8 +150,7 @@ struct AddPlaylistSheet: View {
                 type: selectedLoginType,
                 url: safe,
                 username: usernameInput,
-                password: passwordInput,
-                macAddress: macInput
+                password: passwordInput
             )
             AccountManager.shared.saveAccount(newAccount, makeActive: true)
         }

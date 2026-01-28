@@ -7,8 +7,7 @@ enum AppTheme: String, CaseIterable, Identifiable, Sendable {
 }
 enum LoginType: String, CaseIterable, Identifiable, Sendable, Codable {
     case xtream = "Xtream Codes API"
-    case m3u = "M3U Playlist / Stalker"
-    case mac = "Mac Address / Portal"
+    case m3u = "M3U Playlist"
     var id: String { rawValue }
 }
 

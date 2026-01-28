@@ -84,8 +84,6 @@ class ChannelViewModel: ObservableObject {
     
     var activeAccountsMap: [UUID: Account] = [:]
     
-    var stalkerTokens: [UUID: String] = [:]
-    
     private var currentLoadTask: Task<Void, Never>? 
     
     private var lastEPGUpdateTime: Date? {
@@ -321,14 +319,6 @@ class ChannelViewModel: ObservableObject {
                 c?.queryItems = [URLQueryItem(name: "username", value: user), URLQueryItem(name: "password", value: pass)]
                 if let finalEPG = c?.url { fetchedEPGs.append(finalEPG) }
                 
-            } else if account.type == .mac {
-                guard let baseURL = URL(string: account.url), let mac = account.macAddress else { return ([], [], []) }
-                let (chans, cats, token) = try await ChannelViewModel.fetchStalkerData(portalURL: baseURL, mac: mac, prefix: prefix, idOffset: offset, accountID: account.id)
-                fetchedChannels = chans
-                fetchedCategories = cats
-                await MainActor.run {
-                    self.stalkerTokens[account.id] = token
-                }
             } else {
                 
                 guard let baseURL = URL(string: account.url) else { return ([], [], []) }
@@ -339,11 +329,6 @@ class ChannelViewModel: ObservableObject {
                     fetchedCategories = await ChannelViewModel.processCategories(pCategories, prefix: prefix, idOffset: offset)
                     if let eURL = epgUrl, let u = URL(string: eURL) { fetchedEPGs.append(u) }
                 }
-            }
-            
-            
-            for ext in account.externalEPGUrls {
-                if let u = URL(string: ext) { fetchedEPGs.append(u) }
             }
             
         } catch {
@@ -1041,7 +1026,7 @@ class ChannelViewModel: ObservableObject {
         }
     }
     
-    func loadData(url: String, user: String, pass: String, mac: String? = nil, type: LoginType, silent: Bool = false) async {
+    func loadData(url: String, user: String, pass: String, type: LoginType, silent: Bool = false) async {
         
         if !AccountManager.shared.accounts.isEmpty {
             await loadActiveAccounts(silent: silent)
@@ -1049,7 +1034,7 @@ class ChannelViewModel: ObservableObject {
         }
         
         
-        let tempAccount = Account(name: "Main", type: type, url: url, username: user, password: pass, macAddress: mac, isActive: true, stableID: 0)
+        let tempAccount = Account(name: "Main", type: type, url: url, username: user, password: pass, isActive: true, stableID: 0)
         
         
         await MainActor.run {
@@ -1142,17 +1127,6 @@ class ChannelViewModel: ObservableObject {
         var c = URLComponents(url: epgUrl, resolvingAgainstBaseURL: false)
         c?.queryItems = [URLQueryItem(name: "username", value: user), URLQueryItem(name: "password", value: pass)]
         if let finalEPG = c?.url { urls.append(finalEPG) }
-        
-        if let current = AccountManager.shared.currentAccount {
-            for ext in current.externalEPGUrls {
-                if let u = URL(string: ext) { urls.append(u) }
-            }
-        }
-        
-        
-        
-        
-        
         
         await updateEPGFromURLs(urls, silent: silent)
     }
@@ -1386,159 +1360,7 @@ class ChannelViewModel: ObservableObject {
         }
     }
     
-    
-    @Published var stalkerToken: String? = nil
-    @Published var stalkerPortalURL: URL? = nil
-
-    
-    nonisolated static func fetchStalkerData(portalURL: URL, mac: String, prefix: String, idOffset: Int, accountID: UUID) async throws -> ([StreamChannel], [StreamCategory], String) {
-        let components = URLComponents(url: portalURL.appendingPathComponent("portal.php"), resolvingAgainstBaseURL: false)
-        
-        func createRequest(action: String, token: String? = nil) throws -> URLRequest {
-            var c = components
-            var items = [
-                URLQueryItem(name: "type", value: "stb"),
-                URLQueryItem(name: "action", value: action),
-                URLQueryItem(name: "mac", value: mac)
-            ]
-            if let t = token {
-                items.append(URLQueryItem(name: "token", value: t))
-                if action != "handshake" { items[0].value = "itv" }
-            }
-            c?.queryItems = items
-            guard let url = c?.url else { throw URLError(.badURL) }
-            var req = URLRequest(url: url)
-            req.setValue("Bearer " + (token ?? ""), forHTTPHeaderField: "Authorization")
-            req.setValue("mac="+mac, forHTTPHeaderField: "Cookie")
-            return req
-        }
-        
-        
-        let handshakeReq = try createRequest(action: "handshake")
-        let (hData, _) = try await URLSession.shared.data(for: handshakeReq)
-        
-        struct StalkerResponse: Codable {
-            struct JS: Codable { let token: String? }
-            let js: JS?
-        }
-        
-        let hRes = try JSONDecoder().decode(StalkerResponse.self, from: hData)
-        guard let token = hRes.js?.token else { throw URLError(.userAuthenticationRequired) }
-        
-        
-        let catReq = try createRequest(action: "get_genres", token: token)
-        let (cData, _) = try await URLSession.shared.data(for: catReq)
-        
-        struct StalkerCategory: Codable {
-            let id: String
-            let title: String
-        }
-        struct GenreResponse: Codable {
-            let js: [StalkerCategory]?
-        }
-        
-        let cRes = try JSONDecoder().decode(GenreResponse.self, from: cData)
-        
-        var categories: [StreamCategory] = []
-        let loadedCats = (cRes.js ?? []).compactMap { cat -> StreamCategory? in
-            guard let id = Int(cat.id) else { return nil }
-            return StreamCategory(id: id, name: cat.title)
-        }
-        categories = await processCategories(loadedCats, prefix: prefix, idOffset: idOffset)
-        
-        
-        let chReq = try createRequest(action: "get_all_channels", token: token)
-        let (chData, _) = try await URLSession.shared.data(for: chReq)
-        
-        struct StalkerChannel: Codable {
-            let id: String?
-            let name: String
-            let cmd: String?
-            let tv_genre_id: String?
-            let logo: String?
-        }
-        struct ChannelResponse: Codable {
-            let js: [StalkerChannel]?
-        }
-        
-        let chRes = try JSONDecoder().decode(ChannelResponse.self, from: chData)
-        
-        let data = UserDefaults.standard.data(forKey: prefix + "renamedChannels") ?? Data()
-        let renames = (try? JSONDecoder().decode([Int: String].self, from: data)) ?? [:]
-        
-        let channels = (chRes.js ?? []).compactMap { c -> StreamChannel? in
-            guard let sid = c.id, let intID = Int(sid) else { return nil }
-            guard let catID = Int(c.tv_genre_id ?? "0") else { return nil }
-            
-            
-            let url = c.cmd ?? ""
-            
-            var name = c.name
-            if let custom = renames[intID] { name = custom } 
-            else { name = NameCleaner.clean(name) }
-            
-            return StreamChannel(id: intID + idOffset, name: name, streamURL: url, icon: c.logo, categoryID: catID + idOffset, originalName: c.name, epgID: nil, hasArchive: false, originalID: intID, accountID: accountID)
-        }
-        
-        return (channels, categories, token)
-    }
-    
-    func resolveStalkerStream(_ channel: StreamChannel) async -> String {
-        
-        guard let accID = channel.accountID, let account = activeAccountsMap[accID] else { return channel.streamURL }
-        
-        if account.type == .xtream { return channel.streamURL }
-        if account.type == .m3u { return channel.streamURL }
-        
-        
-        guard let token = stalkerTokens[accID], let portalURL = URL(string: account.url) else { return channel.streamURL }
-        
-        if channel.streamURL.hasPrefix("http") && !channel.streamURL.contains("ffmpeg") { return channel.streamURL }
-        
-        var components = URLComponents(url: portalURL.appendingPathComponent("portal.php"), resolvingAgainstBaseURL: false)
-        components?.queryItems = [
-            URLQueryItem(name: "type", value: "itv"),
-            URLQueryItem(name: "action", value: "create_link"),
-            URLQueryItem(name: "cmd", value: channel.streamURL),
-            URLQueryItem(name: "token", value: token)
-        ]
-        
-        guard let url = components?.url else { return channel.streamURL }
-        var req = URLRequest(url: url)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        
-        do {
-            let (data, _) = try await URLSession.shared.data(for: req)
-            struct LinkResponse: Codable { struct JS: Codable { let cmd: String? }; let js: JS? }
-            let res = try JSONDecoder().decode(LinkResponse.self, from: data)
-            if let finalURL = res.js?.cmd { return finalURL }
-        } catch {
-            print("Stalker resolve error: \(error)")
-        }
-        
-        var clean = channel.streamURL
-        clean = clean.replacingOccurrences(of: "ffmpeg ", with: "")
-        clean = clean.replacingOccurrences(of: "auto ", with: "")
-        return clean
-    }
-    
     func buildTimeshiftURL(channel: StreamChannel, targetDate: Date, program: EPGProgram) async -> URL? {
-        
-        guard let accID = channel.accountID, let account = activeAccountsMap[accID] else { return nil }
-        
-        if account.type == .mac {
-            
-            let resolvedURL = await resolveStalkerStream(channel)
-            guard let url = URL(string: resolvedURL) else { return nil }
-            let offset = Int(targetDate.timeIntervalSince(program.start))
-            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-            var queryItems = components?.queryItems ?? []
-            queryItems.removeAll { $0.name == "timeshift" }
-            queryItems.append(URLQueryItem(name: "timeshift", value: "\(offset)"))
-            components?.queryItems = queryItems
-            return components?.url
-        }
-        
         
         guard let original = URL(string: channel.streamURL) else { return nil }
         let urlString = original.absoluteString
