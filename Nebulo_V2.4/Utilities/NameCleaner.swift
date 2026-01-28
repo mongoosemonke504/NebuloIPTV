@@ -4,10 +4,28 @@ struct NameCleaner {
     nonisolated static func clean(_ name: String) -> String {
         
         var n = name
-        let patterns = ["|US|", "|UK|", "FHD:", "HD:", "HEVC:", "4K:"]
+        let patterns = [
+            "|US|", "|UK|", "|CA|", "|AU|",
+            "FHD:", "HD:", "SD:", "HEVC:", "4K:", "H.265",
+            "(US)", "(UK)", "(CA)", "(AU)",
+            "[US]", "[UK]", "[CA]", "[AU]",
+            "US:", "UK:", "CA:", "AU:",
+            "50 FPS", "60 FPS", "RAW",
+            "FHD", "HD", "SD", "4K" // cautious with these
+        ]
+        
         for p in patterns {
-            n = n.replacingOccurrences(of: p, with: "")
+            // Case insensitive removal for robustness
+            if let range = n.range(of: p, options: .caseInsensitive) {
+                n = n.replacingCharacters(in: range, with: "")
+            }
         }
+        
+        // Remove trailing hyphens or colons that might be left over
+        n = n.trimmingCharacters(in: .whitespacesAndNewlines)
+        if n.hasSuffix("-") { n = String(n.dropLast()) }
+        if n.hasSuffix(":") { n = String(n.dropLast()) }
+        
         return n.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     

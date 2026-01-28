@@ -56,6 +56,7 @@ class ChannelViewModel: ObservableObject {
     @Published var epgProgress: Double = 0
     @Published var isUpdatingEPG: Bool = false
     @Published var loadingStatus: String = "Loading..." 
+    private var lastFetchedEPGUrls: [URL] = []
     
     
     @Published var preferredLanguage: LanguagePreference = .us {
@@ -122,7 +123,10 @@ class ChannelViewModel: ObservableObject {
         AccountManager.shared.$accounts
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                Task { await self?.loadActiveAccounts() }
+                // Dispatch async to ensure property is fully set
+                DispatchQueue.main.async {
+                    Task { await self?.loadActiveAccounts() }
+                }
             }
             .store(in: &cancellables)
             
@@ -405,7 +409,12 @@ class ChannelViewModel: ObservableObject {
         let eID: String? = {
             if let id = channel.epgID, epgData[id] != nil { return id }
             
-            return epgNameMap[channel.name.lowercased()]
+            let direct = epgNameMap[channel.name.lowercased()]
+            if direct != nil { return direct }
+            
+            // Fallback to cleaned name
+            let cleaned = NameCleaner.clean(channel.name).lowercased()
+            return epgNameMap[cleaned]
         }()
         
         guard let id = eID, let schedule = epgData[id] else { return nil }
@@ -415,7 +424,12 @@ class ChannelViewModel: ObservableObject {
     func getNextProgram(for channel: StreamChannel) -> EPGProgram? {
         let eID: String? = {
             if let id = channel.epgID, epgData[id] != nil { return id }
-            return epgNameMap[channel.name.lowercased()]
+            
+            let direct = epgNameMap[channel.name.lowercased()]
+            if direct != nil { return direct }
+            
+            let cleaned = NameCleaner.clean(channel.name).lowercased()
+            return epgNameMap[cleaned]
         }()
         
         guard let id = eID, let schedule = epgData[id] else { return nil }
@@ -1128,6 +1142,12 @@ class ChannelViewModel: ObservableObject {
         c?.queryItems = [URLQueryItem(name: "username", value: user), URLQueryItem(name: "password", value: pass)]
         if let finalEPG = c?.url { urls.append(finalEPG) }
         
+        if let current = AccountManager.shared.currentAccount {
+            for ext in current.externalEPGUrls {
+                if let u = URL(string: ext) { urls.append(u) }
+            }
+        }
+        
         await updateEPGFromURLs(urls, silent: silent)
     }
     
@@ -1135,6 +1155,9 @@ class ChannelViewModel: ObservableObject {
         let now = Date()
         let isStale = lastEPGUpdateTime == nil || now.timeIntervalSince(lastEPGUpdateTime!) >= 86400 
         
+        let urlsChanged = Set(urls) != Set(lastFetchedEPGUrls)
+        if urlsChanged { lastFetchedEPGUrls = urls }
+        let shouldForce = force || urlsChanged
         
         if self.epgData.isEmpty {
              if let cached = EPGService().loadFromDisk(), !cached.epg.isEmpty {
@@ -1146,14 +1169,14 @@ class ChannelViewModel: ObservableObject {
         }
         
         
-        if !force && !isStale && !self.epgData.isEmpty {
+        if !shouldForce && !isStale && !self.epgData.isEmpty {
             print("✅ [EPG] Data is fresh. Skipping network fetch.")
             return
         }
         
         
         
-        let effectivelySilent = silent || (!self.epgData.isEmpty && !force)
+        let effectivelySilent = silent || (!self.epgData.isEmpty && !shouldForce)
         
         await MainActor.run {
             

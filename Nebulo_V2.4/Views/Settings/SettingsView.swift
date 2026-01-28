@@ -600,6 +600,10 @@ struct ContentManagementCard: View {
                     SettingsRow(icon: "list.bullet.rectangle.portrait.fill", title: "Manage Categories")
                 }
                 
+                NavigationLink(destination: ManageEPGsView()) {
+                    SettingsRow(icon: "list.bullet.clipboard", title: "Manage EPGs", subtitle: "\(accountManager.accounts.first(where: { $0.id == accountManager.currentAccount?.id })?.externalEPGUrls.count ?? 0) Sources")
+                }
+                
                 NavigationLink(destination: RecordingsView(viewModel: viewModel, playAction: { channel in
                     dismissSettings()
                     playAction?(channel)
