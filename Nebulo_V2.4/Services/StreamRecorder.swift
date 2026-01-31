@@ -116,8 +116,8 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
         data.append(Data(count: Int(dataSize))) 
         
         do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers, .allowAirPlay])
-            try AVAudioSession.sharedInstance().setActive(true)
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers, .allowAirPlay])
+            try AVAudioSession.sharedInstance().setActive(true, options: .notifyOthersOnDeactivation)
             
             silentAudioPlayer = try AVAudioPlayer(data: data)
             silentAudioPlayer?.numberOfLoops = -1 
@@ -151,8 +151,8 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
         
         
         do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers, .allowAirPlay])
-            try AVAudioSession.sharedInstance().setActive(true)
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers, .allowAirPlay])
+            try AVAudioSession.sharedInstance().setActive(true, options: .notifyOthersOnDeactivation)
             silentAudioPlayer?.play()
         } catch {
             print("⚠️ [StreamRecorder] Failed to activate audio session: \(error)")

@@ -324,8 +324,8 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     }
     
     private func setupAudioSession() {
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [.allowAirPlay, .allowBluetoothA2DP])
-        try? AVAudioSession.sharedInstance().setActive(true)
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [.allowAirPlay, .allowBluetoothA2DP, .mixWithOthers])
+        try? AVAudioSession.sharedInstance().setActive(true, options: .notifyOthersOnDeactivation)
     }
     
     public func play(url: URL) {
@@ -527,7 +527,15 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             let userTime = UserDefaults.standard.double(forKey: "bufferTime")
             if userTime > 0 { bufferMs = Int(userTime * 1000) } else { bufferMs = 10000 }
         }
-        media.addOptions(["network-caching": bufferMs, "clock-jitter": 0, "clock-synchro": 0])
+        
+        let userAgent = "com.apple.avfoundation.videoplayer (iPhone; iOS 17.5.1; Scale/3.00)"
+        media.addOptions([
+            "network-caching": bufferMs,
+            "clock-jitter": 0,
+            "clock-synchro": 0,
+            "user-agent": userAgent
+        ])
+        
         vlcMediaPlayer.media = media
         vlcMediaPlayer.play()
         isBuffering = true; startTicker()
@@ -871,6 +879,8 @@ extension NebuloPlayerEngine: VLCMediaPlayerDelegate {
             print("❌ [NebuloEngine] VLC Error")
             if triedFallback || currentURL?.isFileURL == true {
                 self.playbackFailed = true
+            } else {
+                handleStuckBuffer()
             }
         case .ended, .stopped:
             self.isPlaying = false
