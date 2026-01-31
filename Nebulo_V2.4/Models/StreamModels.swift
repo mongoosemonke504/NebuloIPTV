@@ -22,6 +22,9 @@ struct StreamChannel: Identifiable, Codable, Hashable, Equatable, Sendable {
     var originalID: Int? = nil 
     var accountID: UUID? = nil 
     
+    // New fields for resolution
+    var width: Int?
+    var height: Int?
     
     var searchNormalizedName: String = ""
     var qualityScore: Int = 0
@@ -30,7 +33,8 @@ struct StreamChannel: Identifiable, Codable, Hashable, Equatable, Sendable {
         case id = "stream_id", name = "name", displayName = "stream_display_name", 
              streamURL = "stream_url", icon = "stream_icon", categoryID = "category_id", 
              epgID = "epg_channel_id", tvArchive = "tv_archive",
-             originalID = "original_id_local", accountID = "account_id_local"
+             originalID = "original_id_local", accountID = "account_id_local",
+             width = "width", height = "height"
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -42,6 +46,9 @@ struct StreamChannel: Identifiable, Codable, Hashable, Equatable, Sendable {
         self.epgID = try? c.decodeIfPresent(String.self, forKey: .epgID)
         self.originalID = try? c.decodeIfPresent(Int.self, forKey: .originalID)
         self.accountID = try? c.decodeIfPresent(UUID.self, forKey: .accountID)
+        
+        self.width = try? c.decodeIfPresent(Int.self, forKey: .width)
+        self.height = try? c.decodeIfPresent(Int.self, forKey: .height)
         
         if let archiveStr = try? c.decodeIfPresent(String.self, forKey: .tvArchive) {
             self.hasArchive = archiveStr == "1"
@@ -62,10 +69,12 @@ struct StreamChannel: Identifiable, Codable, Hashable, Equatable, Sendable {
         try container.encode(hasArchive ? 1 : 0, forKey: .tvArchive)
         try container.encodeIfPresent(originalID, forKey: .originalID)
         try container.encodeIfPresent(accountID, forKey: .accountID)
+        try container.encodeIfPresent(width, forKey: .width)
+        try container.encodeIfPresent(height, forKey: .height)
     }
-    nonisolated init(id: Int, name: String, streamURL: String, icon: String?, categoryID: Int, originalName: String?, epgID: String? = nil, hasArchive: Bool = false, originalID: Int? = nil, accountID: UUID? = nil) {
+    nonisolated init(id: Int, name: String, streamURL: String, icon: String?, categoryID: Int, originalName: String?, epgID: String? = nil, hasArchive: Bool = false, originalID: Int? = nil, accountID: UUID? = nil, width: Int? = nil, height: Int? = nil) {
         self.id = id; self.name = name; self.streamURL = streamURL; self.icon = icon; self.categoryID = categoryID; self.originalName = originalName; self.epgID = epgID; self.hasArchive = hasArchive
-        self.originalID = originalID; self.accountID = accountID
+        self.originalID = originalID; self.accountID = accountID; self.width = width; self.height = height
         updateComputedProperties()
     }
     

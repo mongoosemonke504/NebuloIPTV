@@ -10,7 +10,14 @@ struct SmartSearchLogic {
         return lower.contains("header") || lower.contains("marker") || lower.contains("separator") || lower.contains("****")
     }
     
-    nonisolated static func detectQuality(_ text: String) -> StreamQuality {
+    nonisolated static func detectQuality(_ text: String, width: Int? = nil, height: Int? = nil) -> StreamQuality {
+        if let h = height {
+            if h >= 2160 { return .fourK }
+            if h >= 1080 { return .fhd }
+            if h >= 720 { return .hd }
+            if h >= 480 { return .sd }
+        }
+        
         let lower = text.lowercased()
         if lower.contains("4k") || lower.contains("uhd") || lower.contains("2160") { return .fourK }
         if lower.contains("fhd") || lower.contains("1080") { return .fhd }

@@ -370,7 +370,7 @@ struct ManualSelectionSheet: View {
                                 
                                 let fullInfo = "\(channel.name) \(viewModel.getCurrentProgram(for: channel)?.title ?? "") \(viewModel.getCurrentProgram(for: channel)?.description ?? "")"
                                 
-                                let q = SmartSearchLogic.detectQuality(fullInfo)
+                                let q = SmartSearchLogic.detectQuality(fullInfo, width: channel.width, height: channel.height)
                                 if q != .unknown {
                                     Text(q.rawValue.components(separatedBy: " ").first ?? "SD")
                                         .font(.system(size: 9, weight: .bold))

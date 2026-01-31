@@ -747,7 +747,7 @@ class ChannelViewModel: ObservableObject {
                 }
             }
             
-            let q = SmartSearchLogic.detectQuality(fullInfo)
+            let q = SmartSearchLogic.detectQuality(fullInfo, width: channel.width, height: channel.height)
             if preferredQuality == .best {
                 
                 if q == .fourK { score += 40 }
@@ -891,7 +891,7 @@ class ChannelViewModel: ObservableObject {
                     }
                 }
                 
-                let q = SmartSearchLogic.detectQuality(fullInfo)
+                let q = SmartSearchLogic.detectQuality(fullInfo, width: channel.width, height: channel.height)
                 if pQual == .best {
                     
                     if q == .fourK { score += 40 }
@@ -1086,7 +1086,7 @@ class ChannelViewModel: ObservableObject {
                     }
                 }
                 
-                let q = SmartSearchLogic.detectQuality(fullInfo)
+                let q = SmartSearchLogic.detectQuality(fullInfo, width: channel.width, height: channel.height)
                 if pQual == .best {
                     if q == .fourK { score += 40 }
                     else if q == .fhd { score += 30 }
