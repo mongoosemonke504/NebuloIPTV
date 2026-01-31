@@ -16,7 +16,7 @@ struct SmartSearchLogic {
         if lower.contains("fhd") || lower.contains("1080") { return .fhd }
         if lower.contains("hd") || lower.contains("720") || lower.contains("hevc") || lower.contains("h265") || lower.contains("h.265") || lower.contains("60fps") || lower.contains("hdr") { return .hd }
         if lower.contains("sd") || lower.contains("576") || lower.contains("480") { return .sd }
-        return .sd 
+        return .unknown
     }
     
     nonisolated static func checkLanguageMatch(_ text: String, preference: LanguagePreference) -> Bool {

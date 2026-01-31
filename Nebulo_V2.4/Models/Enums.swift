@@ -55,6 +55,7 @@ enum StreamQuality: String, CaseIterable, Identifiable, Sendable {
     case fhd = "FHD (1080p)"
     case hd = "HD (720p)"
     case sd = "SD"
+    case unknown = "Unknown"
     
     var id: String { rawValue }
     
@@ -65,6 +66,7 @@ enum StreamQuality: String, CaseIterable, Identifiable, Sendable {
         case .fhd: return 300
         case .hd: return 200
         case .sd: return 100
+        case .unknown: return 50
         }
     }
 }
