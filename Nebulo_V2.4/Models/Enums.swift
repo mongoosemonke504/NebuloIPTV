@@ -12,6 +12,7 @@ enum LoginType: String, CaseIterable, Identifiable, Sendable, Codable {
 }
 
 enum SportType: String, CaseIterable, Identifiable, Sendable {
+    case pinned = "Pinned"
     case soccerLeagues = "Soccer Leagues"
     case domesticCups = "Domestic Soccer Cups"
     case continental = "Continental Soccer"
@@ -29,6 +30,7 @@ enum SportType: String, CaseIterable, Identifiable, Sendable {
     var id: String { rawValue }
     nonisolated var endpoint: String {
         switch self {
+        case .pinned: return ""
         case .nfl: return "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard"
         case .mlb: return "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard"
         case .nhl: return "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/scoreboard"

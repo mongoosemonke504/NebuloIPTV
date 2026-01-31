@@ -64,7 +64,11 @@ class ScoreViewModel: ObservableObject {
         if let savedOrder = UserDefaults.standard.stringArray(forKey: "sportTabOrder") {
             self.sportTabOrder = savedOrder.compactMap { SportType(rawValue: $0) }
         }
-        if self.sportTabOrder.isEmpty { self.sportTabOrder = SportType.allCases }
+        if self.sportTabOrder.isEmpty { 
+            self.sportTabOrder = SportType.allCases 
+        } else if !self.sportTabOrder.contains(.pinned) {
+            self.sportTabOrder.insert(.pinned, at: 0)
+        }
         
         if let savedHidden = UserDefaults.standard.stringArray(forKey: "hiddenSportTabs") {
             self.hiddenSportTabs = Set(savedHidden.compactMap { SportType(rawValue: $0) })
@@ -429,6 +433,7 @@ class ScoreViewModel: ObservableObject {
                 newFiltered[sport] = sortGames(games)
             }
             self.filteredGames = newFiltered
+            self.filteredGames[.pinned] = allPinnedGames
             
             var newFilteredMap: [SportType: [SoccerGameSection]] = [:]
             for (sport, sections) in masterSectionsMap {
@@ -454,6 +459,7 @@ class ScoreViewModel: ObservableObject {
                 newFiltered[sport] = sortGames(matches)
             }
             self.filteredGames = newFiltered
+            self.filteredGames[.pinned] = allPinnedGames
             
             var newFilteredMap: [SportType: [SoccerGameSection]] = [:]
             for (sport, sections) in masterSectionsMap {
