@@ -8,7 +8,7 @@ class ChannelViewModel: ObservableObject {
     
     @Published var categories: [StreamCategory] = []
     @Published var channels: [StreamChannel] = []
-    @Published var isLoading = false
+    @Published var isLoading = true
     @Published var errorMessage: String? = nil
     
     
@@ -185,7 +185,7 @@ class ChannelViewModel: ObservableObject {
                             self.channels = cachedChans
                             self.categories = cachedCats
                             self.categorizeSports()
-                            self.isLoading = false
+                            // Removed early isLoading = false here
                         }
                     }
                     
@@ -264,7 +264,6 @@ class ChannelViewModel: ObservableObject {
             // 3. Conditional EPG Update
             if shouldUpdateEPG {
                 print("🔄 [ChannelViewModel] Starting Full EPG Update...")
-                await self.preloadImages()
                 await self.updateEPGFromURLs(epgUrls, force: force, silent: silentEpg)
             } else {
                 print("✅ [ChannelViewModel] Skipping EPG Update (Fresh or Not Requested).")
@@ -283,10 +282,20 @@ class ChannelViewModel: ObservableObject {
                         }
                     }
                 }
-                
-                // Still preload images in background just in case
-                await self.preloadImages()
             }
+            
+            // Allow user interaction now (Guide is ready)
+            await MainActor.run {
+                self.lastFullLoadTime = Date()
+                self.isLoading = false
+                if shouldUpdateEPG {
+                    self.isUpdatingEPG = false
+                    self.stopSmoothingTimer()
+                }
+            }
+            
+            // Start silent background image caching
+            await self.preloadImages()
             
             if !silent && self.isLoading {
                 let elapsed = Date().timeIntervalSince(startTime)
@@ -299,16 +308,6 @@ class ChannelViewModel: ObservableObject {
             if Task.isCancelled {
                 await MainActor.run { self.isUpdatingEPG = false; self.stopSmoothingTimer() }
                 return
-            }
-            
-            await MainActor.run {
-                self.lastFullLoadTime = Date()
-                self.isLoading = false
-                // Only hide the EPG bar if we actually finished an update or decided not to do one
-                if shouldUpdateEPG {
-                    self.isUpdatingEPG = false
-                    self.stopSmoothingTimer()
-                }
             }
         }
         

@@ -55,9 +55,11 @@ class ImageCache {
         return fileManager.fileExists(atPath: fileURL.path)
     }
     
-    func set(_ image: UIImage, forKey key: String, size: CGSize? = nil) {
+    func set(_ image: UIImage, forKey key: String, size: CGSize? = nil, skipDiskWrite: Bool = false) {
         let cacheKey = (key + (size != nil ? "_\(Int(size!.width))x\(Int(size!.height))" : "")) as NSString
         cache.setObject(image, forKey: cacheKey)
+        
+        if skipDiskWrite { return }
         
         let safeName = key.hashValueStr
         let fileURL = cacheDirectory.appendingPathComponent(safeName)
@@ -95,7 +97,13 @@ class ImageCache {
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             if let image = UIImage(data: data) {
-                shared.set(image, forKey: urlString, size: size)
+                // Save to disk immediately to ensure persistence across app launches
+                let safeName = urlString.hashValueStr
+                let fileURL = shared.cacheDirectory.appendingPathComponent(safeName)
+                try? data.write(to: fileURL)
+                
+                // Then update memory cache
+                shared.set(image, forKey: urlString, size: size, skipDiskWrite: true)
             }
         } catch {}
     }
