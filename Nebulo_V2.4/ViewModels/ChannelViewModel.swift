@@ -86,6 +86,7 @@ class ChannelViewModel: ObservableObject {
     var activeAccountsMap: [UUID: Account] = [:]
     
     private var currentLoadTask: Task<Void, Never>? 
+    private var currentLoadID: UUID?
     
     private var lastEPGUpdateTime: Date? {
         get {
@@ -171,6 +172,8 @@ class ChannelViewModel: ObservableObject {
         }
         
         currentLoadTask?.cancel()
+        let loadID = UUID()
+        self.currentLoadID = loadID
         
         currentLoadTask = Task {
             let startTime = Date()
@@ -178,6 +181,17 @@ class ChannelViewModel: ObservableObject {
             
             // 2. Set UI State immediately if not silent
             await MainActor.run {
+                // ALWAYS show skeleton on load (fresh or not) unless silent
+                if !silent {
+                    self.isLoading = true
+                    self.loadingStatus = "Loading Playlists..."
+                }
+                
+                // If forcing a reload, clear channels to ensure visual reset
+                if force {
+                    self.channels = []
+                }
+                
                 if !silent && !force {
                     if let (cachedChans, cachedCats) = self.loadFromCache() {
                         if !cachedChans.isEmpty {
@@ -185,14 +199,8 @@ class ChannelViewModel: ObservableObject {
                             self.channels = cachedChans
                             self.categories = cachedCats
                             self.categorizeSports()
-                            // Removed early isLoading = false here
+                            // Do NOT set isLoading = false here. Wait for EPG.
                         }
-                    }
-                    
-                    if !hadCachedChannels {
-                        self.isLoading = true
-                        self.loadingStatus = "Loading Playlists..."
-                        self.errorMessage = nil
                     }
                 }
                 
@@ -207,6 +215,7 @@ class ChannelViewModel: ObservableObject {
             let accounts = AccountManager.shared.accounts.filter { $0.isActive }
             if accounts.isEmpty {
                 await MainActor.run {
+                    guard self.currentLoadID == loadID else { return }
                     self.isUpdatingEPG = false
                     self.stopSmoothingTimer()
                     self.isLoading = false
@@ -214,7 +223,10 @@ class ChannelViewModel: ObservableObject {
                 return
             }
             if Task.isCancelled {
-                await MainActor.run { self.isUpdatingEPG = false; self.stopSmoothingTimer() }
+                await MainActor.run { 
+                    guard self.currentLoadID == loadID else { return }
+                    self.isUpdatingEPG = false; self.stopSmoothingTimer() 
+                }
                 return
             }
             
@@ -248,7 +260,10 @@ class ChannelViewModel: ObservableObject {
             }
             
             if Task.isCancelled {
-                await MainActor.run { self.isUpdatingEPG = false; self.stopSmoothingTimer() }
+                await MainActor.run { 
+                    guard self.currentLoadID == loadID else { return }
+                    self.isUpdatingEPG = false; self.stopSmoothingTimer() 
+                }
                 return
             }
             
@@ -286,6 +301,8 @@ class ChannelViewModel: ObservableObject {
             
             // Allow user interaction now (Guide is ready)
             await MainActor.run {
+                guard self.currentLoadID == loadID else { return }
+                
                 self.lastFullLoadTime = Date()
                 self.isLoading = false
                 if shouldUpdateEPG {
@@ -306,7 +323,10 @@ class ChannelViewModel: ObservableObject {
             }
             
             if Task.isCancelled {
-                await MainActor.run { self.isUpdatingEPG = false; self.stopSmoothingTimer() }
+                await MainActor.run { 
+                    guard self.currentLoadID == loadID else { return }
+                    self.isUpdatingEPG = false; self.stopSmoothingTimer() 
+                }
                 return
             }
         }
@@ -1209,7 +1229,8 @@ class ChannelViewModel: ObservableObject {
         
         await MainActor.run {
             
-            if !effectivelySilent && self.epgData.isEmpty {
+            // Force loading state if fetching EPG, unless silent
+            if !silent {
                 self.isLoading = true
             }
             

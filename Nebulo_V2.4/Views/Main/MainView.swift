@@ -941,12 +941,12 @@ struct LoadingStatusOverlay: View {
             }
             .frame(maxWidth: .infinity)
             .background(
-                isBlocking 
-                ? Color.black.opacity(0.01)
+                isBlocking || progress != nil
+                ? Color.black.opacity(0.4) // Darker background to emphasize blocking
                 : Color.clear
             )
             .ignoresSafeArea()
-            .allowsHitTesting(isBlocking || onDismiss != nil) 
+            .allowsHitTesting(isBlocking || progress != nil) 
         }
     }
 }
