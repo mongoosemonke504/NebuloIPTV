@@ -1,22 +1,24 @@
 import Foundation
 import Compression
 
-class EPGService: NSObject, XMLParserDelegate {
-    private var currentEPG: [String: [EPGProgram]] = [:]
-    private var currentProgram: EPGProgram?
-    private var currentElement = ""
-    private var currentTitle = ""
-    private var currentDesc = ""
-    private var currentChannelID = ""
-    private var currentStart: Date?
-    private var currentStop: Date?
+fileprivate actor ProgressState {
+    var values: [Int: Double] = [:]
+    let total: Int
+    let onUpdate: (Double) -> Void
     
-    private let dateFormatter: DateFormatter = {
-        let df = DateFormatter()
-        
-        df.dateFormat = "yyyyMMddHHmmss Z"
-        return df
-    }()
+    init(total: Int, onUpdate: @escaping (Double) -> Void) {
+        self.total = total
+        self.onUpdate = onUpdate
+    }
+    
+    func update(index: Int, value: Double) {
+        values[index] = value
+        let sum = values.values.reduce(0, +)
+        onUpdate(sum / Double(total))
+    }
+}
+
+class EPGService: NSObject, XMLParserDelegate {
     
     func loadFromDisk() -> (epg: [String: [EPGProgram]], map: [String: String])? {
         let url = getCacheURL()
@@ -49,110 +51,114 @@ class EPGService: NSObject, XMLParserDelegate {
     }
     
     func fetchAndMergeEPGs(urls: [URL], progress: @escaping (Double) -> Void) async -> (epg: [String: [EPGProgram]], map: [String: String]) {
-        var mergedEPG: [String: [EPGProgram]] = [:]
-        var mergedMap: [String: String] = [:]
-        
-        let total = Double(urls.count)
-        if total == 0 { return ([:], [:]) }
-        
-        let results = await withTaskGroup(of: (url: URL, epg: [String: [EPGProgram]], map: [String: String])?.self) { group -> [(url: URL, epg: [String: [EPGProgram]], map: [String: String])] in
+        return await Task.detached(priority: .userInitiated) {
+            var mergedEPG: [String: [EPGProgram]] = [:]
+            var mergedMap: [String: String] = [:]
             
-            for (index, url) in urls.enumerated() {
-                group.addTask {
-                    print("⏳ [EPGService] Concurrent Fetch: \(url.absoluteString)")
-                    
-                    let sizeKey = "epg_size_" + url.absoluteString
-                    let cachedSize = UserDefaults.standard.integer(forKey: sizeKey)
-                    let expectedSize = cachedSize > 0 ? Int64(cachedSize) : nil
-                    
-                    do {
-                        let fileURL = try await self.downloadFileWithProgress(url: url, expectedSize: expectedSize) { _ in }
+            let total = Double(urls.count)
+            if total == 0 { return ([:], [:]) }
+            
+            let tracker = ProgressState(total: urls.count, onUpdate: progress)
+            
+            let downloadShare = 0.2
+            let parseShare = 0.8
+            
+            let results = await withTaskGroup(of: (url: URL, epg: [String: [EPGProgram]], map: [String: String])?.self) { group -> [(url: URL, epg: [String: [EPGProgram]], map: [String: String])] in
+                
+                for (index, url) in urls.enumerated() {
+                    group.addTask {
+                        print("⏳ [EPGService] Concurrent Fetch: \(url.absoluteString)")
                         
-                        if let attr = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
-                           let fileSize = attr[.size] as? Int64 {
-                            UserDefaults.standard.set(Int(fileSize), forKey: sizeKey)
-                        }
+                        let sizeKey = "epg_size_" + url.absoluteString
+                        let timeKey = "epg_parse_time_" + url.absoluteString
                         
-                        if let data = try? Data(contentsOf: fileURL) {
-                            var processedData = data
-                            
-                            // Check for GZIP magic numbers (0x1f 0x8b)
-                            if data.count > 2 && data[0] == 0x1f && data[1] == 0x8b {
-                                print("📦 [EPGService] Detected GZIP content for \(url.absoluteString). Decompressing...")
-                                if let decompressed = self.decompress(data: data) {
-                                    processedData = decompressed
-                                    print("✅ [EPGService] Decompressed size: \(processedData.count) bytes")
-                                } else {
-                                    print("❌ [EPGService] Failed to decompress GZIP data for \(url.absoluteString)")
-                                }
+                        let cachedSize = UserDefaults.standard.integer(forKey: sizeKey)
+                        let cachedTime = UserDefaults.standard.double(forKey: timeKey)
+                        
+                        let expectedSize = cachedSize > 0 ? Int64(cachedSize) : nil
+                        let expectedParseTime = cachedTime > 0 ? cachedTime : 20.0
+                        
+                        do {
+                            let fileURL = try await self.downloadFileWithProgress(url: url, expectedSize: expectedSize) { fileProgress in
+                                let currentFileProgress = fileProgress * downloadShare
+                                Task { await tracker.update(index: index, value: currentFileProgress) }
                             }
                             
-                            let prefix = String(data: processedData.prefix(500), encoding: .utf8) ?? "Unable to decode prefix"
-                            print("📄 [EPGService] Data Preview for \(url.absoluteString): \(prefix)")
+                            if let attr = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+                               let fileSize = attr[.size] as? Int64 {
+                                UserDefaults.standard.set(Int(fileSize), forKey: sizeKey)
+                            }
                             
-                            let result = await self.parseEPGData(processedData)
-                            try? FileManager.default.removeItem(at: fileURL)
-                            
-                            print("📊 [EPGService] Parsed \(result.map.count) channels and \(result.epg.values.reduce(0) { $0 + $1.count }) programs from \(url.absoluteString)")
-                            return (url, result.epg, result.map)
+                            if let data = try? Data(contentsOf: fileURL) {
+                                let ticker = Task {
+                                    let startTime = Date()
+                                    while !Task.isCancelled {
+                                        let elapsed = Date().timeIntervalSince(startTime)
+                                        let progressFactor = elapsed / expectedParseTime
+                                        let estimatedProgress = min(1.0 - exp(-2.5 * progressFactor), 0.99)
+                                        let totalFileProgress = downloadShare + (estimatedProgress * parseShare)
+                                        await tracker.update(index: index, value: totalFileProgress)
+                                        try? await Task.sleep(nanoseconds: 100_000_000)
+                                    }
+                                }
+                                
+                                let parseStart = Date()
+                                let result = await self.parseEPGData(data)
+                                ticker.cancel()
+                                
+                                let actualDuration = Date().timeIntervalSince(parseStart)
+                                UserDefaults.standard.set(actualDuration, forKey: timeKey)
+                                
+                                try? FileManager.default.removeItem(at: fileURL)
+                                
+                                await tracker.update(index: index, value: 1.0)
+                                return (url, result.epg, result.map)
+                            }
+                        } catch {
+                            print("❌ [EPGService] Error fetching \(url): \(error)")
+                            Task { await tracker.update(index: index, value: 1.0) }
                         }
-                    } catch {
-                        print("❌ [EPGService] Error fetching \(url): \(error)")
+                        return nil
                     }
-                    return nil
                 }
-            }
-            
-            var gathered: [(url: URL, epg: [String: [EPGProgram]], map: [String: String])] = []
-            var completedCount = 0.0
-            
-            for await result in group {
-                completedCount += 1.0
-                progress(completedCount / total)
-                if let r = result {
-                    gathered.append(r)
+                
+                var gathered: [(url: URL, epg: [String: [EPGProgram]], map: [String: String])] = []
+                for await result in group {
+                    if let r = result { gathered.append(r) }
                 }
-            }
-            return gathered
-        }
-        
-        for result in results {
-            for (name, id) in result.map {
-                mergedMap[name] = id
+                return gathered
             }
             
-            for (channelID, programs) in result.epg {
-                if mergedEPG[channelID] == nil {
-                    mergedEPG[channelID] = programs
-                } else {
-                    var existing = mergedEPG[channelID] ?? []
-                    existing.append(contentsOf: programs)
-                    existing.sort { $0.start < $1.start }
-                    
-                    var seen = Set<Date>()
-                    mergedEPG[channelID] = existing.filter { prog in
-                        if seen.contains(prog.start) { return false }
-                        seen.insert(prog.start)
-                        return true
+            for result in results {
+                for (name, id) in result.map { mergedMap[name] = id }
+                for (channelID, programs) in result.epg {
+                    if mergedEPG[channelID] == nil {
+                        mergedEPG[channelID] = programs
+                    } else {
+                        var existing = mergedEPG[channelID] ?? []
+                        existing.append(contentsOf: programs)
+                        existing.sort { $0.start < $1.start }
+                        var seen = Set<Date>()
+                        mergedEPG[channelID] = existing.filter { prog in
+                            if seen.contains(prog.start) { return false }
+                            seen.insert(prog.start)
+                            return true
+                        }
                     }
                 }
             }
-        }
-        
-        let totalPrograms = mergedEPG.values.reduce(0) { $0 + $1.count }
-        print("✅ [EPGService] Merged Total: \(totalPrograms) programs for \(mergedEPG.count) channels.")
-        
-        saveToDisk(epg: mergedEPG, map: mergedMap)
-        return (mergedEPG, mergedMap)
+            
+            let totalPrograms = mergedEPG.values.reduce(0) { $0 + $1.count }
+            print("✅ [EPGService] Merged Total: \(totalPrograms) programs for \(mergedEPG.count) channels.")
+            
+            self.saveToDisk(epg: mergedEPG, map: mergedMap)
+            return (mergedEPG, mergedMap)
+        }.value
     }
     
     // GZIP Decompression Helper
     private func decompress(data: Data) -> Data? {
-        let size = 8_000_000 // 8MB initial buffer, hopefully enough for chunks or resize? 
-        // Actually, compression_decode_buffer requires exact output size or handling loop.
-        // A simpler way with Compression framework for unknown size is tricky.
-        // Let's use a reasonably large buffer and simple single-pass for now or assume it fits in 64MB which covers most EPG XMLs.
-        
+        let size = 8_000_000 
         let bufferSize = 64_000_000
         let destinationBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
         
@@ -186,7 +192,7 @@ class EPGService: NSObject, XMLParserDelegate {
     }
     
     private func parseEPGData(_ data: Data) async -> (epg: [String: [EPGProgram]], map: [String: String]) {
-        return await Task.detached(priority: .utility) {
+        return await Task.detached(priority: .userInitiated) {
             let parser = XMLParser(data: data)
             let delegate = EPGParserDelegate()
             parser.delegate = delegate

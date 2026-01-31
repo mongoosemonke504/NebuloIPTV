@@ -1091,33 +1091,36 @@ class ChannelViewModel: ObservableObject {
         
         print("🚀 [ChannelViewModel] Starting Smart Cache for \(urlsToPrefetch.count) priority images...")
         
-        let total = urlsToPrefetch.count
-        
-        actor ProgressCounter {
-            var count = 0
-            func incrementAndGet() -> Int {
-                count += 1
-                return count
-            }
-        }
-        let counter = ProgressCounter()
-
-        await withTaskGroup(of: Void.self) { group in
-            for url in urlsToPrefetch {
-                group.addTask {
-                    await ImageCache.prefetchAndWait(urlString: url, size: CGSize(width: 50, height: 50))
-                    let completed = await counter.incrementAndGet()
-                    await MainActor.run {
-                        self.epgProgress = Double(completed) / Double(total)
+        // Detach to background to prevent any main thread blocking
+        await Task.detached(priority: .utility) {
+            let total = Double(urlsToPrefetch.count)
+            var completedCount = 0
+            
+            await withTaskGroup(of: Void.self) { group in
+                for url in urlsToPrefetch {
+                    group.addTask {
+                        await ImageCache.prefetchAndWait(urlString: url, size: CGSize(width: 50, height: 50))
+                    }
+                }
+                
+                // Track completion without hammering MainActor
+                for await _ in group {
+                    completedCount += 1
+                    // Only update UI every ~2% to keep scrolling smooth
+                    if completedCount % 10 == 0 || completedCount == Int(total) {
+                        let progress = Double(completedCount) / total
+                        await MainActor.run {
+                            self.epgProgress = progress
+                        }
                     }
                 }
             }
-        }
-        
-        await MainActor.run {
-            self.lastImageCacheTime = now
-        }
-        print("✅ [ChannelViewModel] Smart Cache complete.")
+            
+            await MainActor.run {
+                self.lastImageCacheTime = now
+            }
+            print("✅ [ChannelViewModel] Smart Cache complete.")
+        }.value
     }
 
     func updateEPG(baseURL: URL, user: String, pass: String, force: Bool = false, silent: Bool = false) async {
