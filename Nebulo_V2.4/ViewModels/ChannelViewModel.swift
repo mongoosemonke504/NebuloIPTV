@@ -144,11 +144,15 @@ class ChannelViewModel: ObservableObject {
             return
         }
 
-        if let last = lastFullLoadTime, now.timeIntervalSince(last) < 1800 {
+        // Check if EPG is stale (> 24 hours)
+        if let lastUpdate = lastEPGUpdateTime, now.timeIntervalSince(lastUpdate) < 86400 {
+            print("✅ [ChannelViewModel] EPG is fresh (< 24h). Skipping update.")
+            // Still reload accounts/playlists silently to catch stream changes, but skip heavy EPG
+            await loadActiveAccounts(silent: true, performEpgCheck: false)
             return
         }
         
-        print("🔄 [ChannelViewModel] App activated, checking for necessary updates...")
+        print("🔄 [ChannelViewModel] EPG is stale (> 24h). triggering update...")
         await loadActiveAccounts(silent: false, performEpgCheck: true)
     }
 
@@ -156,37 +160,44 @@ class ChannelViewModel: ObservableObject {
         
         if isLoading && silent { return }
         
+        // 1. Determine if we REALLY need to update the EPG
+        var shouldUpdateEPG = performEpgCheck
+        let now = Date()
+        if performEpgCheck && !force {
+            if let last = lastEPGUpdateTime, now.timeIntervalSince(last) < 86400 {
+                print("✅ [ChannelViewModel] EPG is fresh (< 24h). Suppressing EPG update.")
+                shouldUpdateEPG = false
+            }
+        }
+        
         currentLoadTask?.cancel()
         
         currentLoadTask = Task {
             let startTime = Date()
             var hadCachedChannels = false
             
-            if !silent && !force {
-                if let (cachedChans, cachedCats) = self.loadFromCache() {
-                    if !cachedChans.isEmpty {
-                        hadCachedChannels = true
-                        await MainActor.run {
+            // 2. Set UI State immediately if not silent
+            await MainActor.run {
+                if !silent && !force {
+                    if let (cachedChans, cachedCats) = self.loadFromCache() {
+                        if !cachedChans.isEmpty {
+                            hadCachedChannels = true
                             self.channels = cachedChans
                             self.categories = cachedCats
                             self.categorizeSports()
                             self.isLoading = false
                         }
                     }
-                }
-                
-                if !hadCachedChannels {
-                    await MainActor.run {
+                    
+                    if !hadCachedChannels {
                         self.isLoading = true
                         self.loadingStatus = "Loading Playlists..."
                         self.errorMessage = nil
                     }
                 }
-            }
-            
-            let showProgress = performEpgCheck && hadCachedChannels && !force
-            if showProgress {
-                await MainActor.run {
+                
+                // Show the "Updating Guide" bar if we are about to update EPG
+                if shouldUpdateEPG {
                     self.isUpdatingEPG = true
                     self.loadingStatus = "Checking for updates..."
                     self.startSmoothingTimer()
@@ -195,11 +206,15 @@ class ChannelViewModel: ObservableObject {
 
             let accounts = AccountManager.shared.accounts.filter { $0.isActive }
             if accounts.isEmpty {
-                if showProgress { await MainActor.run { self.isUpdatingEPG = false; self.stopSmoothingTimer() } }
+                await MainActor.run {
+                    self.isUpdatingEPG = false
+                    self.stopSmoothingTimer()
+                    self.isLoading = false
+                }
                 return
             }
             if Task.isCancelled {
-                if showProgress { await MainActor.run { self.isUpdatingEPG = false; self.stopSmoothingTimer() } }
+                await MainActor.run { self.isUpdatingEPG = false; self.stopSmoothingTimer() }
                 return
             }
             
@@ -233,7 +248,7 @@ class ChannelViewModel: ObservableObject {
             }
             
             if Task.isCancelled {
-                if showProgress { await MainActor.run { self.isUpdatingEPG = false; self.stopSmoothingTimer() } }
+                await MainActor.run { self.isUpdatingEPG = false; self.stopSmoothingTimer() }
                 return
             }
             
@@ -244,22 +259,33 @@ class ChannelViewModel: ObservableObject {
                 self.saveToCache()
             }
             
-            let silentEpg = silent || (hadCachedChannels && !force)
+            let silentEpg = silent || (hadCachedChannels && !force && !shouldUpdateEPG)
             
-            if performEpgCheck {
-                let now = Date()
-                let isEpgStale = self.lastEPGUpdateTime == nil || now.timeIntervalSince(self.lastEPGUpdateTime!) >= 86400
-
-                if isEpgStale {
-                    await self.preloadImages()
-                    await self.updateEPGFromURLs(epgUrls, force: force, silent: silentEpg)
-                } else {
-                    await self.updateEPGFromURLs(epgUrls, force: force, silent: silentEpg)
-                    await self.preloadImages()
-                }
-            } else {
+            // 3. Conditional EPG Update
+            if shouldUpdateEPG {
+                print("🔄 [ChannelViewModel] Starting Full EPG Update...")
                 await self.preloadImages()
                 await self.updateEPGFromURLs(epgUrls, force: force, silent: silentEpg)
+            } else {
+                print("✅ [ChannelViewModel] Skipping EPG Update (Fresh or Not Requested).")
+                
+                // Load from disk if we don't have data in memory yet
+                if self.epgData.isEmpty {
+                    let loaded = await Task.detached(priority: .userInitiated) {
+                        return EPGService().loadFromDisk()
+                    }.value
+                    
+                    if let cached = loaded, !cached.epg.isEmpty {
+                        print("📂 [ChannelViewModel] Loaded EPG from disk cache.")
+                        await MainActor.run {
+                            self.epgData = cached.epg
+                            self.epgNameMap = cached.map
+                        }
+                    }
+                }
+                
+                // Still preload images in background just in case
+                await self.preloadImages()
             }
             
             if !silent && self.isLoading {
@@ -271,14 +297,15 @@ class ChannelViewModel: ObservableObject {
             }
             
             if Task.isCancelled {
-                if showProgress { await MainActor.run { self.isUpdatingEPG = false; self.stopSmoothingTimer() } }
+                await MainActor.run { self.isUpdatingEPG = false; self.stopSmoothingTimer() }
                 return
             }
             
             await MainActor.run {
                 self.lastFullLoadTime = Date()
                 self.isLoading = false
-                if showProgress {
+                // Only hide the EPG bar if we actually finished an update or decided not to do one
+                if shouldUpdateEPG {
                     self.isUpdatingEPG = false
                     self.stopSmoothingTimer()
                 }
@@ -1106,8 +1133,8 @@ class ChannelViewModel: ObservableObject {
                 // Track completion without hammering MainActor
                 for await _ in group {
                     completedCount += 1
-                    // Only update UI every ~2% to keep scrolling smooth
-                    if completedCount % 10 == 0 || completedCount == Int(total) {
+                    // Only update UI every ~5% to keep scrolling smooth
+                    if completedCount % 20 == 0 || completedCount == Int(total) {
                         let progress = Double(completedCount) / total
                         await MainActor.run {
                             self.epgProgress = progress

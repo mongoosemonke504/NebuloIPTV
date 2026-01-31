@@ -67,7 +67,7 @@ class EPGService: NSObject, XMLParserDelegate {
                 
                 for (index, url) in urls.enumerated() {
                     group.addTask {
-                        print("⏳ [EPGService] Concurrent Fetch: \(url.absoluteString)")
+                        print("⏳ [EPGService] Fetching: \(url.absoluteString)")
                         
                         let sizeKey = "epg_size_" + url.absoluteString
                         let timeKey = "epg_parse_time_" + url.absoluteString
