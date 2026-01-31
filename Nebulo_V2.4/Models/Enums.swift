@@ -73,9 +73,7 @@ enum StreamQuality: String, CaseIterable, Identifiable, Sendable {
 
 enum LanguagePreference: String, CaseIterable, Identifiable, Sendable {
     case any = "Any"
-    case us = "English (US)"
-    case uk = "English (UK)"
-    case ca = "English (Canada)"
+    case english = "English"
     case es = "Spanish"
     case fr = "French"
     case de = "German"
@@ -86,9 +84,7 @@ enum LanguagePreference: String, CaseIterable, Identifiable, Sendable {
     nonisolated var searchTokens: [String] {
         switch self {
         case .any: return []
-        case .us: return ["us", "usa", "america"]
-        case .uk: return ["uk", "gbr", "britain"]
-        case .ca: return ["ca", "can", "canada"]
+        case .english: return ["us", "usa", "america", "uk", "gbr", "britain", "ca", "can", "canada", "en", "eng", "english"]
         case .es: return ["es", "esp", "mx", "mex", "latino"]
         case .fr: return ["fr", "fra", "france"]
         case .de: return ["de", "deu", "ger", "germany"]
@@ -99,7 +95,7 @@ enum LanguagePreference: String, CaseIterable, Identifiable, Sendable {
     nonisolated var languageIndicators: [String] {
         switch self {
         case .any: return []
-        case .us, .uk, .ca: return ["the", "with", "coverage", "from", "tonight", "watch"]
+        case .english: return ["the", "with", "coverage", "from", "tonight", "watch"]
         case .es: return ["con", "los", "las", "del", "por", "vivo", "partido", "es", "al"]
         case .fr: return ["et", "du", "de", "d'", "des", "pour", "dans", "direct", "est", "au", "les", "sur", "match"]
         case .de: return ["der", "die", "das", "und", "mit", "dem", "aus", "von", "ist", "auf", "im", "ein", "eine"]

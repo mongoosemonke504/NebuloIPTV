@@ -59,7 +59,7 @@ class ChannelViewModel: ObservableObject {
     private var lastFetchedEPGUrls: [URL] = []
     
     
-    @Published var preferredLanguage: LanguagePreference = .us {
+    @Published var preferredLanguage: LanguagePreference = .english {
         didSet { 
             UserDefaults.standard.set(preferredLanguage.rawValue, forKey: settingsPrefix + "preferredLanguage")
             self.preResolvedCache.removeAll()
@@ -729,8 +729,8 @@ class ChannelViewModel: ObservableObject {
                     score += 2000
                 } else if preferredLanguage != .any {
                     if let detected = SmartSearchLogic.detectLanguage(fullInfo) {
-                        let isEnglishPref = (preferredLanguage == .us || preferredLanguage == .uk || preferredLanguage == .ca)
-                        let isEnglishDet = (detected == .us || detected == .uk || detected == .ca)
+                        let isEnglishPref = (preferredLanguage == .english)
+                        let isEnglishDet = (detected == .english)
                         
                         if detected != preferredLanguage && !(isEnglishPref && isEnglishDet) {
                             score -= 2000
@@ -874,8 +874,8 @@ class ChannelViewModel: ObservableObject {
                         score += 2000
                     } else if pLang != .any {
                         if let detected = SmartSearchLogic.detectLanguage(fullInfo) {
-                            let isEnglishPref = (pLang == .us || pLang == .uk || pLang == .ca)
-                            let isEnglishDet = (detected == .us || detected == .uk || detected == .ca)
+                            let isEnglishPref = (pLang == .english)
+                            let isEnglishDet = (detected == .english)
                             
                             if detected != pLang && !(isEnglishPref && isEnglishDet) {
                                 score -= 2000
@@ -1069,8 +1069,8 @@ class ChannelViewModel: ObservableObject {
                         score += 2000
                     } else if pLang != .any {
                         if let detected = SmartSearchLogic.detectLanguage(fullInfo) {
-                            let isEnglishPref = (pLang == .us || pLang == .uk || pLang == .ca)
-                            let isEnglishDet = (detected == .us || detected == .uk || detected == .ca)
+                            let isEnglishPref = (pLang == .english)
+                            let isEnglishDet = (detected == .english)
                             
                             if detected != pLang && !(isEnglishPref && isEnglishDet) {
                                 score -= 2000
@@ -1228,8 +1228,8 @@ class ChannelViewModel: ObservableObject {
                         score += 2000
                     } else if pLang != .any {
                         if let detected = SmartSearchLogic.detectLanguage(fullInfo) {
-                            let isEnglishPref = (pLang == .us || pLang == .uk || pLang == .ca)
-                            let isEnglishDet = (detected == .us || detected == .uk || detected == .ca)
+                            let isEnglishPref = (pLang == .english)
+                            let isEnglishDet = (detected == .english)
                             if detected != pLang && !(isEnglishPref && isEnglishDet) { score -= 2000 }
                         }
                     }

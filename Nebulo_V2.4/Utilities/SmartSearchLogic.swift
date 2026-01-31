@@ -87,7 +87,7 @@ struct SmartSearchLogic {
             return best.key
         }
         
-        // If no identifiers found, default to English (US)
-        return .us
+        // If no identifiers found, default to English
+        return .english
     }
 }
