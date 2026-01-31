@@ -129,10 +129,6 @@ struct RecordingsView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
-        .background(
-            NebulaBackgroundView(color1: c1, color2: c2, color3: c3, point1: UnitPoint(x: nebX1, y: nebY1), point2: UnitPoint(x: nebX2, y: nebY2), point3: UnitPoint(x: nebX3, y: nebY3))
-                .ignoresSafeArea()
-        )
         .navigationTitle("Recordings")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

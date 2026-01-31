@@ -28,6 +28,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
     @State private var switcherCategory: StreamCategory = StreamCategory(id: -2, name: "Recently Watched")
     @State private var showCategoryPicker = false
     @State private var frozenRecentIDs: [Int] = []
+    @State private var switcherChannels: [StreamChannel] = []
     
     
     @State private var isMenuOpen = false
@@ -90,7 +91,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
                 Color.black.opacity(0.01).ignoresSafeArea().onTapGesture { withAnimation { showQuickSwitcher = false } }
                 
                 QuickSwitcherView(
-                    channels: getChannelsForSwitcher(),
+                    channels: switcherChannels,
                     currentChannelID: channel.id,
                     switcherCategory: $switcherCategory,
                     categories: viewModel?.categories ?? [],
@@ -208,6 +209,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
                 showControls = true
                 resetTimer()
             }
+            switcherChannels = getChannelsForSwitcher()
         }
         .onDisappear {
             dismissalTask?.cancel()
@@ -231,9 +233,13 @@ struct CustomVideoPlayerView: SwiftUI.View {
         .onChangeCompat(of: epgTime) { _ in
             updateMetadata()
         }
+        .onChangeCompat(of: switcherCategory) { _ in
+            switcherChannels = getChannelsForSwitcher()
+        }
         .onChangeCompat(of: showQuickSwitcher) { isOpen in 
             if isOpen { 
                 frozenRecentIDs = viewModel?.recentIDs ?? []
+                switcherChannels = getChannelsForSwitcher()
                 timer?.cancel()
             } else { 
                 quickSwitcherOffset = 200 
