@@ -434,14 +434,13 @@ struct QuickSwitcherView: View {
                 .padding(.horizontal)
                 .padding(.bottom, 15)
                 
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        ForEach(channels) { c in
-                            Button(action: { 
-                                UISelectionFeedbackGenerator().selectionChanged()
-                                onPlay(c) 
-                            }) {
-                                VStack(alignment: .leading, spacing: 6) {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                LazyHStack(spacing: 12) {
+                                    ForEach(channels) { c in
+                                        Button(action: { 
+                                            UISelectionFeedbackGenerator().selectionChanged()
+                                            onPlay(c) 
+                                        }) {                                VStack(alignment: .leading, spacing: 6) {
                                     CachedAsyncImage(urlString: c.icon ?? "", size: CGSize(width: 140, height: 80))
                                         .frame(width: 140, height: 80)
                                         .background(Color.black.opacity(0.3))
