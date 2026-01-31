@@ -90,6 +90,7 @@ struct RecordingsView: View {
                                         .foregroundColor(.white)
                                 }
                             }
+                            .padding(.horizontal, 4) // Add horizontal padding
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)

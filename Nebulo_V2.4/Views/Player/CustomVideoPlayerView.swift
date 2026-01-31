@@ -89,87 +89,17 @@ struct CustomVideoPlayerView: SwiftUI.View {
             if showQuickSwitcher {
                 Color.black.opacity(0.01).ignoresSafeArea().onTapGesture { withAnimation { showQuickSwitcher = false } }
                 
-                VStack(spacing: 0) {
-                    Capsule()
-                        .fill(Color.white.opacity(0.3))
-                        .frame(width: 40, height: 5)
-                        .padding(.top, 10)
-                        .padding(.bottom, 10)
-                    
-                    HStack {
-                        Menu {
-                            Button("Recently Watched") { switcherCategory = StreamCategory(id: -2, name: "Recently Watched") }
-                            Button("Favorites") { switcherCategory = StreamCategory(id: -4, name: "Favorites") }
-                            Button("All Channels") { switcherCategory = StreamCategory(id: -1, name: "All Channels") }
-                            if let cats = viewModel?.categories {
-                                ForEach(cats.filter { !$0.isHidden }) { cat in
-                                    Button(cat.name) { switcherCategory = cat }
-                                }
-                            }
-                        } label: { 
-                            HStack(spacing: 4) { 
-                                Text(switcherCategory.name).font(.headline).fontWeight(.bold)
-                                Image(systemName: "chevron.down").font(.caption.bold()) 
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .modifier(GlassEffect(cornerRadius: 20, isSelected: true, accentColor: nil))
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.white)
-                        
-                        Spacer()
+                QuickSwitcherView(
+                    channels: getChannelsForSwitcher(),
+                    currentChannelID: channel.id,
+                    switcherCategory: $switcherCategory,
+                    categories: viewModel?.categories ?? [],
+                    viewModel: viewModel,
+                    onPlay: { c in
+                        UISelectionFeedbackGenerator().selectionChanged()
+                        onPlayChannel?(c)
                     }
-                    .padding(.horizontal)
-                    .padding(.bottom, 15)
-                    
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 12) {
-                            let channels = getChannelsForSwitcher()
-                            ForEach(channels) { c in
-                                Button(action: { 
-                                    UISelectionFeedbackGenerator().selectionChanged()
-                                    onPlayChannel?(c) 
-                                }) {
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        CachedAsyncImage(urlString: c.icon ?? "", size: CGSize(width: 140, height: 80))
-                                            .frame(width: 140, height: 80)
-                                            .background(Color.black.opacity(0.3))
-                                            .cornerRadius(8)
-                                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(c.id == channel.id ? Color.white : Color.clear, lineWidth: 2))
-                                        
-                                        Text(c.name)
-                                            .font(.caption)
-                                            .fontWeight(.medium)
-                                            .foregroundColor(.white)
-                                            .lineLimit(1)
-                                            .frame(width: 140, alignment: .leading)
-                                        
-                                        VStack(alignment: .leading) {
-                                            if let prog = viewModel?.getCurrentProgram(for: c) {
-                                                Text(prog.title)
-                                                    .font(.caption2)
-                                                    .foregroundColor(.white.opacity(0.7))
-                                                    .lineLimit(1)
-                                                    .frame(width: 140, alignment: .leading)
-                                            } else {
-                                                
-                                                Text(" ")
-                                                    .font(.caption2)
-                                                    .frame(width: 140, alignment: .leading)
-                                            }
-                                        }
-                                        .frame(height: 15)
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(.horizontal)
-                    }
-                    .padding(.bottom, 40)
-                }
-                .background(.ultraThinMaterial)
+                )
                 .frame(maxHeight: .infinity, alignment: .bottom)
                 .offset(y: quickSwitcherOffset)
                 .transition(.move(edge: .bottom))
@@ -464,5 +394,94 @@ struct CustomVideoPlayerView: SwiftUI.View {
                 }
             }
         }
+    }
+}
+
+struct QuickSwitcherView: View {
+    let channels: [StreamChannel]
+    let currentChannelID: Int
+    @Binding var switcherCategory: StreamCategory
+    let categories: [StreamCategory]
+    var viewModel: ChannelViewModel?
+    let onPlay: (StreamChannel) -> Void
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            Capsule()
+                .fill(Color.white.opacity(0.3))
+                .frame(width: 40, height: 5)
+                .padding(.top, 10)
+                .padding(.bottom, 10)
+            
+            HStack {
+                Menu {
+                    Button("Recently Watched") { switcherCategory = StreamCategory(id: -2, name: "Recently Watched") }
+                    Button("Favorites") { switcherCategory = StreamCategory(id: -4, name: "Favorites") }
+                    Button("All Channels") { switcherCategory = StreamCategory(id: -1, name: "All Channels") }
+                    ForEach(categories.filter { !$0.isHidden }) { cat in
+                        Button(cat.name) { switcherCategory = cat }
+                    }
+                } label: { 
+                    HStack(spacing: 4) { 
+                        Text(switcherCategory.name).font(.headline).fontWeight(.bold)
+                        Image(systemName: "chevron.down").font(.caption.bold()) 
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .modifier(GlassEffect(cornerRadius: 20, isSelected: true, accentColor: nil))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.white)
+                
+                Spacer()
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 15)
+            
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(channels) { c in
+                        Button(action: { 
+                            UISelectionFeedbackGenerator().selectionChanged()
+                            onPlay(c) 
+                        }) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                CachedAsyncImage(urlString: c.icon ?? "", size: CGSize(width: 140, height: 80))
+                                    .frame(width: 140, height: 80)
+                                    .background(Color.black.opacity(0.3))
+                                    .cornerRadius(8)
+                                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(c.id == currentChannelID ? Color.white : Color.clear, lineWidth: 2))
+                                
+                                Text(c.name)
+                                    .font(.caption)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(.white)
+                                    .lineLimit(1)
+                                    .frame(width: 140, alignment: .leading)
+                                
+                                VStack(alignment: .leading) {
+                                    if let prog = viewModel?.getCurrentProgram(for: c) {
+                                        Text(prog.title)
+                                            .font(.caption2)
+                                            .foregroundColor(.white.opacity(0.7))
+                                            .lineLimit(1)
+                                            .frame(width: 140, alignment: .leading)
+                                    } else {
+                                        Text(" ")
+                                            .font(.caption2)
+                                            .frame(width: 140, alignment: .leading)
+                                    }
+                                }
+                                .frame(height: 15)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal)
+            }
+            .padding(.bottom, 40)
+        }
+        .background(.ultraThinMaterial)
     }
 }
