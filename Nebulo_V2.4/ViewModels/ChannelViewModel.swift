@@ -1549,12 +1549,6 @@ class ChannelViewModel: ObservableObject {
     func saveSportsConfigs() {
         if let encoded = try? JSONEncoder().encode(sportsConfigs) { UserDefaults.standard.set(encoded, forKey: settingsPrefix + "sportsConfigs") }
     }
-    
-    func toggleSportVisibility(_ id: String) {
-        if excludedSportsIDs.contains(id) { excludedSportsIDs.remove(id) } else { excludedSportsIDs.insert(id) }
-        if let d = try? JSONEncoder().encode(Array(excludedSportsIDs)) { UserDefaults.standard.set(d, forKey: settingsPrefix + "excludedSportsIDs") }
-        categorizeSports()
-    }
 
     func renameChannel(id: Int, newName: String) {
         renamedChannels[id] = newName
