@@ -95,7 +95,7 @@ struct StreamChannel: Identifiable, Codable, Hashable, Equatable, Sendable {
         if lowerName.contains("fhd") || lowerName.contains("1080") { score += 80 }
         if lowerName.contains("720") || lowerName.contains("hd") || lowerName.contains("hevc") || lowerName.contains("h265") || lowerName.contains("h.265") || lowerName.contains("60fps") || lowerName.contains("hdr") { score += 50 }
         if lowerName.contains("usa") || lowerName.contains("(us)") || lowerName.contains("uk") || lowerName.contains("english") { score += 150 }
-        let intTags = ["(es)", "(fr)", "(it)", "(pl)", "(ar)", "spanish", "french", "latino"]
+        let intTags = ["(es)", "(fr)", "(it)", "(pl)", "(ar)", "(pt)", "(ru)", "(nl)", "(tr)", "spanish", "french", "latino", "german", "italian", "portuguese", "arabic", "russian", "dutch", "turkish", "polish"]
         if intTags.contains(where: { lowerName.contains($0) }) { score -= 300 }
         return score
     }

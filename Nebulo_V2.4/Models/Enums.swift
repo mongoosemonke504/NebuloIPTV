@@ -78,6 +78,12 @@ enum LanguagePreference: String, CaseIterable, Identifiable, Sendable {
     case fr = "French"
     case de = "German"
     case it = "Italian"
+    case pt = "Portuguese"
+    case ar = "Arabic"
+    case ru = "Russian"
+    case nl = "Dutch"
+    case tr = "Turkish"
+    case pl = "Polish"
     
     var id: String { rawValue }
     
@@ -89,6 +95,12 @@ enum LanguagePreference: String, CaseIterable, Identifiable, Sendable {
         case .fr: return ["fr", "fra", "france"]
         case .de: return ["de", "deu", "ger", "germany"]
         case .it: return ["it", "ita", "italy"]
+        case .pt: return ["pt", "por", "bra", "brazil", "portugal", "br"]
+        case .ar: return ["ar", "ara", "arabic", "ksa", "arab"]
+        case .ru: return ["ru", "rus", "russia"]
+        case .nl: return ["nl", "nld", "ned", "dutch", "ziggo"]
+        case .tr: return ["tr", "tur", "turkey"]
+        case .pl: return ["pl", "pol", "polska", "poland"]
         }
     }
     
@@ -100,6 +112,12 @@ enum LanguagePreference: String, CaseIterable, Identifiable, Sendable {
         case .fr: return ["et", "du", "de", "d'", "des", "pour", "dans", "direct", "est", "au", "les", "sur", "match"]
         case .de: return ["der", "die", "das", "und", "mit", "dem", "aus", "von", "ist", "auf", "im", "ein", "eine"]
         case .it: return ["il", "lo", "gli", "di", "con", "diretta", "in", "su", "per"]
+        case .pt: return ["ao", "vivo", "jogo", "da", "do", "na", "no", "futebol"]
+        case .ar: return ["al", "bin", "ben", "abu"]
+        case .ru: return ["tv"] // Russian indicators difficult in romanized text without more context
+        case .nl: return ["het", "een", "van", "op"]
+        case .tr: return ["ve", "bir", "ile", "canli", "mac"]
+        case .pl: return ["na", "zywo", "mecz"]
         }
     }
 }
