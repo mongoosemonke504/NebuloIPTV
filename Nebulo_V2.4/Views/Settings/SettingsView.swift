@@ -10,7 +10,7 @@ struct SettingsView: View {
     
     @Binding var categories: [StreamCategory]
     let accentColor: Color
-    @ObservedObject var viewModel: ChannelViewModel
+    var viewModel: ChannelViewModel
     @ObservedObject var scoreViewModel: ScoreViewModel 
     let playAction: ((StreamChannel) -> Void)?
     let onSave: () -> Void

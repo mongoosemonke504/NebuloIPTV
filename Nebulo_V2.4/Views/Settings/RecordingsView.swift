@@ -22,118 +22,117 @@ struct RecordingsView: View {
         let c2 = Color(hex: nebColor2) ?? .blue
         let c3 = Color(hex: nebColor3) ?? .pink
         
-        ZStack {
-            NebulaBackgroundView(color1: c1, color2: c2, color3: c3, point1: UnitPoint(x: nebX1, y: nebY1), point2: UnitPoint(x: nebX2, y: nebY2), point3: UnitPoint(x: nebX3, y: nebY3))
-                .ignoresSafeArea()
-
-            List {
-                if manager.recordings.isEmpty {
-                    Text("No recordings found.")
-                        .foregroundColor(.white.opacity(0.7))
-                        .padding()
-                        .listRowBackground(Color.clear)
-                } else {
-                    ForEach(manager.recordings.sorted(by: { $0.createdAt > $1.createdAt })) { recording in
-                        Button(action: {
-                            if recording.status == .recording {
-                                if let channel = viewModel?.channels.first(where: { $0.streamURL == recording.streamURL || $0.name == recording.channelName }) {
-                                    dismiss()
-                                    playAction?(channel)
-                                }
-                            } else if recording.status == .completed {
-                                selectedRecording = recording
+        List {
+            if manager.recordings.isEmpty {
+                Text("No recordings found.")
+                    .foregroundColor(.white.opacity(0.7))
+                    .padding()
+                    .listRowBackground(Color.clear)
+            } else {
+                ForEach(manager.recordings.sorted(by: { $0.createdAt > $1.createdAt })) { recording in
+                    Button(action: {
+                        if recording.status == .recording {
+                            if let channel = viewModel?.channels.first(where: { $0.streamURL == recording.streamURL || $0.name == recording.channelName }) {
+                                dismiss()
+                                playAction?(channel)
                             }
-                        }) {
-                            HStack(spacing: 12) {
-                                ZStack {
-                                    Rectangle().fill(Color.white.opacity(0.1))
-                                    if let icon = recording.channelIcon {
-                                        CachedAsyncImage(urlString: icon, size: CGSize(width: 50, height: 30))
-                                    } else {
-                                        Image(systemName: "film").foregroundColor(.white.opacity(0.5))
-                                    }
-                                }
-                                .frame(width: 60, height: 40)
-                                .cornerRadius(4)
-                                
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(recording.displayName)
-                                        .font(.headline)
-                                        .foregroundColor(.white)
-                                        .lineLimit(1)
-                                    
-                                    HStack {
-                                        if recording.displayName != recording.channelName {
-                                            Text(recording.channelName).bold()
-                                            Text("•")
-                                        }
-                                        Text(formatDate(recording.startTime))
-                                        Text("•")
-                                        Text(recording.status == .recording ? "In Progress" : recording.status.rawValue.capitalized)
-                                            .foregroundColor(statusColor(recording.status))
-                                    }
-                                    .font(.caption)
-                                    .foregroundColor(.white.opacity(0.7))
-                                    .lineLimit(1)
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                
-                                Spacer()
-                                
-                                if recording.status == .recording {
-                                    Image(systemName: "play.circle.fill")
-                                        .font(.title2)
-                                        .foregroundColor(.red)
-                                } else if recording.status == .completed {
-                                    Image(systemName: "play.circle")
-                                        .font(.title2)
-                                        .foregroundColor(.white)
-                                }
-                            }
-                            .padding(.horizontal, 4) // Add horizontal padding
-                            .contentShape(Rectangle())
+                        } else if recording.status == .completed {
+                            selectedRecording = recording
                         }
-                        .buttonStyle(.plain)
-                        .listRowBackground(Color.clear)
-                        .listRowSeparatorTint(Color.white.opacity(0.2))
-                        .contextMenu {
-                            Button {
-                                recordingToRename = recording
-                                newNameInput = recording.displayName
-                                showRenameAlert = true
-                            } label: {
-                                Label("Rename", systemImage: "pencil")
+                    }) {
+                        HStack(spacing: 12) {
+                            ZStack {
+                                Rectangle().fill(Color.white.opacity(0.1))
+                                if let icon = recording.channelIcon {
+                                    CachedAsyncImage(urlString: icon, size: CGSize(width: 50, height: 30))
+                                } else {
+                                    Image(systemName: "film").foregroundColor(.white.opacity(0.5))
+                                }
                             }
+                            .frame(width: 60, height: 40)
+                            .cornerRadius(4)
                             
-                            Button(role: .destructive) {
-                                manager.deleteRecording(recording)
-                            } label: {
-                                Label("Delete", systemImage: "trash")
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(recording.displayName)
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                    .lineLimit(1)
+                                
+                                HStack {
+                                    if recording.displayName != recording.channelName {
+                                        Text(recording.channelName).bold()
+                                        Text("•")
+                                    }
+                                    Text(formatDate(recording.startTime))
+                                    Text("•")
+                                    Text(recording.status == .recording ? "In Progress" : recording.status.rawValue.capitalized)
+                                        .foregroundColor(statusColor(recording.status))
+                                }
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.7))
+                                .lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            
+                            Spacer()
+                            
+                            if recording.status == .recording {
+                                Image(systemName: "play.circle.fill")
+                                    .font(.title2)
+                                    .foregroundColor(.red)
+                            } else if recording.status == .completed {
+                                Image(systemName: "play.circle")
+                                    .font(.title2)
+                                    .foregroundColor(.white)
                             }
                         }
-                        .swipeActions(edge: .leading) {
-                            Button {
-                                recordingToRename = recording
-                                newNameInput = recording.displayName
-                                showRenameAlert = true
-                            } label: {
-                                Label("Rename", systemImage: "pencil")
-                            }
-                            .tint(.blue)
+                        .padding(.horizontal, 4)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparatorTint(Color.white.opacity(0.2))
+                    .contextMenu {
+                        Button {
+                            recordingToRename = recording
+                            newNameInput = recording.displayName
+                            showRenameAlert = true
+                        } label: {
+                            Label("Rename", systemImage: "pencil")
                         }
-                        .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) {
-                                manager.deleteRecording(recording)
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
+                        
+                        Button(role: .destructive) {
+                            manager.deleteRecording(recording)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+                    .swipeActions(edge: .leading) {
+                        Button {
+                            recordingToRename = recording
+                            newNameInput = recording.displayName
+                            showRenameAlert = true
+                        } label: {
+                            Label("Rename", systemImage: "pencil")
+                        }
+                        .tint(.blue)
+                    }
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
+                            manager.deleteRecording(recording)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
                         }
                     }
                 }
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
         }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(
+            NebulaBackgroundView(color1: c1, color2: c2, color3: c3, point1: UnitPoint(x: nebX1, y: nebY1), point2: UnitPoint(x: nebX2, y: nebY2), point3: UnitPoint(x: nebX3, y: nebY3))
+                .ignoresSafeArea()
+        )
         .navigationTitle("Recordings")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
