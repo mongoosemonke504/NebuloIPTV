@@ -60,6 +60,7 @@ struct RecordingsView: View {
                                     Text(recording.displayName)
                                         .font(.headline)
                                         .foregroundColor(.white)
+                                        .lineLimit(1)
                                     
                                     HStack {
                                         if recording.displayName != recording.channelName {
@@ -75,6 +76,7 @@ struct RecordingsView: View {
                                     .foregroundColor(.white.opacity(0.7))
                                     .lineLimit(1)
                                 }
+                                .frame(maxWidth: .infinity, alignment: .leading)
                                 
                                 Spacer()
                                 
