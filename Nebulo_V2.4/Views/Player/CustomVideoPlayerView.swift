@@ -408,80 +408,78 @@ struct QuickSwitcherView: View {
     @State private var showCategoryList = false
     
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            VStack(spacing: 0) {
-                Capsule()
-                    .fill(Color.white.opacity(0.3))
-                    .frame(width: 40, height: 5)
-                    .padding(.top, 10)
-                    .padding(.bottom, 10)
-                
-                HStack {
-                    Button(action: { withAnimation { showCategoryList.toggle() } }) {
-                        HStack(spacing: 4) { 
-                            Text(switcherCategory.name).font(.headline).fontWeight(.bold)
-                            Image(systemName: showCategoryList ? "chevron.up" : "chevron.down").font(.caption.bold()) 
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .modifier(GlassEffect(cornerRadius: 20, isSelected: true, accentColor: nil))
+        VStack(spacing: 0) {
+            Capsule()
+                .fill(Color.white.opacity(0.3))
+                .frame(width: 40, height: 5)
+                .padding(.top, 10)
+                .padding(.bottom, 10)
+            
+            HStack {
+                Button(action: { withAnimation { showCategoryList.toggle() } }) {
+                    HStack(spacing: 4) { 
+                        Text(switcherCategory.name).font(.headline).fontWeight(.bold)
+                        Image(systemName: showCategoryList ? "chevron.up" : "chevron.down").font(.caption.bold()) 
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.white)
-                    
-                    Spacer()
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .modifier(GlassEffect(cornerRadius: 20, isSelected: true, accentColor: nil))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.white)
+                
+                Spacer()
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 15)
+            
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 12) {
+                    ForEach(channels) { c in
+                        Button(action: { 
+                            UISelectionFeedbackGenerator().selectionChanged()
+                            onPlay(c) 
+                        }) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                CachedAsyncImage(urlString: c.icon ?? "", size: CGSize(width: 140, height: 80))
+                                    .frame(width: 140, height: 80)
+                                    .background(Color.black.opacity(0.3))
+                                    .cornerRadius(8)
+                                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(c.id == currentChannelID ? Color.white : Color.clear, lineWidth: 2))
+                                
+                                Text(c.name)
+                                    .font(.caption)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(.white)
+                                    .lineLimit(1)
+                                    .frame(width: 140, alignment: .leading)
+                                
+                                VStack(alignment: .leading) {
+                                    if let prog = viewModel?.getCurrentProgram(for: c) {
+                                        Text(prog.title)
+                                            .font(.caption2)
+                                            .foregroundColor(.white.opacity(0.7))
+                                            .lineLimit(1)
+                                            .frame(width: 140, alignment: .leading)
+                                    } else {
+                                        Text(" ")
+                                            .font(.caption2)
+                                            .frame(width: 140, alignment: .leading)
+                                    }
+                                }
+                                .frame(height: 15)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
                 .padding(.horizontal)
-                .padding(.bottom, 15)
-                
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                LazyHStack(spacing: 12) {
-                                    ForEach(channels) { c in
-                                        Button(action: { 
-                                            UISelectionFeedbackGenerator().selectionChanged()
-                                            onPlay(c) 
-                                        }) {                                VStack(alignment: .leading, spacing: 6) {
-                                    CachedAsyncImage(urlString: c.icon ?? "", size: CGSize(width: 140, height: 80))
-                                        .frame(width: 140, height: 80)
-                                        .background(Color.black.opacity(0.3))
-                                        .cornerRadius(8)
-                                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(c.id == currentChannelID ? Color.white : Color.clear, lineWidth: 2))
-                                    
-                                    Text(c.name)
-                                        .font(.caption)
-                                        .fontWeight(.medium)
-                                        .foregroundColor(.white)
-                                        .lineLimit(1)
-                                        .frame(width: 140, alignment: .leading)
-                                    
-                                    VStack(alignment: .leading) {
-                                        if let prog = viewModel?.getCurrentProgram(for: c) {
-                                            Text(prog.title)
-                                                .font(.caption2)
-                                                .foregroundColor(.white.opacity(0.7))
-                                                .lineLimit(1)
-                                                .frame(width: 140, alignment: .leading)
-                                        } else {
-                                            Text(" ")
-                                                .font(.caption2)
-                                                .frame(width: 140, alignment: .leading)
-                                        }
-                                    }
-                                    .frame(height: 15)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.horizontal)
-                }
-                .padding(.bottom, 40)
             }
-            .background(Material.ultraThinMaterial)
-            
+            .padding(.bottom, 40)
+        }
+        .background(Material.ultraThinMaterial)
+        .overlay(alignment: .bottomLeading) {
             if showCategoryList {
-                Color.black.opacity(0.01).ignoresSafeArea().onTapGesture { withAnimation { showCategoryList = false } }
-                
                 VStack(alignment: .leading, spacing: 0) {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 2) {
@@ -506,7 +504,6 @@ struct QuickSwitcherView: View {
                 .padding(.leading, 16)
                 .padding(.bottom, 130)
                 .transition(.scale.combined(with: .opacity).animation(.spring()))
-                .zIndex(100)
             }
         }
     }
