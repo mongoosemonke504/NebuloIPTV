@@ -80,7 +80,6 @@ class ChannelViewModel: ObservableObject {
             }
         }
     }
-    @Published var lastImageCacheTime: Date? = nil
     
     
     var activeAccountsMap: [UUID: Account] = [:]
@@ -310,9 +309,6 @@ class ChannelViewModel: ObservableObject {
                     self.stopSmoothingTimer()
                 }
             }
-            
-            // Start silent background image caching
-            await self.preloadImages()
             
             if !silent && self.isLoading {
                 let elapsed = Date().timeIntervalSince(startTime)
@@ -1100,73 +1096,6 @@ class ChannelViewModel: ObservableObject {
         await MainActor.run {
             AccountManager.shared.saveAccount(tempAccount, makeActive: true)
         }
-    }
-    
-    func preloadImages() async {
-        let now = Date()
-        
-        if let last = await MainActor.run(body: { return self.lastImageCacheTime }), now.timeIntervalSince(last) < 86400 {
-            return
-        }
-        
-        let allChannels = self.channels
-        let favorites = self.favoriteIDs
-        let recents = self.recentIDs
-        
-        var targetIDs = Set<Int>()
-        targetIDs.formUnion(favorites)
-        targetIDs.formUnion(recents)
-        targetIDs.formUnion(allChannels.prefix(100).map { $0.id })
-        
-        let urlsToPrefetch: [String] = allChannels.compactMap { channel in
-            guard targetIDs.contains(channel.id) else { return nil }
-            guard let icon = channel.icon, !icon.isEmpty else { return nil }
-            guard !ImageCache.shared.hasImage(forKey: icon) else { return nil }
-            return icon
-        }
-
-        if urlsToPrefetch.isEmpty {
-            return
-        }
-
-        await MainActor.run {
-            self.loadingStatus = "Smart Caching Images..."
-            self.epgProgress = 0
-            self.visualProgress = 0
-        }
-        
-        print("🚀 [ChannelViewModel] Starting Smart Cache for \(urlsToPrefetch.count) priority images...")
-        
-        // Detach to background to prevent any main thread blocking
-        await Task.detached(priority: .utility) {
-            let total = Double(urlsToPrefetch.count)
-            var completedCount = 0
-            
-            await withTaskGroup(of: Void.self) { group in
-                for url in urlsToPrefetch {
-                    group.addTask {
-                        await ImageCache.prefetchAndWait(urlString: url, size: CGSize(width: 50, height: 50))
-                    }
-                }
-                
-                // Track completion without hammering MainActor
-                for await _ in group {
-                    completedCount += 1
-                    // Only update UI every ~5% to keep scrolling smooth
-                    if completedCount % 20 == 0 || completedCount == Int(total) {
-                        let progress = Double(completedCount) / total
-                        await MainActor.run {
-                            self.epgProgress = progress
-                        }
-                    }
-                }
-            }
-            
-            await MainActor.run {
-                self.lastImageCacheTime = now
-            }
-            print("✅ [ChannelViewModel] Smart Cache complete.")
-        }.value
     }
 
     func updateEPG(baseURL: URL, user: String, pass: String, force: Bool = false, silent: Bool = false) async {
