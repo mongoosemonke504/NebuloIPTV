@@ -478,6 +478,7 @@ struct QuickSwitcherView: View {
             .padding(.bottom, 40)
         }
         .background(Material.ultraThinMaterial)
+        .fixedSize(horizontal: false, vertical: true)
         .overlay(alignment: .bottomLeading) {
             if showCategoryList {
                 VStack(alignment: .leading, spacing: 0) {
