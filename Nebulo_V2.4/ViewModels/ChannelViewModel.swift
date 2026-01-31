@@ -1123,6 +1123,61 @@ class ChannelViewModel: ObservableObject {
         }
     }
     
+    func autoAddGameToMultiView(home: String, away: String, network: String? = nil) {
+        let inputChannels = self.channels
+        let inputHidden = self.hiddenIDs
+        let hiddenCatIDs = Set(self.categories.filter { $0.isHidden }.map { $0.id })
+        let currentEPG = self.epgData
+        let now = self.currentTime
+        let pLang = self.preferredLanguage
+        
+        Task.detached(priority: .userInitiated) { [weak self, inputChannels, inputHidden, hiddenCatIDs, currentEPG, now, pLang] in
+            guard let self = self else { return }
+            let homeTokens = SmartSearchLogic.tokenize(home)
+            let awayTokens = SmartSearchLogic.tokenize(away)
+            let targetNetwork = (network ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            
+            func matchCount(_ text: String, tokens: [String]) -> Int {
+                let lower = text.lowercased()
+                return tokens.filter { lower.contains($0) }.count
+            }
+            
+            struct ChannelScore { let channel: StreamChannel; let score: Int }
+            var scoredChannels: [ChannelScore] = []
+            
+            for channel in inputChannels {
+                if inputHidden.contains(channel.id) || hiddenCatIDs.contains(channel.categoryID) { continue }
+                if SmartSearchLogic.isBanner(channel.name) { continue }
+                
+                var score = 0
+                if !targetNetwork.isEmpty && channel.name.localizedCaseInsensitiveContains(targetNetwork) { score += 1000 }
+                
+                var epgTitle = ""
+                if let eID = channel.epgID, let schedule = currentEPG[eID], let program = schedule.first(where: { now >= $0.start && now <= $0.stop }) { epgTitle = program.title }
+                
+                let nameH = matchCount(channel.name, tokens: homeTokens); let nameA = matchCount(channel.name, tokens: awayTokens)
+                let titleH = matchCount(epgTitle, tokens: homeTokens); let titleA = matchCount(epgTitle, tokens: awayTokens)
+                
+                if titleH > 0 { score += 500 }; if titleA > 0 { score += 500 }
+                if nameH > 0 { score += 200 }; if nameA > 0 { score += 200 }
+                
+                if score > 0 {
+                    if SmartSearchLogic.checkLanguageMatch(channel.name, preference: pLang) { score += 2000 }
+                }
+                
+                if score > 0 { scoredChannels.append(ChannelScore(channel: channel, score: score)) }
+            }
+            
+            scoredChannels.sort { $0.score > $1.score }
+            
+            if let best = scoredChannels.first {
+                await MainActor.run { self.addToMultiView(best.channel); self.triggerMultiView = true }
+            } else {
+                 await MainActor.run { self.showNoStreamsAlert = true }
+            }
+        }
+    }
+
     func moveChannelInSearch(from source: StreamChannel, to destination: StreamChannel, save: Bool = true) {
         
         var isNameList = false

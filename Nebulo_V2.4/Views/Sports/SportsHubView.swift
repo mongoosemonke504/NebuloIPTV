@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UserNotifications
 
 struct SportsHubView: View {
     @ObservedObject var viewModel: ChannelViewModel
@@ -7,24 +8,30 @@ struct SportsHubView: View {
     @ObservedObject var scoreViewModel: ScoreViewModel
     @Environment(\.scenePhase) var scenePhase
     @State private var isRefreshingAnimation = false
+    @State private var showingPinned = false
     
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
-                SportSelectorView(selectedSport: $scoreViewModel.selectedSport) {
+                SportSelectorView(selectedSport: $scoreViewModel.selectedSport, showingPinned: $showingPinned, pinnedCount: scoreViewModel.allPinnedGames.count) {
                     Task { await scoreViewModel.fetchScores() }
                 }
                 
-                TabView(selection: $scoreViewModel.selectedSport) {
-                    ForEach(SportType.allCases) { sport in
-                        SportGamesListView(
-                            sport: sport,
-                            scoreViewModel: scoreViewModel,
-                            viewModel: viewModel
-                        )
+                if showingPinned {
+                    PinnedGamesListView(scoreViewModel: scoreViewModel, viewModel: viewModel)
+                        .transition(.opacity)
+                } else {
+                    TabView(selection: $scoreViewModel.selectedSport) {
+                        ForEach(SportType.allCases) { sport in
+                            SportGamesListView(
+                                sport: sport,
+                                scoreViewModel: scoreViewModel,
+                                viewModel: viewModel
+                            )
+                        }
                     }
+                    .tabViewStyle(.page(indexDisplayMode: .never))
                 }
-                .tabViewStyle(.page(indexDisplayMode: .never))
             }
             
             if viewModel.isSearchingGame {
@@ -196,13 +203,31 @@ struct SportGamesListView: View {
             .padding(.top)
     }
     
+    private func setReminder(game: ESPNEvent) {
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            if granted {
+                let content = UNMutableNotificationContent()
+                content.title = "Game Reminder"
+                content.body = "\(game.shortName) is starting soon!"
+                content.sound = .default
+                
+                let date = game.gameDate
+                let triggerDate = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: date.addingTimeInterval(-600))
+                let trigger = UNCalendarNotificationTrigger(dateMatching: triggerDate, repeats: false)
+                let request = UNNotificationRequest(identifier: "game_\(game.id)", content: content, trigger: trigger)
+                center.add(request)
+            }
+        }
+    }
+
     private func scoreButton(game: ESPNEvent, sport: SportType) -> some View {
         Button(action: { 
             let h = game.homeCompetitor?.team?.shortDisplayName ?? game.homeCompetitor?.athlete?.shortName ?? ""
             let a = game.awayCompetitor?.team?.shortDisplayName ?? game.awayCompetitor?.athlete?.shortName ?? ""
             viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.broadcastName)
         }) {
-            ScoreRow(game: game, sport: sport).equatable()
+            ScoreRow(game: game, sport: sport, isScoreHidden: scoreViewModel.hiddenScoreGameIDs.contains(game.id)).equatable()
         }
         .buttonStyle(.plain)
         .contextMenu {
@@ -211,23 +236,120 @@ struct SportGamesListView: View {
                 let a = game.awayCompetitor?.team?.shortDisplayName ?? game.awayCompetitor?.athlete?.shortName ?? ""
                 viewModel.showStreamOptions(home: h, away: a, sport: sport, network: game.broadcastName)
             } label: {
-                Label("Show Stream Options", systemImage: "list.bullet")
+                Label("Stream List", systemImage: "list.bullet")
             }
             
             Button {
-                let query = "\(game.shortName) \(game.broadcastName ?? "")"
+                let h = game.homeCompetitor?.team?.shortDisplayName ?? game.homeCompetitor?.athlete?.shortName ?? ""
+                let a = game.awayCompetitor?.team?.shortDisplayName ?? game.awayCompetitor?.athlete?.shortName ?? ""
+                viewModel.autoAddGameToMultiView(home: h, away: a, network: game.broadcastName)
+            } label: {
+                Label("Add to Multi-View", systemImage: "square.grid.2x2")
+            }
+            
+            Button {
+                let query = "\(game.shortName) highlights"
                 if let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-                   let url = URL(string: "https://www.google.com/search?q=\(encoded)") {
+                   let url = URL(string: "https://www.youtube.com/results?search_query=\(encoded)") {
                     UIApplication.shared.open(url)
                 }
             } label: {
-                Label("Search on Google", systemImage: "magnifyingglass")
+                Label("Find Highlights", systemImage: "play.rectangle.fill")
             }
             
             Button {
-                UIPasteboard.general.string = "\(game.shortName) - \(game.status.type.detail)"
+                scoreViewModel.toggleReminder(game)
             } label: {
-                Label("Copy Details", systemImage: "doc.on.doc")
+                Label(scoreViewModel.reminderGameIDs.contains(game.id) ? "Cancel Reminder" : "Set Reminder", systemImage: scoreViewModel.reminderGameIDs.contains(game.id) ? "bell.slash" : "bell")
+            }
+            
+            Button {
+                scoreViewModel.togglePin(game.id)
+            } label: {
+                Label(scoreViewModel.pinnedGameIDs.contains(game.id) ? "Unpin Game" : "Pin to Top", systemImage: scoreViewModel.pinnedGameIDs.contains(game.id) ? "pin.slash" : "pin")
+            }
+            
+            Button {
+                scoreViewModel.toggleHideScore(game.id)
+            } label: {
+                Label(scoreViewModel.hiddenScoreGameIDs.contains(game.id) ? "Show Score" : "Hide Score", systemImage: scoreViewModel.hiddenScoreGameIDs.contains(game.id) ? "eye" : "eye.slash")
+            }
+        }
+    }
+}
+
+struct PinnedGamesListView: View {
+    @ObservedObject var scoreViewModel: ScoreViewModel
+    @ObservedObject var viewModel: ChannelViewModel
+    
+    var body: some View {
+        ScrollView(showsIndicators: false) {
+            LazyVStack(spacing: 12) {
+                if scoreViewModel.allPinnedGames.isEmpty {
+                    EmptyStateView(title: "No Pinned Games", systemImage: "pin.slash", description: "Pin games to see them here.").frame(height: 300)
+                } else {
+                    ForEach(scoreViewModel.allPinnedGames) { game in
+                        scoreButton(game: game, sport: .nfl)
+                    }
+                }
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 120)
+        }
+    }
+    
+    private func scoreButton(game: ESPNEvent, sport: SportType) -> some View {
+        Button(action: { 
+            let h = game.homeCompetitor?.team?.shortDisplayName ?? game.homeCompetitor?.athlete?.shortName ?? ""
+            let a = game.awayCompetitor?.team?.shortDisplayName ?? game.awayCompetitor?.athlete?.shortName ?? ""
+            viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.broadcastName)
+        }) {
+            ScoreRow(game: game, sport: sport, isScoreHidden: scoreViewModel.hiddenScoreGameIDs.contains(game.id)).equatable()
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button {
+                let h = game.homeCompetitor?.team?.shortDisplayName ?? game.homeCompetitor?.athlete?.shortName ?? ""
+                let a = game.awayCompetitor?.team?.shortDisplayName ?? game.awayCompetitor?.athlete?.shortName ?? ""
+                viewModel.showStreamOptions(home: h, away: a, sport: sport, network: game.broadcastName)
+            } label: {
+                Label("Stream List", systemImage: "list.bullet")
+            }
+            
+            Button {
+                let h = game.homeCompetitor?.team?.shortDisplayName ?? game.homeCompetitor?.athlete?.shortName ?? ""
+                let a = game.awayCompetitor?.team?.shortDisplayName ?? game.awayCompetitor?.athlete?.shortName ?? ""
+                viewModel.autoAddGameToMultiView(home: h, away: a, network: game.broadcastName)
+            } label: {
+                Label("Add to Multi-View", systemImage: "square.grid.2x2")
+            }
+            
+            Button {
+                let query = "\(game.shortName) highlights"
+                if let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+                   let url = URL(string: "https://www.youtube.com/results?search_query=\(encoded)") {
+                    UIApplication.shared.open(url)
+                }
+            } label: {
+                Label("Find Highlights", systemImage: "play.rectangle.fill")
+            }
+            
+            Button {
+                scoreViewModel.toggleReminder(game)
+            } label: {
+                Label(scoreViewModel.reminderGameIDs.contains(game.id) ? "Cancel Reminder" : "Set Reminder", systemImage: scoreViewModel.reminderGameIDs.contains(game.id) ? "bell.slash" : "bell")
+            }
+            
+            Button {
+                scoreViewModel.togglePin(game.id)
+            } label: {
+                Label(scoreViewModel.pinnedGameIDs.contains(game.id) ? "Unpin Game" : "Pin to Top", systemImage: scoreViewModel.pinnedGameIDs.contains(game.id) ? "pin.slash" : "pin")
+            }
+            
+            Button {
+                scoreViewModel.toggleHideScore(game.id)
+            } label: {
+                Label(scoreViewModel.hiddenScoreGameIDs.contains(game.id) ? "Show Score" : "Hide Score", systemImage: scoreViewModel.hiddenScoreGameIDs.contains(game.id) ? "eye" : "eye.slash")
             }
         }
     }
@@ -283,8 +405,8 @@ struct ManualSelectionSheet: View {
 }
 
 struct ScoreRow: View, Equatable {
-    let game: ESPNEvent; let sport: SportType
-    static func == (lhs: ScoreRow, rhs: ScoreRow) -> Bool { lhs.game.id == rhs.game.id }
+    let game: ESPNEvent; let sport: SportType; var isScoreHidden: Bool = false
+    static func == (lhs: ScoreRow, rhs: ScoreRow) -> Bool { lhs.game.id == rhs.game.id && lhs.isScoreHidden == rhs.isScoreHidden }
     var body: some View { 
         VStack(spacing: 0) { 
             if sport == .f1 {  
@@ -299,7 +421,7 @@ struct ScoreRow: View, Equatable {
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1)) 
     }
     
-    private var teamLayout: some View { HStack(alignment: .center, spacing: 4) { if let away = game.awayCompetitor { TeamColumn(competitor: away, gameState: game.status.type.state, align: .trailing).frame(maxWidth: .infinity) }; VStack(spacing: 6) { Text(game.status.type.detail.uppercased()).font(.system(size: 11, weight: .bold)).foregroundStyle(game.status.type.state == "in" ? .red : .secondary).multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.8).frame(minWidth: 70, maxWidth: 100); if let cn = game.broadcastName { Text(cn).font(.system(size: 10, weight: .black)).foregroundStyle(.white).padding(.horizontal, 6).padding(.vertical, 2).background(Color.white.opacity(0.15)).cornerRadius(4) }; Capsule().fill(Color.white.opacity(0.1)).frame(width: 1.5, height: 20) }; if let home = game.homeCompetitor { TeamColumn(competitor: home, gameState: game.status.type.state, align: .leading).frame(maxWidth: .infinity) } } }
+    private var teamLayout: some View { HStack(alignment: .center, spacing: 4) { if let away = game.awayCompetitor { TeamColumn(competitor: away, gameState: game.status.type.state, align: .trailing, isScoreHidden: isScoreHidden).frame(maxWidth: .infinity) }; VStack(spacing: 6) { Text(game.status.type.detail.uppercased()).font(.system(size: 11, weight: .bold)).foregroundStyle(game.status.type.state == "in" ? .red : .secondary).multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.8).frame(minWidth: 70, maxWidth: 100); if let cn = game.broadcastName { Text(cn).font(.system(size: 10, weight: .black)).foregroundStyle(.white).padding(.horizontal, 6).padding(.vertical, 2).background(Color.white.opacity(0.15)).cornerRadius(4) }; Capsule().fill(Color.white.opacity(0.1)).frame(width: 1.5, height: 20) }; if let home = game.homeCompetitor { TeamColumn(competitor: home, gameState: game.status.type.state, align: .leading, isScoreHidden: isScoreHidden).frame(maxWidth: .infinity) } } }
     
     
     private var raceLayout: some View {
@@ -320,11 +442,11 @@ struct ScoreRow: View, Equatable {
 }
 
 struct TeamColumn: View {
-    let competitor: ESPNCompetitor; let gameState: String; let align: HorizontalAlignment
+    let competitor: ESPNCompetitor; let gameState: String; let align: HorizontalAlignment; var isScoreHidden: Bool = false
     var body: some View { 
         let name = competitor.team?.shortDisplayName ?? competitor.team?.abbreviation ?? competitor.athlete?.shortName ?? competitor.athlete?.displayName ?? "Unknown"
         let logo = competitor.team?.logo ?? competitor.athlete?.flag?.href ?? competitor.athlete?.headshot ?? ""
-        let score = gameState == "pre" ? "" : (competitor.score ?? "0")
+        let score = isScoreHidden ? "?" : (gameState == "pre" ? "" : (competitor.score ?? "0"))
         
         return HStack(spacing: 8) { if align == .trailing { teamInfoStack(n: name, l: logo); scoreText(s: score) } else { scoreText(s: score); teamInfoStack(n: name, l: logo) } } 
     }
@@ -333,6 +455,18 @@ struct TeamColumn: View {
 }
 
 struct SportSelectorView: View {
-    @Binding var selectedSport: SportType; let action: () -> Void
-    var body: some View { ScrollViewReader { proxy in ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 12) { ForEach(SportType.allCases) { s in Button(action: { withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { selectedSport = s }; action() }) { Text(s.rawValue).font(.caption.bold()).padding(.vertical, 8).padding(.horizontal, 16).background(selectedSport == s ? Color.white : Color.white.opacity(0.1)).foregroundColor(selectedSport == s ? .black : .white).clipShape(Capsule()) }.id(s) } }.padding(.horizontal).padding(.vertical, 10) }.onAppear { proxy.scrollTo(selectedSport, anchor: .center) }.onChangeCompat(of: selectedSport) { ns in withAnimation(.spring()) { proxy.scrollTo(ns, anchor: .center) } } } }
+    @Binding var selectedSport: SportType; @Binding var showingPinned: Bool; let pinnedCount: Int; let action: () -> Void
+    var body: some View { ScrollViewReader { proxy in ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 12) { 
+        if pinnedCount > 0 {
+            Button(action: { withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { showingPinned = true }; action() }) {
+                HStack(spacing: 4) {
+                    Image(systemName: "pin.fill")
+                    Text("Pinned (\(pinnedCount))")
+                }
+                .font(.caption.bold()).padding(.vertical, 8).padding(.horizontal, 16)
+                .background(showingPinned ? Color.white : Color.white.opacity(0.1))
+                .foregroundColor(showingPinned ? .black : .white).clipShape(Capsule())
+            }
+        }
+        ForEach(SportType.allCases) { s in Button(action: { withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { selectedSport = s; showingPinned = false }; action() }) { Text(s.rawValue).font(.caption.bold()).padding(.vertical, 8).padding(.horizontal, 16).background(!showingPinned && selectedSport == s ? Color.white : Color.white.opacity(0.1)).foregroundColor(!showingPinned && selectedSport == s ? .black : .white).clipShape(Capsule()) }.id(s) } }.padding(.horizontal).padding(.vertical, 10) }.onAppear { proxy.scrollTo(selectedSport, anchor: .center) }.onChangeCompat(of: selectedSport) { ns in withAnimation(.spring()) { proxy.scrollTo(ns, anchor: .center) } } } }
 }

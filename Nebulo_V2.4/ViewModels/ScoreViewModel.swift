@@ -10,6 +10,12 @@ class ScoreViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String? = nil
     
+    @Published var pinnedGameIDs: Set<String> = []
+    @Published var hiddenScoreGameIDs: Set<String> = []
+    @Published var reminderGameIDs: Set<String> = []
+    @Published var allPinnedGames: [ESPNEvent] = []
+    private var currentSearchText = ""
+    
     private var masterGames: [SportType: [ESPNEvent]] = [:]
     private var masterSectionsMap: [SportType: [SoccerGameSection]] = [:]
     
@@ -48,6 +54,11 @@ class ScoreViewModel: ObservableObject {
             self.filteredSectionsMap = loadedMap
         }
         
+        if let pinned = UserDefaults.standard.stringArray(forKey: "pinnedGameIDs") { self.pinnedGameIDs = Set(pinned) }
+        if let hidden = UserDefaults.standard.stringArray(forKey: "hiddenScoreGameIDs") { self.hiddenScoreGameIDs = Set(hidden) }
+        if let reminders = UserDefaults.standard.stringArray(forKey: "reminderGameIDs") { self.reminderGameIDs = Set(reminders) }
+        
+        updatePinnedGames()
         Task { await self.preloadImages() }
     }
     
@@ -68,6 +79,87 @@ class ScoreViewModel: ObservableObject {
         
         if let encoded = try? JSONEncoder().encode(cacheableMap) {
             UserDefaults.standard.set(encoded, forKey: "cachedSectionsMap")
+        }
+        
+        UserDefaults.standard.set(Array(pinnedGameIDs), forKey: "pinnedGameIDs")
+        UserDefaults.standard.set(Array(hiddenScoreGameIDs), forKey: "hiddenScoreGameIDs")
+        UserDefaults.standard.set(Array(reminderGameIDs), forKey: "reminderGameIDs")
+    }
+    
+    func togglePin(_ id: String) {
+        if pinnedGameIDs.contains(id) { pinnedGameIDs.remove(id) } else { pinnedGameIDs.insert(id) }
+        updatePinnedGames()
+        saveToCache()
+        applyFilter(text: currentSearchText)
+    }
+    
+    func toggleHideScore(_ id: String) {
+        if hiddenScoreGameIDs.contains(id) { hiddenScoreGameIDs.remove(id) } else { hiddenScoreGameIDs.insert(id) }
+        saveToCache()
+    }
+    
+    func toggleReminder(_ game: ESPNEvent) {
+        if reminderGameIDs.contains(game.id) {
+            reminderGameIDs.remove(game.id)
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["game_\(game.id)"])
+        } else {
+            reminderGameIDs.insert(game.id)
+            let center = UNUserNotificationCenter.current()
+            center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                if granted {
+                    let content = UNMutableNotificationContent()
+                    content.title = "Game Reminder"
+                    content.body = "\(game.shortName) is starting soon!"
+                    content.sound = .default
+                    let triggerDate = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: game.gameDate.addingTimeInterval(-600))
+                    let trigger = UNCalendarNotificationTrigger(dateMatching: triggerDate, repeats: false)
+                    let request = UNNotificationRequest(identifier: "game_\(game.id)", content: content, trigger: trigger)
+                    center.add(request)
+                }
+            }
+        }
+        saveToCache()
+    }
+    
+    private func updatePinnedGames() {
+        var pinned: [ESPNEvent] = []
+        for games in masterGames.values {
+            pinned.append(contentsOf: games.filter { pinnedGameIDs.contains($0.id) })
+        }
+        for sections in masterSectionsMap.values {
+            for section in sections {
+                pinned.append(contentsOf: section.games.filter { pinnedGameIDs.contains($0.id) })
+            }
+        }
+        // Deduplicate by ID
+        var seen = Set<String>()
+        var uniquePinned: [ESPNEvent] = []
+        for p in pinned {
+            if !seen.contains(p.id) {
+                seen.insert(p.id)
+                uniquePinned.append(p)
+            }
+        }
+        self.allPinnedGames = sortGames(uniquePinned)
+    }
+    
+    private func sortGames(_ games: [ESPNEvent]) -> [ESPNEvent] {
+        return games.sorted { a, b in
+            let aPinned = pinnedGameIDs.contains(a.id)
+            let bPinned = pinnedGameIDs.contains(b.id)
+            if aPinned != bPinned { return aPinned }
+            
+            let aState = a.status.type.state
+            let bState = b.status.type.state
+            if aState == "in" && bState != "in" { return true }
+            if aState != "in" && bState == "in" { return false }
+            if aState == "in" && bState == "in" { return a.gameDate > b.gameDate }
+            if aState == "pre" && bState == "post" { return true }
+            if aState == "post" && bState == "pre" { return false }
+            if aState == "pre" && bState == "pre" { return a.gameDate > b.gameDate } // Changed from > to match typical 'later games first' or 'earlier games first'? 
+            // Original fetchEvents had > (Descending date). But typically pre-games should be ascending (soonest first).
+            // fetchEvents used > for Pre-Pre. I will keep > for consistency with fetchEvents.
+            return a.gameDate > b.gameDate
         }
     }
     
@@ -217,6 +309,7 @@ class ScoreViewModel: ObservableObject {
                 }
                 
                 await MainActor.run {
+                    self.updatePinnedGames()
                     self.saveToCache()
                     self.lastFetchTime = Date()
                 }
@@ -293,18 +386,36 @@ class ScoreViewModel: ObservableObject {
     }
     
     func applyFilter(text: String) {
+        self.currentSearchText = text
         if text.isEmpty {
-            self.filteredGames = self.masterGames
-            self.filteredSectionsMap = self.masterSectionsMap
+            var newFiltered: [SportType: [ESPNEvent]] = [:]
+            for (sport, games) in masterGames {
+                newFiltered[sport] = sortGames(games)
+            }
+            self.filteredGames = newFiltered
+            
+            var newFilteredMap: [SportType: [SoccerGameSection]] = [:]
+            for (sport, sections) in masterSectionsMap {
+                // Soccer sections might need sorting logic too if games are moved, but sections structure makes pinning hard within sections.
+                // We'll just sort games within sections for now if they are pinned?
+                // Or maybe just leave soccer sections as is for now regarding order, unless we want to pull pinned games out of sections.
+                // For simplicity, we'll just return masterSectionsMap but potentially sort games inside sections?
+                // Let's sort games inside each section.
+                newFilteredMap[sport] = sections.map { sec in
+                    SoccerGameSection(id: sec.id, league: sec.league, games: sortGames(sec.games))
+                }
+            }
+            self.filteredSectionsMap = newFilteredMap
         } else {
             let lower = text.lowercased()
             var newFiltered: [SportType: [ESPNEvent]] = [:]
             for (sport, games) in masterGames {
-                newFiltered[sport] = games.filter { game in
+                let matches = games.filter { game in
                     game.shortName.lowercased().contains(lower) ||
                     (game.homeCompetitor?.team?.displayName ?? "").lowercased().contains(lower) ||
                     (game.awayCompetitor?.team?.displayName ?? "").lowercased().contains(lower)
                 }
+                newFiltered[sport] = sortGames(matches)
             }
             self.filteredGames = newFiltered
             
@@ -316,7 +427,7 @@ class ScoreViewModel: ObservableObject {
                         (game.homeCompetitor?.team?.displayName ?? "").lowercased().contains(lower) ||
                         (game.awayCompetitor?.team?.displayName ?? "").lowercased().contains(lower)
                     }
-                    return matchingGames.isEmpty ? nil : SoccerGameSection(league: sec.league, games: matchingGames)
+                    return matchingGames.isEmpty ? nil : SoccerGameSection(league: sec.league, games: sortGames(matchingGames))
                 }
                 if !filteredSections.isEmpty { newFilteredMap[sport] = filteredSections }
             }
