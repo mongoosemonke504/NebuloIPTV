@@ -204,6 +204,15 @@ struct SportGamesListView: View {
             ScoreRow(game: game, sport: sport).equatable()
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            Button {
+                let h = game.homeCompetitor?.team?.shortDisplayName ?? game.homeCompetitor?.athlete?.shortName ?? ""
+                let a = game.awayCompetitor?.team?.shortDisplayName ?? game.awayCompetitor?.athlete?.shortName ?? ""
+                viewModel.showStreamOptions(home: h, away: a, sport: sport, network: game.broadcastName)
+            } label: {
+                Label("Show Stream Options", systemImage: "list.bullet")
+            }
+        }
     }
 }
 

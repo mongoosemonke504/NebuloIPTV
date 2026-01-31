@@ -953,6 +953,176 @@ class ChannelViewModel: ObservableObject {
         }
     }
     
+    func showStreamOptions(home: String, away: String, sport: SportType, network: String? = nil) {
+        
+        let inputChannels = self.channels
+        let inputHidden = self.hiddenIDs
+        let hiddenCatIDs = Set(self.categories.filter { $0.isHidden }.map { $0.id })
+        let currentEPG = self.epgData
+        let now = self.currentTime
+        let manualOrder = self.manualChannelOrder
+        let pLang = self.preferredLanguage
+        let pQual = self.preferredQuality
+        
+        self.isSearchingGame = true; self.suggestedChannels = []; self.channelToAutoPlay = nil
+        
+        Task.detached(priority: .userInitiated) { [weak self, inputChannels, inputHidden, hiddenCatIDs, currentEPG, now, manualOrder, pLang, pQual] in
+            guard let self = self else { return }
+            let homeTokens = SmartSearchLogic.tokenize(home)
+            let awayTokens = SmartSearchLogic.tokenize(away)
+            let targetNetwork = (network ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            
+            var orderMap: [Int: Int] = [:]
+            for (index, id) in manualOrder.enumerated() { orderMap[id] = index }
+            
+            func matchCount(_ text: String, tokens: [String]) -> Int {
+                let lower = text.lowercased()
+                return tokens.filter { lower.contains($0) }.count
+            }
+            
+            struct ChannelScore {
+                let channel: StreamChannel
+                let score: Int
+                let isNetworkMatch: Bool
+                let isContentMatch: Bool
+            }
+            
+            var scoredChannels: [ChannelScore] = []
+            
+            for channel in inputChannels {
+                if inputHidden.contains(channel.id) || hiddenCatIDs.contains(channel.categoryID) { continue }
+                if SmartSearchLogic.isBanner(channel.name) { continue }
+                
+                var score = 0
+                var isNetMatch = false 
+                var isContMatch = false
+                
+                if !targetNetwork.isEmpty && channel.name.localizedCaseInsensitiveContains(targetNetwork) {
+                    score += 1000
+                    isNetMatch = true 
+                }
+                
+                var epgTitle = ""
+                var epgDesc = ""
+                
+                if let eID = channel.epgID, let schedule = currentEPG[eID],
+                   let program = schedule.first(where: { now >= $0.start && now <= $0.stop }) {
+                    epgTitle = program.title
+                    epgDesc = program.description ?? ""
+                }
+                
+                let nameH = matchCount(channel.name, tokens: homeTokens)
+                let nameA = matchCount(channel.name, tokens: awayTokens)
+                let titleH = matchCount(epgTitle, tokens: homeTokens)
+                let titleA = matchCount(epgTitle, tokens: awayTokens)
+                let descH = matchCount(epgDesc, tokens: homeTokens)
+                let descA = matchCount(epgDesc, tokens: awayTokens)
+                
+                if titleH > 0 { score += 500; isContMatch = true }
+                if titleA > 0 { score += 500; isContMatch = true }
+                if descH > 0 { score += 300; isContMatch = true }
+                if descA > 0 { score += 300; isContMatch = true }
+                if nameH > 0 { score += 200; isContMatch = true }
+                if nameA > 0 { score += 200; isContMatch = true }
+                
+                let totalH = nameH + titleH + descH
+                let totalA = nameA + titleA + descA
+                if totalH > 0 && totalA > 0 { score += 300 }
+                
+                if score > 0 {
+                    let combinedText = "\(channel.name) \(epgTitle) \(epgDesc)"
+                    if SmartSearchLogic.checkLanguageMatch(combinedText, preference: pLang) {
+                        score += 2000
+                    } else if pLang != .any && pLang != .us && pLang != .uk && pLang != .ca {
+                        if let detected = SmartSearchLogic.detectLanguage(combinedText), (detected == .us || detected == .uk || detected == .ca) {
+                            score -= 1000
+                        }
+                    }
+                }
+                
+                let q = SmartSearchLogic.detectQuality(channel.name)
+                if pQual == .best {
+                    if q == .fourK { score += 40 }
+                    else if q == .fhd { score += 30 }
+                    else if q == .hd { score += 20 }
+                } else {
+                    if q == pQual { score += 50 }
+                }
+                
+                score += channel.qualityScore
+                
+                if score > 0 || isNetMatch {
+                    scoredChannels.append(ChannelScore(channel: channel, score: score, isNetworkMatch: isNetMatch, isContentMatch: isContMatch))
+                }
+            }
+            
+            scoredChannels.sort { $0.score > $1.score }
+            
+            let networkMatches = scoredChannels.filter { $0.isNetworkMatch }
+            let contentMatches = scoredChannels.filter { $0.isContentMatch && !$0.isNetworkMatch } 
+            
+            var finalSelection: [StreamChannel] = []
+            var usedIDs = Set<Int>()
+            
+            for item in networkMatches.prefix(10) {
+                finalSelection.append(item.channel)
+                usedIDs.insert(item.channel.id)
+            }
+            
+            var addedContent = 0
+            for item in contentMatches {
+                if addedContent >= 10 { break }
+                if !usedIDs.contains(item.channel.id) {
+                    finalSelection.append(item.channel)
+                    usedIDs.insert(item.channel.id)
+                    addedContent += 1
+                }
+            }
+            
+            if finalSelection.count < 20 {
+                for item in scoredChannels {
+                    if finalSelection.count >= 20 { break }
+                    if !usedIDs.contains(item.channel.id) {
+                        finalSelection.append(item.channel)
+                        usedIDs.insert(item.channel.id)
+                    }
+                }
+            }
+            
+            // For manual options, we skip prioritySort to respect the "most likely" score order
+            // unless the user has explicit manual overrides for these specific channels, which prioritySort handles.
+            // But prioritySort forces quality/name sort if no manual order. We want Relevance score.
+            // So we will NOT use prioritySort here, but we SHOULD respect manual order if it exists.
+            
+            // Let's do a custom sort: if manually ordered, use that. Else use the score order (which is preserved in finalSelection implicitly by insertion order).
+            let sortedByScore = finalSelection
+            
+            let finalSorted = sortedByScore.sorted { a, b in
+                let idxA = orderMap[a.id]
+                let idxB = orderMap[b.id]
+                if let iA = idxA, let iB = idxB { return iA < iB }
+                if idxA != nil { return true }
+                if idxB != nil { return false }
+                // Fallback to existing order (which is score based)
+                return false
+            }
+            
+            await MainActor.run {
+                self.isSearchingGame = false
+                if finalSorted.isEmpty {
+                    self.showNoStreamsAlert = true
+                } else {
+                    self.suggestedChannels = finalSorted
+                    self.showSelectionSheet = true
+                    
+                    for ch in finalSorted.prefix(3) {
+                        self.prewarmChannel(ch)
+                    }
+                }
+            }
+        }
+    }
+    
     func moveChannelInSearch(from source: StreamChannel, to destination: StreamChannel, save: Bool = true) {
         
         var isNameList = false
