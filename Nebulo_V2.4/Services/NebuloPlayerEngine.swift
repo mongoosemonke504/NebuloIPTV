@@ -516,10 +516,10 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         let autoBufferObj = UserDefaults.standard.object(forKey: "autoBuffer")
         let isAuto = (autoBufferObj as? Bool) ?? true
         
-        var bufferMs: Int = 1500
+        var bufferMs: Int = 10000
         if !isAuto {
             let userTime = UserDefaults.standard.double(forKey: "bufferTime")
-            if userTime > 0 { bufferMs = Int(userTime * 1000) } else { bufferMs = 2000 }
+            if userTime > 0 { bufferMs = Int(userTime * 1000) } else { bufferMs = 10000 }
         }
         media.addOptions(["network-caching": bufferMs, "clock-jitter": 0, "clock-synchro": 0])
         vlcMediaPlayer.media = media
