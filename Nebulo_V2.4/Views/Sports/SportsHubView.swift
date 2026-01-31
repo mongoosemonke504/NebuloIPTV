@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct SportsHubView: View {
     @ObservedObject var viewModel: ChannelViewModel
@@ -211,6 +212,22 @@ struct SportGamesListView: View {
                 viewModel.showStreamOptions(home: h, away: a, sport: sport, network: game.broadcastName)
             } label: {
                 Label("Show Stream Options", systemImage: "list.bullet")
+            }
+            
+            Button {
+                let query = "\(game.shortName) \(game.broadcastName ?? "")"
+                if let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+                   let url = URL(string: "https://www.google.com/search?q=\(encoded)") {
+                    UIApplication.shared.open(url)
+                }
+            } label: {
+                Label("Search on Google", systemImage: "magnifyingglass")
+            }
+            
+            Button {
+                UIPasteboard.general.string = "\(game.shortName) - \(game.status.type.detail)"
+            } label: {
+                Label("Copy Details", systemImage: "doc.on.doc")
             }
         }
     }
