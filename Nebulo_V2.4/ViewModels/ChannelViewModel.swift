@@ -60,10 +60,16 @@ class ChannelViewModel: ObservableObject {
     
     
     @Published var preferredLanguage: LanguagePreference = .us {
-        didSet { UserDefaults.standard.set(preferredLanguage.rawValue, forKey: settingsPrefix + "preferredLanguage") }
+        didSet { 
+            UserDefaults.standard.set(preferredLanguage.rawValue, forKey: settingsPrefix + "preferredLanguage")
+            self.preResolvedCache.removeAll()
+        }
     }
     @Published var preferredQuality: StreamQuality = .best {
-        didSet { UserDefaults.standard.set(preferredQuality.rawValue, forKey: settingsPrefix + "preferredQuality") }
+        didSet { 
+            UserDefaults.standard.set(preferredQuality.rawValue, forKey: settingsPrefix + "preferredQuality")
+            self.preResolvedCache.removeAll()
+        }
     }
     
     
