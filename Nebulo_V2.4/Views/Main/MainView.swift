@@ -140,13 +140,8 @@ struct MainViewModifiers: ViewModifier {
             .applyIf(!showMultiView) { view in
                 view.searchable(text: searchText, prompt: "Search").toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
-                        HStack {
-                            Button(action: { withAnimation(.spring()) { showMultiView = true } }) { 
-                                Image(systemName: "square.grid.2x2.fill").foregroundStyle(.white.opacity(0.8)) 
-                            }
-                            Button(action: { showSettings = true }) { 
-                                Image(systemName: "gearshape.fill").foregroundStyle(.white.opacity(0.8)) 
-                            }
+                        Button(action: { showSettings = true }) { 
+                            Image(systemName: "gearshape.fill").foregroundStyle(.white.opacity(0.8)) 
                         }
                     }
                 }
