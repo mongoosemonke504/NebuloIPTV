@@ -443,7 +443,7 @@ struct QuickSwitcherView: View {
                 LazyHStack(spacing: 12) {
                     ForEach(channels) { c in
                         Button(action: { 
-                            UISelectionFeedbackGenerator().selectionChanged()
+                            ChannelViewModel.shared.triggerSelectionHaptic()
                             onPlay(c) 
                         }) {
                             VStack(alignment: .leading, spacing: 6) {
@@ -517,6 +517,7 @@ struct QuickSwitcherView: View {
     
     private func categoryButton(id: Int, name: String, cat: StreamCategory? = nil) -> some View {
         Button(action: {
+            ChannelViewModel.shared.triggerSelectionHaptic()
             if let c = cat { switcherCategory = c }
             else { switcherCategory = StreamCategory(id: id, name: name) }
             withAnimation { showCategoryList = false }

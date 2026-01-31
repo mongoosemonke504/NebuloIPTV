@@ -12,7 +12,10 @@ struct HorizontalSearchList: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 16) {
                     ForEach(channels) { c in
-                        Button(action: { playAction(c) }) {
+                        Button(action: { 
+                            ChannelViewModel.shared.triggerSelectionHaptic()
+                            playAction(c) 
+                        }) {
                             SearchChannelContent(channel: c, viewModel: viewModel)
                         }
                         .buttonStyle(.plain)
@@ -82,7 +85,10 @@ struct HorizontalPreviewList: View {
         ScrollView(.horizontal, showsIndicators: false) {
             LazyHStack(spacing: 16) {
                 ForEach(channels) { c in
-                    Button(action: { playAction(c) }) {
+                    Button(action: { 
+                        ChannelViewModel.shared.triggerSelectionHaptic()
+                        playAction(c) 
+                    }) {
                         VStack(alignment: .leading, spacing: 8) {
                             ZStack {
                                 CachedAsyncImage(urlString: c.icon ?? "", size: CGSize(width: 200, height: 112)).blur(radius: 20).opacity(0.3)
@@ -140,7 +146,10 @@ struct ChannelRow: View, Equatable {
     static func == (lhs: ChannelRow, rhs: ChannelRow) -> Bool { lhs.channel == rhs.channel && lhs.isFavorite == rhs.isFavorite && lhs.accentColor == rhs.accentColor && lhs.isCompact == rhs.isCompact && lhs.epgProgram?.id == rhs.epgProgram?.id }
     
     var body: some View {
-        Button(action: playAction) {
+        Button(action: {
+            ChannelViewModel.shared.triggerSelectionHaptic()
+            playAction()
+        }) {
             HStack(spacing: 12) {
                 CachedAsyncImage(urlString: channel.icon ?? "", size: CGSize(width: isCompact ? 40 : 50, height: isCompact ? 40 : 50))
                     .frame(width: isCompact ? 40 : 50, height: isCompact ? 40 : 50)

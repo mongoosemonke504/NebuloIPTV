@@ -61,7 +61,7 @@ struct SettingsView: View {
                         
                         
                         SettingsSectionHeader(title: "Playback")
-                        PlaybackCard()
+                        PlaybackCard(viewModel: viewModel)
                         
                         
                         SettingsSectionHeader(title: "Sports")
@@ -316,6 +316,7 @@ struct PlaybackCard: View {
     @AppStorage("autoBuffer") private var autoBuffer = true
     @AppStorage("bufferTime") private var bufferTime = 10.0
     @AppStorage("defaultPlayerEngine") private var defaultPlayerEngine = "VLC"
+    @ObservedObject var viewModel: ChannelViewModel
     
     var body: some View {
         SettingsCard {
@@ -330,6 +331,10 @@ struct PlaybackCard: View {
                     .pickerStyle(.menu)
                     .tint(.white.opacity(0.7))
                 }
+                
+                Divider().background(Color.white.opacity(0.1))
+                
+                SettingsToggle(title: "Haptic Feedback", isOn: $viewModel.hapticsEnabled)
                 
                 Divider().background(Color.white.opacity(0.1))
                 

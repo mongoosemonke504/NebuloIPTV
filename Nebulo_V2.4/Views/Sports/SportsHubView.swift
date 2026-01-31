@@ -223,6 +223,7 @@ struct SportGamesListView: View {
 
     private func scoreButton(game: ESPNEvent, sport: SportType) -> some View {
         Button(action: { 
+            ChannelViewModel.shared.triggerSelectionHaptic()
             let h = game.homeCompetitor?.team?.shortDisplayName ?? game.homeCompetitor?.athlete?.shortName ?? ""
             let a = game.awayCompetitor?.team?.shortDisplayName ?? game.awayCompetitor?.athlete?.shortName ?? ""
             viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.broadcastName)

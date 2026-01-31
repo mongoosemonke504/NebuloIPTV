@@ -65,6 +65,9 @@ class ChannelViewModel: ObservableObject {
             self.preResolvedCache.removeAll()
         }
     }
+    @Published var hapticsEnabled: Bool = true {
+        didSet { UserDefaults.standard.set(hapticsEnabled, forKey: settingsPrefix + "hapticsEnabled") }
+    }
     @Published var preferredQuality: StreamQuality = .best {
         didSet { 
             UserDefaults.standard.set(preferredQuality.rawValue, forKey: settingsPrefix + "preferredQuality")
@@ -1526,6 +1529,7 @@ class ChannelViewModel: ObservableObject {
         
         if let langRaw = UserDefaults.standard.string(forKey: settingsPrefix + "preferredLanguage"), let lang = LanguagePreference(rawValue: langRaw) { self.preferredLanguage = lang }
         if let qualRaw = UserDefaults.standard.string(forKey: settingsPrefix + "preferredQuality"), let qual = StreamQuality(rawValue: qualRaw) { self.preferredQuality = qual }
+        self.hapticsEnabled = UserDefaults.standard.object(forKey: settingsPrefix + "hapticsEnabled") as? Bool ?? true
         
         if let saved = load("sportsConfigs", type: [SportConfig].self) {
             self.sportsConfigs = saved.filter { $0.id != "Other" }.sorted { $0.order < $1.order }
@@ -1717,6 +1721,27 @@ class ChannelViewModel: ObservableObject {
                     }
                 }
             }
+    }
+
+    func triggerHaptic(_ style: UIImpactFeedbackGenerator.FeedbackStyle) {
+        if hapticsEnabled {
+            let generator = UIImpactFeedbackGenerator(style: style)
+            generator.impactOccurred()
+        }
+    }
+    
+    func triggerSelectionHaptic() {
+        if hapticsEnabled {
+            let generator = UISelectionFeedbackGenerator()
+            generator.selectionChanged()
+        }
+    }
+    
+    func triggerNotificationHaptic(_ type: UINotificationFeedbackGenerator.FeedbackType) {
+        if hapticsEnabled {
+            let generator = UINotificationFeedbackGenerator()
+            generator.notificationOccurred(type)
+        }
     }
 
     private func stopSmoothingTimer() {

@@ -376,15 +376,19 @@ struct StandardLayout: SwiftUI.View {
                                 
                                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
                                     DashboardCard(title: "Sports", icon: "sportscourt.fill", color: .green, accentColor: accentColor) {
+                                        viewModel.triggerSelectionHaptic()
                                         viewModel.lastSelectedHomeID = -3; withAnimation { selectedCategory = StreamCategory(id: -3, name: "Sports") }
                                     }
                                     DashboardCard(title: "Favorites", icon: "star.fill", color: .yellow, accentColor: accentColor) {
+                                        viewModel.triggerSelectionHaptic()
                                         viewModel.lastSelectedHomeID = -4; withAnimation { selectedCategory = StreamCategory(id: -4, name: "Favorites") }
                                     }
                                     DashboardCard(title: "Recordings", icon: "record.circle.fill", color: .red, accentColor: accentColor) {
+                                        viewModel.triggerSelectionHaptic()
                                         viewModel.lastSelectedHomeID = -5; withAnimation { selectedCategory = StreamCategory(id: -5, name: "Recordings") }
                                     }
                                     DashboardCard(title: "Multi-View", icon: "square.grid.2x2", color: .purple, accentColor: accentColor) {
+                                        viewModel.triggerSelectionHaptic()
                                         viewModel.lastSelectedHomeID = -99; withAnimation { showMultiView = true }
                                     }
                                 }
@@ -434,6 +438,7 @@ struct StandardLayout: SwiftUI.View {
                                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
                                     ForEach(viewModel.categories.filter { !$0.isHidden }) { cat in
                                         Button(action: {
+                                            viewModel.triggerSelectionHaptic()
                                             viewModel.lastSelectedHomeID = cat.id; withAnimation { selectedCategory = cat }
                                         }) {
                                             Text(cat.name)
@@ -586,14 +591,14 @@ struct SidebarLayout: SwiftUI.View {
                         ClockView().padding(.vertical, 20)
                         if !searchText.isEmpty { GlassSidebarRow(title: "Search Results", isSelected: true, accentColor: accentColor) }
                         else {
-                            Button(action: { withAnimation { selectedCategory = StreamCategory(id: -2, name: "Recently Watched") } }) { GlassSidebarRow(title: "Recently Watched", isSelected: selectedCategory?.id == -2, accentColor: accentColor) }.buttonStyle(.plain)
-                            Button(action: { withAnimation { selectedCategory = StreamCategory(id: -4, name: "Favorites") } }) { GlassSidebarRow(title: "Favorites", isSelected: selectedCategory?.id == -4, accentColor: accentColor) }.buttonStyle(.plain)
-                            Button(action: { withAnimation { selectedCategory = StreamCategory(id: -3, name: "Sports") } }) { GlassSidebarRow(title: "Sports", isSelected: selectedCategory?.id == -3, accentColor: accentColor) }.buttonStyle(.plain)
-                            Button(action: { withAnimation { selectedCategory = StreamCategory(id: -5, name: "Recordings") } }) { GlassSidebarRow(title: "Recordings", isSelected: selectedCategory?.id == -5, accentColor: accentColor) }.buttonStyle(.plain)
-                            Button(action: { withAnimation { showMultiView = true } }) { GlassSidebarRow(title: "Multi-View", isSelected: false, accentColor: accentColor) }.buttonStyle(.plain)
-                            Button(action: { withAnimation { selectedCategory = StreamCategory(id: -1, name: "All Channels") } }) { GlassSidebarRow(title: "All Channels", isSelected: selectedCategory?.id == -1, accentColor: accentColor) }.buttonStyle(.plain)
+                            Button(action: { viewModel.triggerSelectionHaptic(); withAnimation { selectedCategory = StreamCategory(id: -2, name: "Recently Watched") } }) { GlassSidebarRow(title: "Recently Watched", isSelected: selectedCategory?.id == -2, accentColor: accentColor) }.buttonStyle(.plain)
+                            Button(action: { viewModel.triggerSelectionHaptic(); withAnimation { selectedCategory = StreamCategory(id: -4, name: "Favorites") } }) { GlassSidebarRow(title: "Favorites", isSelected: selectedCategory?.id == -4, accentColor: accentColor) }.buttonStyle(.plain)
+                            Button(action: { viewModel.triggerSelectionHaptic(); withAnimation { selectedCategory = StreamCategory(id: -3, name: "Sports") } }) { GlassSidebarRow(title: "Sports", isSelected: selectedCategory?.id == -3, accentColor: accentColor) }.buttonStyle(.plain)
+                            Button(action: { viewModel.triggerSelectionHaptic(); withAnimation { selectedCategory = StreamCategory(id: -5, name: "Recordings") } }) { GlassSidebarRow(title: "Recordings", isSelected: selectedCategory?.id == -5, accentColor: accentColor) }.buttonStyle(.plain)
+                            Button(action: { viewModel.triggerSelectionHaptic(); withAnimation { showMultiView = true } }) { GlassSidebarRow(title: "Multi-View", isSelected: false, accentColor: accentColor) }.buttonStyle(.plain)
+                            Button(action: { viewModel.triggerSelectionHaptic(); withAnimation { selectedCategory = StreamCategory(id: -1, name: "All Channels") } }) { GlassSidebarRow(title: "All Channels", isSelected: selectedCategory?.id == -1, accentColor: accentColor) }.buttonStyle(.plain)
                             Divider().background(Color.white.opacity(0.3)).padding(.vertical, 8)
-                            ForEach(viewModel.categories.filter { !$0.isHidden }) { cat in Button(action: { withAnimation { selectedCategory = cat } }) { GlassSidebarRow(title: cat.name, isSelected: selectedCategory?.id == cat.id, accentColor: accentColor) }.buttonStyle(.plain).contextMenu { Button { viewModel.triggerRenameCategory(cat) } label: { Label("Rename", systemImage: "pencil") }; Button { viewModel.hideCategory(cat.id) } label: { Label("Hide", systemImage: "eye.slash") } } }
+                            ForEach(viewModel.categories.filter { !$0.isHidden }) { cat in Button(action: { viewModel.triggerSelectionHaptic(); withAnimation { selectedCategory = cat } }) { GlassSidebarRow(title: cat.name, isSelected: selectedCategory?.id == cat.id, accentColor: accentColor) }.buttonStyle(.plain).contextMenu { Button { viewModel.triggerRenameCategory(cat) } label: { Label("Rename", systemImage: "pencil") }; Button { viewModel.hideCategory(cat.id) } label: { Label("Hide", systemImage: "eye.slash") } } }
                         }
                     }.padding(.horizontal, 10)
                 }

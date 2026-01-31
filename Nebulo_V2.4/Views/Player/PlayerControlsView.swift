@@ -75,6 +75,7 @@ struct PlayerControlsView: View {
                         HStack(spacing: 60) {
                             
                             Button(action: {
+                                ChannelViewModel.shared.triggerSelectionHaptic()
                                 if !playerManager.playbackFailed {
                                     togglePlay()
                                 }
@@ -101,6 +102,7 @@ struct PlayerControlsView: View {
                                     ZStack {
                                         HStack {
                                             Button(action: {
+                                                ChannelViewModel.shared.triggerSelectionHaptic()
                                                 timeshiftStartTime = nil
                                                 onDismiss()
                                             }) {
@@ -118,6 +120,7 @@ struct PlayerControlsView: View {
                                             HStack(spacing: 16) {
                                                 if let vm = viewModel {
                                                     Button(action: {
+                                                        vm.triggerSelectionHaptic()
                                                         vm.miniPlayerChannel = channel
                                                         onDismiss()
                                                     }) {
@@ -130,6 +133,7 @@ struct PlayerControlsView: View {
                                                     .buttonStyle(.plain)
                                                     
                                                     Button(action: {
+                                                        vm.triggerSelectionHaptic()
                                                         vm.triggerMultiViewFromPlayer(with: channel)
                                                     }) {
                                                         Image(systemName: "square.grid.2x2.fill")
@@ -155,6 +159,7 @@ struct PlayerControlsView: View {
                                 } else {
                                     HStack {
                                         Button(action: {
+                                            ChannelViewModel.shared.triggerSelectionHaptic()
                                             timeshiftStartTime = nil
                                             onDismiss()
                                         }) {
@@ -179,6 +184,7 @@ struct PlayerControlsView: View {
                                         HStack(spacing: 16) {
                                             if let vm = viewModel {
                                                 Button(action: {
+                                                    vm.triggerSelectionHaptic()
                                                     vm.miniPlayerChannel = channel
                                                     onDismiss()
                                                 }) {
@@ -191,6 +197,7 @@ struct PlayerControlsView: View {
                                                 .buttonStyle(.plain)
                                                 
                                                 Button(action: {
+                                                    vm.triggerSelectionHaptic()
                                                     vm.triggerMultiViewFromPlayer(with: channel)
                                                 }) {
                                                     Image(systemName: "square.grid.2x2.fill")
@@ -225,6 +232,7 @@ struct PlayerControlsView: View {
                                         
                                         
                                         Button(action: {
+                                            ChannelViewModel.shared.triggerSelectionHaptic()
                                             playerManager.toggleBackend()
                                         }) {
                                             Text(playerManager.activeBackendName)
@@ -252,6 +260,7 @@ struct PlayerControlsView: View {
                                             .transition(.opacity)
                                             .contentShape(Rectangle())
                                             .onTapGesture {
+                                                ChannelViewModel.shared.triggerSelectionHaptic()
                                                 withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                                                     isDescriptionExpanded.toggle()
                                                 }
@@ -303,6 +312,7 @@ struct PlayerControlsView: View {
                                                             draggingProgress = max(0, min(1, value.location.x / barGeo.size.width))
                                                         }
                                                         .onEnded { value in
+                                                            ChannelViewModel.shared.triggerSelectionHaptic()
                                                             let dragPercent = max(0, min(1, value.location.x / barGeo.size.width))
                                                             playerManager.seek(to: playerManager.duration * dragPercent)
                                                             isScrubbing = false
@@ -397,6 +407,7 @@ struct PlayerControlsView: View {
                                                             draggingProgress = min(dragPercent, liveProgress)
                                                         }
                                                         .onEnded { value in
+                                                            ChannelViewModel.shared.triggerSelectionHaptic()
                                                             let dragPercent = max(0, min(1, value.location.x / barGeo.size.width))
                                                             let finalPercent = min(dragPercent, liveProgress)
                                                             
@@ -455,6 +466,7 @@ struct PlayerControlsView: View {
                                     if !isRecordingPlayback {
                                         
                                         Button(action: {
+                                            ChannelViewModel.shared.triggerSelectionHaptic()
                                             if !isTrulyLive {
                                                 withAnimation {
                                                     if timeshiftStartTime != nil {
@@ -484,6 +496,7 @@ struct PlayerControlsView: View {
                                         
                                         
                                         Button(action: {
+                                            ChannelViewModel.shared.triggerSelectionHaptic()
                                             if isRecording {
                                                 
                                                 if let rec = recordingManager.recordings.first(where: { $0.channelName == channel.name && $0.status == .recording }) {
@@ -518,6 +531,7 @@ struct PlayerControlsView: View {
                                     
                                     
                                     Button(action: {
+                                        ChannelViewModel.shared.triggerSelectionHaptic()
                                         withAnimation { showSubtitlePanel.toggle() }
                                     }) {
                                         HStack(spacing: 8) {
@@ -536,6 +550,7 @@ struct PlayerControlsView: View {
                                     
                                     
                                     Button(action: {
+                                        ChannelViewModel.shared.triggerSelectionHaptic()
                                         withAnimation { showAspectRatioPanel.toggle() }
                                     }) {
                                         HStack(spacing: 8) {
