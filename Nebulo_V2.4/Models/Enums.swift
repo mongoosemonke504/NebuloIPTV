@@ -97,11 +97,11 @@ enum LanguagePreference: String, CaseIterable, Identifiable, Sendable {
     nonisolated var languageIndicators: [String] {
         switch self {
         case .any: return []
-        case .us, .uk, .ca: return ["the", "and", "with", "live", "coverage", "from", "tonight", "watch", "is", "on", "at", "for"]
-        case .es: return ["el", "la", "en", "y", "con", "los", "las", "del", "por", "vivo", "partido", "de", "es", "un", "una", "al"]
-        case .fr: return ["le", "la", "et", "du", "de", "d'", "des", "pour", "une", "dans", "direct", "est", "un", "au", "les", "sur", "match"]
-        case .de: return ["der", "die", "das", "und", "mit", "dem", "aus", "von", "live", "ist", "auf", "im", "ein", "eine"]
-        case .it: return ["il", "lo", "la", "i", "gli", "le", "di", "e", "con", "diretta", "in", "su", "per", "un", "una"]
+        case .us, .uk, .ca: return ["the", "with", "coverage", "from", "tonight", "watch"]
+        case .es: return ["con", "los", "las", "del", "por", "vivo", "partido", "es", "al"]
+        case .fr: return ["et", "du", "de", "d'", "des", "pour", "dans", "direct", "est", "au", "les", "sur", "match"]
+        case .de: return ["der", "die", "das", "und", "mit", "dem", "aus", "von", "ist", "auf", "im", "ein", "eine"]
+        case .it: return ["il", "lo", "gli", "di", "con", "diretta", "in", "su", "per"]
         }
     }
 }

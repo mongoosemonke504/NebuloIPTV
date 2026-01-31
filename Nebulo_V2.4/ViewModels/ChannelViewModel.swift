@@ -586,7 +586,7 @@ class ChannelViewModel: ObservableObject {
         UserDefaults.standard.removeObject(forKey: settingsPrefix + "recentQueries")
     }
 
-    nonisolated static func prioritySort(_ channels: [StreamChannel], order: [Int], precomputedOrderMap: [Int: Int]? = nil) -> [StreamChannel] {
+    nonisolated static func prioritySort(_ channels: [StreamChannel], order: [Int], precomputedOrderMap: [Int: Int]? = nil, scores: [Int: Int]? = nil) -> [StreamChannel] {
         
         let orderMap: [Int: Int]
         if let p = precomputedOrderMap {
@@ -606,6 +606,12 @@ class ChannelViewModel: ObservableObject {
             
             if idxA != nil { return true }
             if idxB != nil { return false }
+            
+            if let scores = scores {
+                let sA = scores[a.id] ?? 0
+                let sB = scores[b.id] ?? 0
+                if sA != sB { return sA > sB }
+            }
             
             
             if a.qualityScore != b.qualityScore { return a.qualityScore > b.qualityScore }
@@ -710,21 +716,28 @@ class ChannelViewModel: ObservableObject {
             
             
             
+            let fullInfo = "\(channel.name) \(epgTitle) \(epgDesc)"
+            
             if score > 0 {
-                let combinedText = "\(channel.name) \(epgTitle) \(epgDesc)"
-                
-                if SmartSearchLogic.checkLanguageMatch(combinedText, preference: preferredLanguage) {
+                if SmartSearchLogic.checkLanguageMatch(fullInfo, preference: preferredLanguage) {
                     score += 2000
                 } else if preferredLanguage != .any && preferredLanguage != .us && preferredLanguage != .uk && preferredLanguage != .ca {
                     
-                    if let detected = SmartSearchLogic.detectLanguage(combinedText), (detected == .us || detected == .uk || detected == .ca) {
+                    if let detected = SmartSearchLogic.detectLanguage(fullInfo), (detected == .us || detected == .uk || detected == .ca) {
                         score -= 1000
+                    }
+                }
+                
+                // Explicit Prefix Bonus for Preferred Language
+                if preferredLanguage != .any, let code = preferredLanguage.searchTokens.first {
+                    let lower = channel.name.lowercased()
+                    if lower.hasPrefix(code + ":") || lower.contains(" " + code + ":") || lower.hasPrefix("[" + code + "]") {
+                        score += 5000
                     }
                 }
             }
             
-            
-            let q = SmartSearchLogic.detectQuality(channel.name)
+            let q = SmartSearchLogic.detectQuality(fullInfo)
             if preferredQuality == .best {
                 
                 if q == .fourK { score += 40 }
@@ -844,21 +857,27 @@ class ChannelViewModel: ObservableObject {
                 
                 
                 
+                let fullInfo = "\(channel.name) \(epgTitle) \(epgDesc)"
+                
                 if score > 0 {
-                    let combinedText = "\(channel.name) \(epgTitle) \(epgDesc)"
-                    
-                    if SmartSearchLogic.checkLanguageMatch(combinedText, preference: pLang) {
+                    if SmartSearchLogic.checkLanguageMatch(fullInfo, preference: pLang) {
                         score += 2000
                     } else if pLang != .any && pLang != .us && pLang != .uk && pLang != .ca {
                          
-                        if let detected = SmartSearchLogic.detectLanguage(combinedText), (detected == .us || detected == .uk || detected == .ca) {
+                        if let detected = SmartSearchLogic.detectLanguage(fullInfo), (detected == .us || detected == .uk || detected == .ca) {
                             score -= 1000
+                        }
+                    }
+                    
+                    if pLang != .any, let code = pLang.searchTokens.first {
+                        let lower = channel.name.lowercased()
+                        if lower.hasPrefix(code + ":") || lower.contains(" " + code + ":") || lower.hasPrefix("[" + code + "]") {
+                            score += 5000
                         }
                     }
                 }
                 
-                
-                let q = SmartSearchLogic.detectQuality(channel.name)
+                let q = SmartSearchLogic.detectQuality(fullInfo)
                 if pQual == .best {
                     
                     if q == .fourK { score += 40 }
@@ -1029,18 +1048,26 @@ class ChannelViewModel: ObservableObject {
                 let totalA = nameA + titleA + descA
                 if totalH > 0 && totalA > 0 { score += 300 }
                 
+                let fullInfo = "\(channel.name) \(epgTitle) \(epgDesc)"
+                
                 if score > 0 {
-                    let combinedText = "\(channel.name) \(epgTitle) \(epgDesc)"
-                    if SmartSearchLogic.checkLanguageMatch(combinedText, preference: pLang) {
+                    if SmartSearchLogic.checkLanguageMatch(fullInfo, preference: pLang) {
                         score += 2000
                     } else if pLang != .any && pLang != .us && pLang != .uk && pLang != .ca {
-                        if let detected = SmartSearchLogic.detectLanguage(combinedText), (detected == .us || detected == .uk || detected == .ca) {
+                        if let detected = SmartSearchLogic.detectLanguage(fullInfo), (detected == .us || detected == .uk || detected == .ca) {
                             score -= 1000
+                        }
+                    }
+                    
+                    if pLang != .any, let code = pLang.searchTokens.first {
+                        let lower = channel.name.lowercased()
+                        if lower.hasPrefix(code + ":") || lower.contains(" " + code + ":") || lower.hasPrefix("[" + code + "]") {
+                            score += 5000
                         }
                     }
                 }
                 
-                let q = SmartSearchLogic.detectQuality(channel.name)
+                let q = SmartSearchLogic.detectQuality(fullInfo)
                 if pQual == .best {
                     if q == .fourK { score += 40 }
                     else if q == .fhd { score += 30 }
@@ -1094,17 +1121,27 @@ class ChannelViewModel: ObservableObject {
             // But prioritySort forces quality/name sort if no manual order. We want Relevance score.
             // So we will NOT use prioritySort here, but we SHOULD respect manual order if it exists.
             
-            // Let's do a custom sort: if manually ordered, use that. Else use the score order (which is preserved in finalSelection implicitly by insertion order).
+            // Let's do a custom sort: if manually ordered, use that. Else use the score order.
             let sortedByScore = finalSelection
+            let scores = Dictionary(uniqueKeysWithValues: scoredChannels.map { ($0.channel.id, $0.score) })
             
             let finalSorted = sortedByScore.sorted { a, b in
                 let idxA = orderMap[a.id]
                 let idxB = orderMap[b.id]
+                
+                // 1. Manual Order
                 if let iA = idxA, let iB = idxB { return iA < iB }
                 if idxA != nil { return true }
                 if idxB != nil { return false }
-                // Fallback to existing order (which is score based)
-                return false
+                
+                // 2. Dynamic Score
+                let sA = scores[a.id] ?? 0
+                let sB = scores[b.id] ?? 0
+                if sA != sB { return sA > sB }
+                
+                // 3. Fallback
+                if a.qualityScore != b.qualityScore { return a.qualityScore > b.qualityScore }
+                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
             }
             
             await MainActor.run {
@@ -1153,7 +1190,11 @@ class ChannelViewModel: ObservableObject {
                 if !targetNetwork.isEmpty && channel.name.localizedCaseInsensitiveContains(targetNetwork) { score += 1000 }
                 
                 var epgTitle = ""
-                if let eID = channel.epgID, let schedule = currentEPG[eID], let program = schedule.first(where: { now >= $0.start && now <= $0.stop }) { epgTitle = program.title }
+                var epgDesc = ""
+                if let eID = channel.epgID, let schedule = currentEPG[eID], let program = schedule.first(where: { now >= $0.start && now <= $0.stop }) { 
+                    epgTitle = program.title
+                    epgDesc = program.description ?? ""
+                }
                 
                 let nameH = matchCount(channel.name, tokens: homeTokens); let nameA = matchCount(channel.name, tokens: awayTokens)
                 let titleH = matchCount(epgTitle, tokens: homeTokens); let titleA = matchCount(epgTitle, tokens: awayTokens)
@@ -1161,8 +1202,17 @@ class ChannelViewModel: ObservableObject {
                 if titleH > 0 { score += 500 }; if titleA > 0 { score += 500 }
                 if nameH > 0 { score += 200 }; if nameA > 0 { score += 200 }
                 
+                let fullInfo = "\(channel.name) \(epgTitle) \(epgDesc)"
+                
                 if score > 0 {
-                    if SmartSearchLogic.checkLanguageMatch(channel.name, preference: pLang) { score += 2000 }
+                    if SmartSearchLogic.checkLanguageMatch(fullInfo, preference: pLang) { score += 2000 }
+                    
+                    if pLang != .any, let code = pLang.searchTokens.first {
+                        let lower = channel.name.lowercased()
+                        if lower.hasPrefix(code + ":") || lower.contains(" " + code + ":") || lower.hasPrefix("[" + code + "]") {
+                            score += 5000
+                        }
+                    }
                 }
                 
                 if score > 0 { scoredChannels.append(ChannelScore(channel: channel, score: score)) }

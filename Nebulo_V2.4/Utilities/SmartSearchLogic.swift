@@ -10,11 +10,11 @@ struct SmartSearchLogic {
         return lower.contains("header") || lower.contains("marker") || lower.contains("separator") || lower.contains("****")
     }
     
-    nonisolated static func detectQuality(_ name: String) -> StreamQuality {
-        let lower = name.lowercased()
-        if lower.contains("4k") || lower.contains("uhd") { return .fourK }
+    nonisolated static func detectQuality(_ text: String) -> StreamQuality {
+        let lower = text.lowercased()
+        if lower.contains("4k") || lower.contains("uhd") || lower.contains("2160") { return .fourK }
         if lower.contains("fhd") || lower.contains("1080") { return .fhd }
-        if lower.contains("hd") || lower.contains("720") || lower.contains("hevc") { return .hd }
+        if lower.contains("hd") || lower.contains("720") || lower.contains("hevc") || lower.contains("h265") || lower.contains("h.265") || lower.contains("60fps") || lower.contains("hdr") { return .hd }
         if lower.contains("sd") || lower.contains("576") || lower.contains("480") { return .sd }
         return .sd 
     }
@@ -22,36 +22,17 @@ struct SmartSearchLogic {
     nonisolated static func checkLanguageMatch(_ text: String, preference: LanguagePreference) -> Bool {
         if preference == .any { return true }
         
+        // Use the robust detection logic
+        if let detected = detectLanguage(text) {
+            return detected == preference
+        }
+        
+        // Fallback to simple token match if detection failed (short strings)
         let lowerText = text.lowercased()
         let tokens = tokenize(lowerText) 
-        
-        
-        
-        let explicitTags = preference.searchTokens
-        for tag in explicitTags {
-            
+        for tag in preference.searchTokens {
             if tokens.contains(tag) { return true }
         }
-        
-        
-        let indicators = preference.languageIndicators
-        if !indicators.isEmpty {
-            
-            var matchCount = 0
-            for indicator in indicators {
-                
-                if indicator.contains("'") {
-                    if lowerText.contains(indicator) { matchCount += 1 }
-                } else {
-                    if tokens.contains(indicator) { matchCount += 1 }
-                }
-            }
-            
-            
-            
-            if matchCount >= 1 { return true }
-        }
-        
         return false
     }
     
@@ -59,27 +40,48 @@ struct SmartSearchLogic {
         let lower = text.lowercased()
         let tokens = tokenize(lower)
         
+        var scores: [LanguagePreference: Int] = [:]
         
         for lang in LanguagePreference.allCases {
             if lang == .any { continue }
+            var score = 0
             
-            
-            if lang.searchTokens.contains(where: { tokens.contains($0) }) { return lang }
-            
-            
-            let indicators = lang.languageIndicators
-            if !indicators.isEmpty {
-                var matchCount = 0
-                for indicator in indicators {
-                    if indicator.contains("'") {
-                        if lower.contains(indicator) { matchCount += 1 }
-                    } else {
-                        if tokens.contains(indicator) { matchCount += 1 }
-                    }
+            // 1. Explicit Prefix (e.g. "FR:", "US:", "UK:")
+            if let code = lang.searchTokens.first {
+                if lower.hasPrefix(code + ":") || lower.contains(" " + code + ":") || lower.hasPrefix("[" + code + "]") {
+                    score += 100
                 }
-                if matchCount >= 2 { return lang } 
             }
+            
+            // 2. Search Tokens (Strong Indicators)
+            for token in lang.searchTokens {
+                if tokens.contains(token) { score += 20 }
+            }
+            
+            // 3. Language Indicators (Common Words)
+            for indicator in lang.languageIndicators {
+                if indicator.contains("'") {
+                    // Substring match for things like "l'", "d'"
+                    if lower.contains(indicator) { score += 5 }
+                } else {
+                    // Token match for whole words
+                    if tokens.contains(indicator) { score += 2 }
+                }
+            }
+            
+            // Penalize English slightly if it's just "is" or "on" to prevent false positives on short strings? 
+            // No, scoring should handle it.
+            
+            if score > 0 { scores[lang] = score }
         }
-        return nil
+        
+        // Return the language with the highest score
+        // We require a minimum score to avoid random "et" (2 points) triggering French if nothing else matches?
+        // "Canal+" (Spanish) vs "et" (French).
+        // If Canal is not detected, Spanish is 0. French is 2. French wins.
+        // But "FR:" adds 100.
+        // We should just return max.
+        
+        return scores.max(by: { $0.value < $1.value })?.key
     }
 }

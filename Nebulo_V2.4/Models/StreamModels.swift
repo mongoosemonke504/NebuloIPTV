@@ -82,9 +82,9 @@ struct StreamChannel: Identifiable, Codable, Hashable, Equatable, Sendable {
     
     nonisolated private static func computeQualityScore(lowerName: String) -> Int {
         var score = 0
-        if lowerName.contains("4k") || lowerName.contains("uhd") { score += 100 }
+        if lowerName.contains("4k") || lowerName.contains("uhd") || lowerName.contains("2160") { score += 100 }
         if lowerName.contains("fhd") || lowerName.contains("1080") { score += 80 }
-        if lowerName.contains("720") || lowerName.contains("hd") { score += 50 }
+        if lowerName.contains("720") || lowerName.contains("hd") || lowerName.contains("hevc") || lowerName.contains("h265") || lowerName.contains("h.265") || lowerName.contains("60fps") || lowerName.contains("hdr") { score += 50 }
         if lowerName.contains("usa") || lowerName.contains("(us)") || lowerName.contains("uk") || lowerName.contains("english") { score += 150 }
         let intTags = ["(es)", "(fr)", "(it)", "(pl)", "(ar)", "spanish", "french", "latino"]
         if intTags.contains(where: { lowerName.contains($0) }) { score -= 300 }
