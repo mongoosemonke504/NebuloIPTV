@@ -600,6 +600,10 @@ struct ContentManagementCard: View {
                     SettingsRow(icon: "list.bullet.rectangle.portrait.fill", title: "Manage Categories")
                 }
                 
+                NavigationLink(destination: SportTabsManagerView(scoreViewModel: scoreViewModel, accentColor: accentColor)) {
+                    SettingsRow(icon: "sportscourt", title: "Manage Sports Categories")
+                }
+                
                 NavigationLink(destination: ManageEPGsView()) {
                     SettingsRow(icon: "list.bullet.clipboard", title: "Manage EPGs", subtitle: "\(accountManager.accounts.first(where: { $0.id == accountManager.currentAccount?.id })?.externalEPGUrls.count ?? 0) Sources")
                 }
@@ -825,6 +829,41 @@ struct CategoriesManagerView: View {
     @Binding var categories: [StreamCategory]; let accentColor: Color; @ObservedObject var viewModel: ChannelViewModel; @State private var categoryToRename: StreamCategory?; @State private var localRenameName = ""; @State private var showLocalRenameAlert = false
     var body: some View { List { Section { Button(action: { categories.indices.forEach { categories[$0].isHidden = false } }) { Label("Show All Categories", systemImage: "eye") }; Button(action: { categories.indices.forEach { categories[$0].isHidden = true } }) { Label("Hide All Categories", systemImage: "eye.slash") } }; Section(header: Text("Drag to Reorder"), footer: Text("Tap eye icon to toggle visibility. Long press to rename.")) { ForEach($categories) { $cat in HStack { Button(action: { withAnimation { cat.isHidden.toggle() } }) { Image(systemName: cat.isHidden ? "eye.slash" : "eye").foregroundColor(cat.isHidden ? .gray : accentColor).frame(width: 30) }.buttonStyle(.plain); Text(cat.name).foregroundStyle(cat.isHidden ? .secondary : .primary).strikethrough(cat.isHidden); Spacer() }.contextMenu { Button { categoryToRename = cat; localRenameName = cat.name; showLocalRenameAlert = true } label: { Label("Rename", systemImage: "pencil") } } }.onMove { src, dst in categories.move(fromOffsets: src, toOffset: dst); for i in 0..<categories.count { categories[i].order = i } } } }.environment(\.editMode, .constant(.active)).navigationTitle("Categories").alert("Rename Category", isPresented: $showLocalRenameAlert) { TextField("Name", text: $localRenameName); Button("Save") { if let c = categoryToRename { viewModel.renameCategory(id: c.id, newName: localRenameName) } }; Button("Cancel", role: .cancel) {} } }
 }
+struct SportTabsManagerView: View {
+    @ObservedObject var scoreViewModel: ScoreViewModel
+    let accentColor: Color
+    
+    var body: some View {
+        List {
+            Section(header: Text("Drag to Reorder"), footer: Text("Tap eye icon to toggle visibility.")) {
+                ForEach(scoreViewModel.sportTabOrder, id: \.self) { sport in
+                    HStack {
+                        Button(action: { 
+                            withAnimation { scoreViewModel.toggleSportTabVisibility(sport) } 
+                        }) {
+                            Image(systemName: scoreViewModel.hiddenSportTabs.contains(sport) ? "eye.slash" : "eye")
+                                .foregroundColor(scoreViewModel.hiddenSportTabs.contains(sport) ? .gray : accentColor)
+                                .frame(width: 30)
+                        }
+                        .buttonStyle(.plain)
+                        
+                        Text(sport.rawValue)
+                            .foregroundStyle(scoreViewModel.hiddenSportTabs.contains(sport) ? .secondary : .primary)
+                            .strikethrough(scoreViewModel.hiddenSportTabs.contains(sport))
+                        
+                        Spacer()
+                    }
+                }
+                .onMove { src, dst in
+                    scoreViewModel.moveSportTab(from: src, to: dst)
+                }
+            }
+        }
+        .environment(\.editMode, .constant(.active))
+        .navigationTitle("Sports Categories")
+    }
+}
+
 struct HiddenChannelsSettingsView: View {
     @ObservedObject var viewModel: ChannelViewModel; @State private var searchText = ""
     var hidden: [StreamChannel] { let h = viewModel.channels.filter { viewModel.hiddenIDs.contains($0.id) }; if searchText.isEmpty { return h }; return h.filter { $0.name.localizedCaseInsensitiveContains(searchText) } }

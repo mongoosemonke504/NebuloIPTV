@@ -14,6 +14,8 @@ class ScoreViewModel: ObservableObject {
     @Published var hiddenScoreGameIDs: Set<String> = []
     @Published var reminderGameIDs: Set<String> = []
     @Published var allPinnedGames: [ESPNEvent] = []
+    @Published var sportTabOrder: [SportType] = []
+    @Published var hiddenSportTabs: Set<SportType> = []
     private var currentSearchText = ""
     
     private var masterGames: [SportType: [ESPNEvent]] = [:]
@@ -58,6 +60,15 @@ class ScoreViewModel: ObservableObject {
         if let hidden = UserDefaults.standard.stringArray(forKey: "hiddenScoreGameIDs") { self.hiddenScoreGameIDs = Set(hidden) }
         if let reminders = UserDefaults.standard.stringArray(forKey: "reminderGameIDs") { self.reminderGameIDs = Set(reminders) }
         
+        if let savedOrder = UserDefaults.standard.stringArray(forKey: "sportTabOrder") {
+            self.sportTabOrder = savedOrder.compactMap { SportType(rawValue: $0) }
+        }
+        if self.sportTabOrder.isEmpty { self.sportTabOrder = SportType.allCases }
+        
+        if let savedHidden = UserDefaults.standard.stringArray(forKey: "hiddenSportTabs") {
+            self.hiddenSportTabs = Set(savedHidden.compactMap { SportType(rawValue: $0) })
+        }
+        
         updatePinnedGames()
         Task { await self.preloadImages() }
     }
@@ -84,6 +95,18 @@ class ScoreViewModel: ObservableObject {
         UserDefaults.standard.set(Array(pinnedGameIDs), forKey: "pinnedGameIDs")
         UserDefaults.standard.set(Array(hiddenScoreGameIDs), forKey: "hiddenScoreGameIDs")
         UserDefaults.standard.set(Array(reminderGameIDs), forKey: "reminderGameIDs")
+        UserDefaults.standard.set(sportTabOrder.map { $0.rawValue }, forKey: "sportTabOrder")
+        UserDefaults.standard.set(Array(hiddenSportTabs).map { $0.rawValue }, forKey: "hiddenSportTabs")
+    }
+    
+    func moveSportTab(from source: IndexSet, to destination: Int) {
+        sportTabOrder.move(fromOffsets: source, toOffset: destination)
+        saveToCache()
+    }
+    
+    func toggleSportTabVisibility(_ sport: SportType) {
+        if hiddenSportTabs.contains(sport) { hiddenSportTabs.remove(sport) } else { hiddenSportTabs.insert(sport) }
+        saveToCache()
     }
     
     func togglePin(_ id: String) {
