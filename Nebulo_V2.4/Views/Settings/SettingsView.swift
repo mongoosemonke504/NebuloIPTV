@@ -832,10 +832,13 @@ struct CategoriesManagerView: View {
 struct SportTabsManagerView: View {
     @ObservedObject var scoreViewModel: ScoreViewModel
     let accentColor: Color
+    @State private var sportToRename: SportType?
+    @State private var renameText = ""
+    @State private var showRenameAlert = false
     
     var body: some View {
         List {
-            Section(header: Text("Drag to Reorder"), footer: Text("Tap eye icon to toggle visibility.")) {
+            Section(header: Text("Drag to Reorder"), footer: Text("Tap eye icon to toggle visibility. Long press to rename.")) {
                 ForEach(scoreViewModel.sportTabOrder, id: \.self) { sport in
                     HStack {
                         Button(action: { 
@@ -847,11 +850,20 @@ struct SportTabsManagerView: View {
                         }
                         .buttonStyle(.plain)
                         
-                        Text(sport.rawValue)
+                        Text(scoreViewModel.getSportName(sport))
                             .foregroundStyle(scoreViewModel.hiddenSportTabs.contains(sport) ? .secondary : .primary)
                             .strikethrough(scoreViewModel.hiddenSportTabs.contains(sport))
                         
                         Spacer()
+                    }
+                    .contextMenu {
+                        Button {
+                            sportToRename = sport
+                            renameText = scoreViewModel.getSportName(sport)
+                            showRenameAlert = true
+                        } label: {
+                            Label("Rename", systemImage: "pencil")
+                        }
                     }
                 }
                 .onMove { src, dst in
@@ -861,6 +873,15 @@ struct SportTabsManagerView: View {
         }
         .environment(\.editMode, .constant(.active))
         .navigationTitle("Sports Categories")
+        .alert("Rename Category", isPresented: $showRenameAlert) {
+            TextField("Name", text: $renameText)
+            Button("Save") {
+                if let s = sportToRename {
+                    scoreViewModel.renameSportTab(s, to: renameText)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
     }
 }
 

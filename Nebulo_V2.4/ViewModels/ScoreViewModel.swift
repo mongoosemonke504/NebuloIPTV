@@ -16,6 +16,7 @@ class ScoreViewModel: ObservableObject {
     @Published var allPinnedGames: [ESPNEvent] = []
     @Published var sportTabOrder: [SportType] = []
     @Published var hiddenSportTabs: Set<SportType> = []
+    @Published var renamedSportTabs: [String: String] = [:]
     private var currentSearchText = ""
     
     private var masterGames: [SportType: [ESPNEvent]] = [:]
@@ -69,6 +70,8 @@ class ScoreViewModel: ObservableObject {
             self.hiddenSportTabs = Set(savedHidden.compactMap { SportType(rawValue: $0) })
         }
         
+        self.renamedSportTabs = UserDefaults.standard.object(forKey: "renamedSportTabs") as? [String: String] ?? [:]
+        
         updatePinnedGames()
         Task { await self.preloadImages() }
     }
@@ -97,6 +100,7 @@ class ScoreViewModel: ObservableObject {
         UserDefaults.standard.set(Array(reminderGameIDs), forKey: "reminderGameIDs")
         UserDefaults.standard.set(sportTabOrder.map { $0.rawValue }, forKey: "sportTabOrder")
         UserDefaults.standard.set(Array(hiddenSportTabs).map { $0.rawValue }, forKey: "hiddenSportTabs")
+        UserDefaults.standard.set(renamedSportTabs, forKey: "renamedSportTabs")
     }
     
     func moveSportTab(from source: IndexSet, to destination: Int) {
@@ -107,6 +111,15 @@ class ScoreViewModel: ObservableObject {
     func toggleSportTabVisibility(_ sport: SportType) {
         if hiddenSportTabs.contains(sport) { hiddenSportTabs.remove(sport) } else { hiddenSportTabs.insert(sport) }
         saveToCache()
+    }
+    
+    func renameSportTab(_ sport: SportType, to newName: String) {
+        renamedSportTabs[sport.rawValue] = newName
+        saveToCache()
+    }
+    
+    func getSportName(_ sport: SportType) -> String {
+        return renamedSportTabs[sport.rawValue] ?? sport.rawValue
     }
     
     func togglePin(_ id: String) {

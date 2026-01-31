@@ -13,7 +13,7 @@ struct SportsHubView: View {
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
-                SportSelectorView(selectedSport: $scoreViewModel.selectedSport, showingPinned: $showingPinned, pinnedCount: scoreViewModel.allPinnedGames.count, orderedSports: scoreViewModel.sportTabOrder.filter { !scoreViewModel.hiddenSportTabs.contains($0) }) {
+                SportSelectorView(selectedSport: $scoreViewModel.selectedSport, showingPinned: $showingPinned, pinnedCount: scoreViewModel.allPinnedGames.count, orderedSports: scoreViewModel.sportTabOrder.filter { !scoreViewModel.hiddenSportTabs.contains($0) }, scoreViewModel: scoreViewModel) {
                     Task { await scoreViewModel.fetchScores() }
                 }
                 
@@ -454,7 +454,7 @@ struct TeamColumn: View {
 }
 
 struct SportSelectorView: View {
-    @Binding var selectedSport: SportType; @Binding var showingPinned: Bool; let pinnedCount: Int; let orderedSports: [SportType]; let action: () -> Void
+    @Binding var selectedSport: SportType; @Binding var showingPinned: Bool; let pinnedCount: Int; let orderedSports: [SportType]; @ObservedObject var scoreViewModel: ScoreViewModel; let action: () -> Void
     var body: some View { ScrollViewReader { proxy in ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 12) { 
         if pinnedCount > 0 {
             Button(action: { withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { showingPinned = true }; action() }) {
@@ -467,5 +467,5 @@ struct SportSelectorView: View {
                 .foregroundColor(showingPinned ? .black : .white).clipShape(Capsule())
             }
         }
-        ForEach(orderedSports) { s in Button(action: { withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { selectedSport = s; showingPinned = false }; action() }) { Text(s.rawValue).font(.caption.bold()).padding(.vertical, 8).padding(.horizontal, 16).background(!showingPinned && selectedSport == s ? Color.white : Color.white.opacity(0.1)).foregroundColor(!showingPinned && selectedSport == s ? .black : .white).clipShape(Capsule()) }.id(s) } }.padding(.horizontal).padding(.vertical, 10) }.onAppear { proxy.scrollTo(selectedSport, anchor: .center) }.onChangeCompat(of: selectedSport) { ns in withAnimation(.spring()) { proxy.scrollTo(ns, anchor: .center) } } } }
+        ForEach(orderedSports) { s in Button(action: { withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { selectedSport = s; showingPinned = false }; action() }) { Text(scoreViewModel.getSportName(s)).font(.caption.bold()).padding(.vertical, 8).padding(.horizontal, 16).background(!showingPinned && selectedSport == s ? Color.white : Color.white.opacity(0.1)).foregroundColor(!showingPinned && selectedSport == s ? .black : .white).clipShape(Capsule()) }.id(s) } }.padding(.horizontal).padding(.vertical, 10) }.onAppear { proxy.scrollTo(selectedSport, anchor: .center) }.onChangeCompat(of: selectedSport) { ns in withAnimation(.spring()) { proxy.scrollTo(ns, anchor: .center) } } } }
 }
