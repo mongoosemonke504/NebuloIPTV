@@ -371,13 +371,15 @@ struct ManualSelectionSheet: View {
                                 let fullInfo = "\(channel.name) \(viewModel.getCurrentProgram(for: channel)?.title ?? "") \(viewModel.getCurrentProgram(for: channel)?.description ?? "")"
                                 
                                 let q = SmartSearchLogic.detectQuality(fullInfo)
-                                Text(q == .unknown ? "UNK" : (q.rawValue.components(separatedBy: " ").first ?? "UNK"))
-                                    .font(.system(size: 9, weight: .bold))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 4)
-                                    .padding(.vertical, 2)
-                                    .background(Color.blue.opacity(0.8))
-                                    .cornerRadius(4)
+                                if q != .unknown {
+                                    Text(q.rawValue.components(separatedBy: " ").first ?? "SD")
+                                        .font(.system(size: 9, weight: .bold))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 4)
+                                        .padding(.vertical, 2)
+                                        .background(Color.blue.opacity(0.8))
+                                        .cornerRadius(4)
+                                }
                                 
                                 let lang = SmartSearchLogic.detectLanguage(fullInfo)
                                 Text(lang?.rawValue.prefix(2).uppercased() ?? "??")

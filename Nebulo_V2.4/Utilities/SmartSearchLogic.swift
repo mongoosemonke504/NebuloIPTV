@@ -76,12 +76,11 @@ struct SmartSearchLogic {
         }
         
         // Return the language with the highest score
-        // We require a minimum score to avoid random "et" (2 points) triggering French if nothing else matches?
-        // "Canal+" (Spanish) vs "et" (French).
-        // If Canal is not detected, Spanish is 0. French is 2. French wins.
-        // But "FR:" adds 100.
-        // We should just return max.
+        if let best = scores.max(by: { $0.value < $1.value }) {
+            return best.key
+        }
         
-        return scores.max(by: { $0.value < $1.value })?.key
+        // If no identifiers found, default to English (US)
+        return .us
     }
 }
