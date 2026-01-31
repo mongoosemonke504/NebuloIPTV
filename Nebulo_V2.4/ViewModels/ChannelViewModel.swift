@@ -721,10 +721,14 @@ class ChannelViewModel: ObservableObject {
             if score > 0 {
                 if SmartSearchLogic.checkLanguageMatch(fullInfo, preference: preferredLanguage) {
                     score += 2000
-                } else if preferredLanguage != .any && preferredLanguage != .us && preferredLanguage != .uk && preferredLanguage != .ca {
-                    
-                    if let detected = SmartSearchLogic.detectLanguage(fullInfo), (detected == .us || detected == .uk || detected == .ca) {
-                        score -= 1000
+                } else if preferredLanguage != .any {
+                    if let detected = SmartSearchLogic.detectLanguage(fullInfo) {
+                        let isEnglishPref = (preferredLanguage == .us || preferredLanguage == .uk || preferredLanguage == .ca)
+                        let isEnglishDet = (detected == .us || detected == .uk || detected == .ca)
+                        
+                        if detected != preferredLanguage && !(isEnglishPref && isEnglishDet) {
+                            score -= 2000
+                        }
                     }
                 }
                 
@@ -862,10 +866,14 @@ class ChannelViewModel: ObservableObject {
                 if score > 0 {
                     if SmartSearchLogic.checkLanguageMatch(fullInfo, preference: pLang) {
                         score += 2000
-                    } else if pLang != .any && pLang != .us && pLang != .uk && pLang != .ca {
-                         
-                        if let detected = SmartSearchLogic.detectLanguage(fullInfo), (detected == .us || detected == .uk || detected == .ca) {
-                            score -= 1000
+                    } else if pLang != .any {
+                        if let detected = SmartSearchLogic.detectLanguage(fullInfo) {
+                            let isEnglishPref = (pLang == .us || pLang == .uk || pLang == .ca)
+                            let isEnglishDet = (detected == .us || detected == .uk || detected == .ca)
+                            
+                            if detected != pLang && !(isEnglishPref && isEnglishDet) {
+                                score -= 2000
+                            }
                         }
                     }
                     
@@ -1053,9 +1061,14 @@ class ChannelViewModel: ObservableObject {
                 if score > 0 {
                     if SmartSearchLogic.checkLanguageMatch(fullInfo, preference: pLang) {
                         score += 2000
-                    } else if pLang != .any && pLang != .us && pLang != .uk && pLang != .ca {
-                        if let detected = SmartSearchLogic.detectLanguage(fullInfo), (detected == .us || detected == .uk || detected == .ca) {
-                            score -= 1000
+                    } else if pLang != .any {
+                        if let detected = SmartSearchLogic.detectLanguage(fullInfo) {
+                            let isEnglishPref = (pLang == .us || pLang == .uk || pLang == .ca)
+                            let isEnglishDet = (detected == .us || detected == .uk || detected == .ca)
+                            
+                            if detected != pLang && !(isEnglishPref && isEnglishDet) {
+                                score -= 2000
+                            }
                         }
                     }
                     
@@ -1205,7 +1218,15 @@ class ChannelViewModel: ObservableObject {
                 let fullInfo = "\(channel.name) \(epgTitle) \(epgDesc)"
                 
                 if score > 0 {
-                    if SmartSearchLogic.checkLanguageMatch(fullInfo, preference: pLang) { score += 2000 }
+                    if SmartSearchLogic.checkLanguageMatch(fullInfo, preference: pLang) {
+                        score += 2000
+                    } else if pLang != .any {
+                        if let detected = SmartSearchLogic.detectLanguage(fullInfo) {
+                            let isEnglishPref = (pLang == .us || pLang == .uk || pLang == .ca)
+                            let isEnglishDet = (detected == .us || detected == .uk || detected == .ca)
+                            if detected != pLang && !(isEnglishPref && isEnglishDet) { score -= 2000 }
+                        }
+                    }
                     
                     if pLang != .any, let code = pLang.searchTokens.first {
                         let lower = channel.name.lowercased()
