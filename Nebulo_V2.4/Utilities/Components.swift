@@ -72,3 +72,36 @@ struct CategoryCardSkeleton: View {
         SkeletonBox(height: 70).frame(maxWidth: .infinity).cornerRadius(12)
     }
 }
+
+struct SettingsList<Item: Identifiable>: View where Item.ID: Equatable {
+    let items: [Item]
+    let selectedItem: Item?
+    let title: String
+    let onSelect: (Item) -> Void
+    let itemLabel: (Item) -> String
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            Text(title).font(.headline).foregroundColor(.white).padding()
+            Divider().background(Color.white.opacity(0.3))
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(items) { item in
+                        Button(action: {
+                            onSelect(item)
+                        }) {
+                            HStack {
+                                Text(itemLabel(item))
+                                Spacer()
+                                if item.id == selectedItem?.id { Image(systemName: "checkmark") }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(item.id == selectedItem?.id ? .yellow : .white)
+                        .padding(.vertical, 4).padding(.horizontal)
+                    }
+                }.padding(.top)
+            }.frame(maxHeight: 200)
+        }
+    }
+}

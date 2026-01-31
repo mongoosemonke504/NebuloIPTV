@@ -238,88 +238,47 @@ struct RecordingPlayerView: View {
             
             if showSubtitlePanel {
                 settingsPanelOverlay {
-                    VStack(spacing: 0) {
-                        Text("Subtitles").font(.headline).foregroundColor(.white).padding()
-                        Divider().background(Color.white.opacity(0.3))
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 10) {
-                                ForEach(playerManager.availableSubtitles, id: \.id) { sub in
-                                    Button(action: {
-                                        playerManager.selectSubtitle(sub)
-                                    }) {
-                                        HStack {
-                                            Text(sub.name)
-                                            Spacer()
-                                            if playerManager.currentSubtitle?.id == sub.id { Image(systemName: "checkmark") }
-                                        }
-                                    }
-                                    .buttonStyle(.plain)
-                                    .foregroundColor(playerManager.currentSubtitle?.id == sub.id ? .yellow : .white)
-                                    .padding(.vertical, 4).padding(.horizontal)
-                                }
-                            }.padding(.top)
-                        }.frame(maxHeight: 200)
-                    }
+                    SettingsList(
+                        items: playerManager.availableSubtitles,
+                        selectedItem: playerManager.currentSubtitle,
+                        title: "Subtitles",
+                        onSelect: { sub in playerManager.selectSubtitle(sub) },
+                        itemLabel: { $0.name }
+                    )
                 } onClose: { showSubtitlePanel = false }
             }
             
             
             if showResolutionPanel {
                 settingsPanelOverlay {
-                    VStack(spacing: 0) {
-                        Text("Quality").font(.headline).foregroundColor(.white).padding()
-                        Divider().background(Color.white.opacity(0.3))
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 10) {
-                                ForEach(playerManager.availableQualities) { q in
-                                    Button(action: {
-                                        playerManager.setQuality(q)
-                                        withAnimation { showResolutionPanel = false }
-                                        resetTimer()
-                                    }) {
-                                        HStack {
-                                            Text(q.rawValue)
-                                            Spacer()
-                                            if playerManager.currentQuality == q { Image(systemName: "checkmark") }
-                                        }
-                                    }
-                                    .buttonStyle(.plain)
-                                    .foregroundColor(playerManager.currentQuality == q ? .yellow : .white)
-                                    .padding(.vertical, 4).padding(.horizontal)
-                                }
-                            }.padding(.top)
-                        }.frame(maxHeight: 200)
-                    }
+                    SettingsList(
+                        items: playerManager.availableQualities,
+                        selectedItem: playerManager.currentQuality,
+                        title: "Quality",
+                        onSelect: { q in
+                            playerManager.setQuality(q)
+                            withAnimation { showResolutionPanel = false }
+                            resetTimer()
+                        },
+                        itemLabel: { $0.rawValue }
+                    )
                 } onClose: { showResolutionPanel = false }
             }
             
             
             if showAspectRatioPanel {
                 settingsPanelOverlay {
-                    VStack(spacing: 0) {
-                        Text("Aspect Ratio").font(.headline).foregroundColor(.white).padding()
-                        Divider().background(Color.white.opacity(0.3))
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 10) {
-                                ForEach(NebuloPlayerEngine.VideoAspectRatio.allCases) { ratio in
-                                    Button(action: {
-                                        playerManager.setAspectRatio(ratio)
-                                        withAnimation { showAspectRatioPanel = false }
-                                        resetTimer()
-                                    }) {
-                                        HStack {
-                                            Text(ratio.rawValue)
-                                            Spacer()
-                                            if playerManager.currentAspectRatio == ratio { Image(systemName: "checkmark") }
-                                        }
-                                    }
-                                    .buttonStyle(.plain)
-                                    .foregroundColor(playerManager.currentAspectRatio == ratio ? .white : .white.opacity(0.5))
-                                    .padding(.vertical, 4).padding(.horizontal)
-                                }
-                            }.padding(.top)
-                        }.frame(maxHeight: 200)
-                    }
+                    SettingsList(
+                        items: NebuloPlayerEngine.VideoAspectRatio.allCases,
+                        selectedItem: playerManager.currentAspectRatio,
+                        title: "Aspect Ratio",
+                        onSelect: { ratio in
+                            playerManager.setAspectRatio(ratio)
+                            withAnimation { showAspectRatioPanel = false }
+                            resetTimer()
+                        },
+                        itemLabel: { $0.rawValue }
+                    )
                 } onClose: { showAspectRatioPanel = false }
             }
         }
