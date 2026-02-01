@@ -31,7 +31,6 @@ class ScoreViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var lastFetchTime = Date.distantPast
     private var fetchTask: Task<Void, Never>?
-    private var hasPreloadedImages = false
     
     init() {
         loadCachedData()
@@ -83,7 +82,7 @@ class ScoreViewModel: ObservableObject {
         self.renamedSportTabs = UserDefaults.standard.object(forKey: "renamedSportTabs") as? [String: String] ?? [:]
         
         updatePinnedGames()
-        Task { await self.preloadImages() }
+        self.preloadImages()
     }
     
     private func saveToCache() {
@@ -209,21 +208,7 @@ class ScoreViewModel: ObservableObject {
         }
     }
     
-    private func preloadImages() async {
-        if hasPreloadedImages { return }
-        
-        // Detach to background to avoid main thread hitching
-        await Task.detached(priority: .utility) {
-            print("🚀 [ScoreViewModel] Starting sports image preload...")
-            var urls = Set<String>()
-            
-            // Gather all image URLs from masterGames (thread-safe copy needed or careful access)
-            // Since masterGames is on MainActor, we should grab the data *before* detaching or pass it in.
-            // However, since we are inside the class, we can't easily access MainActor properties from detached task directly without awaiting.
-            // So we will gather URLs on MainActor first, then detach.
-        }.value
-        
-        // Gather URLs on Main Thread (fast enough)
+    private func preloadImages() {
         var urls = Set<String>()
         for games in masterGames.values {
             for game in games {
@@ -240,30 +225,21 @@ class ScoreViewModel: ObservableObject {
             }
         }
         
-        let urlsToLoad = urls // Capture for closure
+        let urlsToLoad = urls
         
-        // Perform checking and downloading in background
         Task.detached(priority: .background) {
             await withTaskGroup(of: Void.self) { group in
                 var active = 0
-                let limit = 20 // Concurrency limit
+                let limit = 20
                 
                 for url in urlsToLoad {
-                    // Check disk cache first - crucial step requested by user
                     if ImageCache.shared.hasImage(forKey: url) { continue }
-                    
                     if active >= limit { await group.next(); active -= 1 }
-                    
-                    group.addTask {
-                        await ImageCache.prefetchAndWait(urlString: url)
-                    }
+                    group.addTask { await ImageCache.prefetchAndWait(urlString: url) }
                     active += 1
                 }
             }
-            print("✅ [ScoreViewModel] Sports image preload complete.")
         }
-        
-        hasPreloadedImages = true
     }
     
     func fetchScores(forceRefresh: Bool = false, silent: Bool = false) async {
@@ -278,7 +254,7 @@ class ScoreViewModel: ObservableObject {
         if !silent { withAnimation { isLoading = true } }
         self.errorMessage = nil
         
-        fetchTask = Task {
+        let newTask = Task {
             do {
                 await withTaskGroup(of: (SportType, [ESPNEvent]?, [SoccerGameSection]?).self) { group in
                     group.addTask {
@@ -359,11 +335,14 @@ class ScoreViewModel: ObservableObject {
                     self.saveToCache()
                     self.lastFetchTime = Date()
                     self.applyFilter(text: self.currentSearchText)
+                    self.preloadImages()
+                    self.isLoading = false
                 }
-                await self.preloadImages()
-                await MainActor.run { self.isLoading = false }
             }
         }
+        self.fetchTask = newTask
+        _ = await newTask.result
+    }
         _ = await fetchTask?.result
     }
     
