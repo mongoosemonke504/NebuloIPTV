@@ -294,7 +294,7 @@ class ChannelViewModel: ObservableObject {
                 // Load from disk if we don't have data in memory yet
                 if self.epgData.isEmpty {
                     let loaded = await Task.detached(priority: .userInitiated) {
-                        return EPGService().loadFromDisk()
+                        return await EPGService().loadFromDisk()
                     }.value
                     
                     if let cached = loaded, !cached.epg.isEmpty {

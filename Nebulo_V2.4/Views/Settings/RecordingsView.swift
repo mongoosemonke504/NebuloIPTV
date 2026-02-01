@@ -18,10 +18,6 @@ struct RecordingsView: View {
     @AppStorage("nebColor1") private var nebColor1 = "#AF52DE"; @AppStorage("nebColor2") private var nebColor2 = "#007AFF"; @AppStorage("nebColor3") private var nebColor3 = "#FF2D55"; @AppStorage("nebX1") private var nebX1 = 0.2; @AppStorage("nebY1") private var nebY1 = 0.2; @AppStorage("nebX2") private var nebX2 = 0.8; @AppStorage("nebY2") private var nebY2 = 0.3; @AppStorage("nebX3") private var nebX3 = 0.5; @AppStorage("nebY3") private var nebY3 = 0.8
 
     var body: some View {
-        let c1 = Color(hex: nebColor1) ?? .purple
-        let c2 = Color(hex: nebColor2) ?? .blue
-        let c3 = Color(hex: nebColor3) ?? .pink
-        
         List {
             if manager.recordings.isEmpty {
                 Text("No recordings found.")

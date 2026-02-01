@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import SwiftUI
+@preconcurrency import UserNotifications
 
 @MainActor
 class ScoreViewModel: ObservableObject {
@@ -149,8 +150,7 @@ class ScoreViewModel: ObservableObject {
             UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["game_\(game.id)"])
         } else {
             reminderGameIDs.insert(game.id)
-            let center = UNUserNotificationCenter.current()
-            center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
                 if granted {
                     let content = UNMutableNotificationContent()
                     content.title = "Game Reminder"
@@ -159,7 +159,7 @@ class ScoreViewModel: ObservableObject {
                     let triggerDate = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: game.gameDate.addingTimeInterval(-600))
                     let trigger = UNCalendarNotificationTrigger(dateMatching: triggerDate, repeats: false)
                     let request = UNNotificationRequest(identifier: "game_\(game.id)", content: content, trigger: trigger)
-                    center.add(request)
+                    UNUserNotificationCenter.current().add(request)
                 }
             }
         }
@@ -231,7 +231,7 @@ class ScoreViewModel: ObservableObject {
                 let limit = 20
                 
                 for url in urlsToLoad {
-                    if ImageCache.shared.hasImage(forKey: url) { continue }
+                    if await ImageCache.shared.hasImage(forKey: url) { continue }
                     if active >= limit { await group.next(); active -= 1 }
                     group.addTask { await ImageCache.prefetchAndWait(urlString: url) }
                     active += 1

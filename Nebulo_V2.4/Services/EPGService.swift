@@ -20,7 +20,7 @@ fileprivate actor ProgressState {
 
 class EPGService: NSObject, XMLParserDelegate {
     
-    func loadFromDisk() -> (epg: [String: [EPGProgram]], map: [String: String])? {
+    nonisolated func loadFromDisk() -> (epg: [String: [EPGProgram]], map: [String: String])? {
         let url = getCacheURL()
         guard let data = try? Data(contentsOf: url) else { return nil }
         struct Cache: Codable {
@@ -33,7 +33,7 @@ class EPGService: NSObject, XMLParserDelegate {
         return nil
     }
     
-    func saveToDisk(epg: [String: [EPGProgram]], map: [String: String]) {
+    nonisolated func saveToDisk(epg: [String: [EPGProgram]], map: [String: String]) {
         let url = getCacheURL()
         struct Cache: Codable {
             let epg: [String: [EPGProgram]]
@@ -45,7 +45,7 @@ class EPGService: NSObject, XMLParserDelegate {
         }
     }
     
-    private func getCacheURL() -> URL {
+    nonisolated private func getCacheURL() -> URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("epg_cache_v2.json")
     }
@@ -158,7 +158,6 @@ class EPGService: NSObject, XMLParserDelegate {
     
     // GZIP Decompression Helper
     private func decompress(data: Data) -> Data? {
-        let size = 8_000_000 
         let bufferSize = 64_000_000
         let destinationBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
         
