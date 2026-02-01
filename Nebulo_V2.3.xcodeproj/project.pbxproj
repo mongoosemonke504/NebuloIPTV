@@ -161,7 +161,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\necho \"Searching for libshaderc_combined.framework...\"\n# Search for the framework in the built products directory\nFRAMEWORK_PATH=$(find \"${BUILT_PRODUCTS_DIR}\" -name \"libshaderc_combined.framework\" -type d | head -n 1)\n\nif [ -n \"$FRAMEWORK_PATH\" ]; then\n    echo \"Found framework at: $FRAMEWORK_PATH\"\n    PLIST_PATH=\"$FRAMEWORK_PATH/Info.plist\"\n    if [ -f \"$PLIST_PATH\" ]; then\n        echo \"Found Info.plist, fixing CFBundleIdentifier...\"\n        /usr/libexec/PlistBuddy -c \"Set :CFBundleIdentifier com.kintan.ksplayer.libshaderc-combined\" \"$PLIST_PATH\" || \\\n        /usr/libexec/PlistBuddy -c \"Add :CFBundleIdentifier string com.kintan.ksplayer.libshaderc-combined\" \"$PLIST_PATH\"\n        echo \"Successfully fixed CFBundleIdentifier.\"\n        if [ -n \"${EXPANDED_CODE_SIGN_IDENTITY}\" ]; then\n            echo \"Re-signing framework...\"\n            codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" \"$FRAMEWORK_PATH\"\n        fi\n    else\n        echo \"Info.plist not found in framework. Skipping.\"\n    fi\nelse\n    echo \"libshaderc_combined.framework not found in ${BUILT_PRODUCTS_DIR}. Skipping.\"\nfi\n";
+			shellScript = "set -e\necho \"Starting libshaderc_combined.framework fix script...\"\n\n# Potential locations for the framework\nSEARCH_PATHS=(\n    \"${BUILT_PRODUCTS_DIR}\"\n    \"${TARGET_BUILD_DIR}\"\n    \"${CONFIGURATION_BUILD_DIR}\"\n    \"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}\"\n)\n\nFRAMEWORK_PATH=\"\"\nfor path in \"${SEARCH_PATHS[@]}\"; do\n    if [ -d \"$path\" ]; then\n        echo \"Searching in: $path\"\n        FOUND=$(find \"$path\" -name \"libshaderc_combined.framework\" -type d | head -n 1)\n        if [ -n \"$FOUND\" ]; then\n            FRAMEWORK_PATH=\"$FOUND\"\n            break\n        fi\n    fi\ndone\n\nif [ -n \"$FRAMEWORK_PATH\" ]; then\n    echo \"Found framework at: $FRAMEWORK_PATH\"\n    PLIST_PATH=\"$FRAMEWORK_PATH/Info.plist\"\n    if [ -f \"$PLIST_PATH\" ]; then\n        echo \"Found Info.plist at: $PLIST_PATH\"\n        CURRENT_ID=$(/usr/libexec/PlistBuddy -c \"Print :CFBundleIdentifier\" \"$PLIST_PATH\" 2>/dev/null || echo \"NOT_FOUND\")\n        echo \"Current CFBundleIdentifier: $CURRENT_ID\"\n        \n        NEW_ID=\"com.kintan.ksplayer.libshaderc-combined\"\n        echo \"Setting CFBundleIdentifier to: $NEW_ID\"\n        \n        /usr/libexec/PlistBuddy -c \"Set :CFBundleIdentifier $NEW_ID\" \"$PLIST_PATH\" || \\\n        /usr/libexec/PlistBuddy -c \"Add :CFBundleIdentifier string $NEW_ID\" \"$PLIST_PATH\"\n        \n        echo \"Successfully updated Info.plist.\"\n        \n        if [ -n \"${EXPANDED_CODE_SIGN_IDENTITY}\" ]; then\n            echo \"Re-signing framework with identity: ${EXPANDED_CODE_SIGN_IDENTITY}\"\n            codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" \"$FRAMEWORK_PATH\"\n            echo \"Successfully re-signed.\"\n        else\n            echo \"Skipping re-signing (EXPANDED_CODE_SIGN_IDENTITY not set).\"\n            # Try ad-hoc signing if identity is missing\n            codesign --force --sign - \"$FRAMEWORK_PATH\"\n            echo \"Performed ad-hoc signing.\"\n        fi\n    else\n        echo \"Error: Info.plist not found in framework folder!\"\n    fi\nelse\n    echo \"Warning: libshaderc_combined.framework not found in any search paths.\"\n    # Broad search as last resort\n    echo \"Performing broad search...\"\n    BROAD_FOUND=$(find \"${SYMROOT}\" -name \"libshaderc_combined.framework\" -type d | head -n 1 2>/dev/null || true)\n    if [ -n \"$BROAD_FOUND\" ]; then\n        echo \"Found via broad search at: $BROAD_FOUND\"\n        # Logic to fix it here if needed, but we'll stick to the specific paths for now\n    fi\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -278,7 +278,7 @@
 				DEVELOPMENT_TEAM = EL9V67G3NB;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -287,7 +287,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
