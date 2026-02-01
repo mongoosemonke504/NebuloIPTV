@@ -132,7 +132,7 @@ class ChannelViewModel: ObservableObject {
         AccountManager.shared.$accounts
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                // Dispatch async to ensure property is fully set
+                
                 DispatchQueue.main.async {
                     Task { await self?.loadActiveAccounts() }
                 }
@@ -146,17 +146,17 @@ class ChannelViewModel: ObservableObject {
     func handleAppActivation() async {
         let now = Date()
         
-        // If we have no channels, always reload immediately
+        
         if self.channels.isEmpty {
             print("🔄 [ChannelViewModel] No channels found, triggering immediate load...")
             await loadActiveAccounts(silent: false, performEpgCheck: true)
             return
         }
 
-        // Check if EPG is stale (> 24 hours)
+        
         if let lastUpdate = lastEPGUpdateTime, now.timeIntervalSince(lastUpdate) < 86400 {
             print("✅ [ChannelViewModel] EPG is fresh (< 24h). Skipping update.")
-            // Still reload accounts/playlists silently to catch stream changes, but skip heavy EPG
+            
             await loadActiveAccounts(silent: true, performEpgCheck: false)
             return
         }
@@ -169,7 +169,7 @@ class ChannelViewModel: ObservableObject {
         
         if isLoading && silent { return }
         
-        // 1. Determine if we REALLY need to update the EPG
+        
         var shouldUpdateEPG = performEpgCheck
         let now = Date()
         if performEpgCheck && !force {
@@ -187,15 +187,15 @@ class ChannelViewModel: ObservableObject {
             let startTime = Date()
             var hadCachedChannels = false
             
-            // 2. Set UI State immediately if not silent
+            
             await MainActor.run {
-                // ALWAYS show skeleton on load (fresh or not) unless silent
+                
                 if !silent {
                     self.isLoading = true
                     self.loadingStatus = "Loading Playlists..."
                 }
                 
-                // If forcing a reload, clear channels to ensure visual reset
+                
                 if force {
                     self.channels = []
                 }
@@ -207,12 +207,12 @@ class ChannelViewModel: ObservableObject {
                             self.channels = cachedChans
                             self.categories = cachedCats
                             self.categorizeSports()
-                            // Do NOT set isLoading = false here. Wait for EPG.
+                            
                         }
                     }
                 }
                 
-                // Show the "Updating Guide" bar if we are about to update EPG
+                
                 if shouldUpdateEPG {
                     self.isUpdatingEPG = true
                     self.loadingStatus = "Checking for updates..."
@@ -284,14 +284,14 @@ class ChannelViewModel: ObservableObject {
             
             let silentEpg = silent || (hadCachedChannels && !force && !shouldUpdateEPG)
             
-            // 3. Conditional EPG Update
+            
             if shouldUpdateEPG {
                 print("🔄 [ChannelViewModel] Starting Full EPG Update...")
                 await self.updateEPGFromURLs(epgUrls, force: force, silent: silentEpg)
             } else {
                 print("✅ [ChannelViewModel] Skipping EPG Update (Fresh or Not Requested).")
                 
-                // Load from disk if we don't have data in memory yet
+                
                 if self.epgData.isEmpty {
                     let loaded = await Task.detached(priority: .userInitiated) {
                         return await EPGService().loadFromDisk()
@@ -307,7 +307,7 @@ class ChannelViewModel: ObservableObject {
                 }
             }
             
-            // Allow user interaction now (Guide is ready)
+            
             await MainActor.run {
                 guard self.currentLoadID == loadID else { return }
                 
@@ -463,7 +463,7 @@ class ChannelViewModel: ObservableObject {
             let direct = epgNameMap[channel.name.lowercased()]
             if direct != nil { return direct }
             
-            // Fallback to cleaned name
+            
             let cleaned = NameCleaner.clean(channel.name).lowercased()
             return epgNameMap[cleaned]
         }()
@@ -741,7 +741,7 @@ class ChannelViewModel: ObservableObject {
                     }
                 }
                 
-                // Explicit Prefix Bonus for Preferred Language
+                
                 if preferredLanguage != .any, let code = preferredLanguage.searchTokens.first {
                     let lower = channel.name.lowercased()
                     if lower.hasPrefix(code + ":") || lower.contains(" " + code + ":") || lower.hasPrefix("[" + code + "]") {
@@ -1138,12 +1138,12 @@ class ChannelViewModel: ObservableObject {
                 }
             }
             
-            // For manual options, we skip prioritySort to respect the "most likely" score order
-            // unless the user has explicit manual overrides for these specific channels, which prioritySort handles.
-            // But prioritySort forces quality/name sort if no manual order. We want Relevance score.
-            // So we will NOT use prioritySort here, but we SHOULD respect manual order if it exists.
             
-            // Let's do a custom sort: if manually ordered, use that. Else use the score order.
+            
+            
+            
+            
+            
             let sortedByScore = finalSelection
             let scores = Dictionary(uniqueKeysWithValues: scoredChannels.map { ($0.channel.id, $0.score) })
             
@@ -1151,17 +1151,17 @@ class ChannelViewModel: ObservableObject {
                 let idxA = orderMap[a.id]
                 let idxB = orderMap[b.id]
                 
-                // 1. Manual Order
+                
                 if let iA = idxA, let iB = idxB { return iA < iB }
                 if idxA != nil { return true }
                 if idxB != nil { return false }
                 
-                // 2. Dynamic Score
+                
                 let sA = scores[a.id] ?? 0
                 let sB = scores[b.id] ?? 0
                 if sA != sB { return sA > sB }
                 
-                // 3. Fallback
+                
                 if a.qualityScore != b.qualityScore { return a.qualityScore > b.qualityScore }
                 return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
             }
@@ -1463,7 +1463,7 @@ class ChannelViewModel: ObservableObject {
         
         await MainActor.run {
             
-            // Force loading state if fetching EPG, unless silent
+            
             if !silent {
                 self.isLoading = true
             }

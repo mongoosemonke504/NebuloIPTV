@@ -72,9 +72,6 @@ struct ESPNEvent: Codable, Identifiable, Hashable, Sendable {
     nonisolated var gameDate: Date {
         return _dateParsed ?? Date()
     }
-    
-    static func == (lhs: ESPNEvent, rhs: ESPNEvent) -> Bool { lhs.id == rhs.id }
-    func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
 struct ESPNGrouping: Codable, Hashable, Sendable { let competitions: [ESPNCompetition] }

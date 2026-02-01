@@ -176,7 +176,7 @@ class ScoreViewModel: ObservableObject {
                 pinned.append(contentsOf: section.games.filter { pinnedGameIDs.contains($0.id) })
             }
         }
-        // Deduplicate by ID
+        
         var seen = Set<String>()
         var uniquePinned: [ESPNEvent] = []
         for p in pinned {

@@ -198,7 +198,7 @@ final class ImageCache: @unchecked Sendable {
 
             if let image = UIImage(data: data) {
 
-                // Save to disk immediately to ensure persistence across app launches
+                
 
                 let safeName = urlString.hashValueStr
 
@@ -208,7 +208,7 @@ final class ImageCache: @unchecked Sendable {
 
                 
 
-                // Then update memory cache
+                
 
                 shared.set(image, forKey: urlString, size: size, skipDiskWrite: true)
 

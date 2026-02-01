@@ -124,7 +124,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             ksPlayerView.removeFromSuperview()
             playVLC(url: url)
         } else if currentBackend == .vlc {
-            // Prevent switching to KSPlayer if recording is active
+            
             if let streamURLString = currentURL?.absoluteString, 
                RecordingManager.shared.recordings.contains(where: { $0.streamURL == streamURLString && $0.status == .recording }) {
                 print("⚠️ [NebuloEngine] Cannot switch to KSPlayer while recording.")
@@ -315,7 +315,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         ksPlayerView.onFinish = { [weak self] error in if error != nil { self?.handleKSPlayerError() } }
         
         KSOptions.isAutoPlay = true
-        KSOptions.isSecondOpen = true // Enable hardware acceleration/fast open
+        KSOptions.isSecondOpen = true 
         KSOptions.maxBufferDuration = 100.0 
         KSOptions.preferredForwardBufferDuration = 3.0
         KSOptions.isAccurateSeek = false

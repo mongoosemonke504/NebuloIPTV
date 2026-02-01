@@ -11,17 +11,17 @@ struct NameCleaner {
             "[US]", "[UK]", "[CA]", "[AU]",
             "US:", "UK:", "CA:", "AU:",
             "50 FPS", "60 FPS", "RAW",
-            "FHD", "HD", "SD", "4K" // cautious with these
+            "FHD", "HD", "SD", "4K" 
         ]
         
         for p in patterns {
-            // Case insensitive removal for robustness
+            
             if let range = n.range(of: p, options: .caseInsensitive) {
                 n = n.replacingCharacters(in: range, with: "")
             }
         }
         
-        // Remove trailing hyphens or colons that might be left over
+        
         n = n.trimmingCharacters(in: .whitespacesAndNewlines)
         if n.hasSuffix("-") { n = String(n.dropLast()) }
         if n.hasSuffix(":") { n = String(n.dropLast()) }

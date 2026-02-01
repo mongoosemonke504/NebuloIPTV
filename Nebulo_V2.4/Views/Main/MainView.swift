@@ -942,7 +942,7 @@ struct LoadingStatusOverlay: View {
             .frame(maxWidth: .infinity)
             .background(
                 isBlocking || progress != nil
-                ? Color.black.opacity(0.4) // Darker background to emphasize blocking
+                ? Color.black.opacity(0.4) 
                 : Color.clear
             )
             .ignoresSafeArea()

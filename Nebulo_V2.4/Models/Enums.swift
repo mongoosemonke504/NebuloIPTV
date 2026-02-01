@@ -116,7 +116,7 @@ enum LanguagePreference: String, CaseIterable, Identifiable, Sendable {
         case .it: return ["il", "lo", "gli", "di", "con", "diretta", "in", "su", "per"]
         case .pt: return ["ao", "vivo", "jogo", "da", "do", "na", "no", "futebol"]
         case .ar: return ["al", "bin", "ben", "abu"]
-        case .ru: return ["tv"] // Russian indicators difficult in romanized text without more context
+        case .ru: return ["tv"] 
         case .nl: return ["het", "een", "van", "op"]
         case .tr: return ["ve", "bir", "ile", "canli", "mac"]
         case .pl: return ["na", "zywo", "mecz"]

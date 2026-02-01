@@ -22,7 +22,7 @@ struct StreamChannel: Identifiable, Codable, Hashable, Equatable, Sendable {
     var originalID: Int? = nil 
     var accountID: UUID? = nil 
     
-    // New fields for resolution
+    
     var width: Int?
     var height: Int?
     

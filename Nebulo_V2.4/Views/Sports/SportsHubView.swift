@@ -154,7 +154,7 @@ struct SportGamesListView: View {
                     }
                 } else if isSoccerCategory(sport) {
                     if let sections = scoreViewModel.filteredSectionsMap[sport], !sections.isEmpty {
-                        // Separate pinned soccer games
+                        
                         let allSoccerGames = sections.flatMap { $0.games }
                         let pinnedSoccer = allSoccerGames.filter { scoreViewModel.pinnedGameIDs.contains($0.id) }
                         

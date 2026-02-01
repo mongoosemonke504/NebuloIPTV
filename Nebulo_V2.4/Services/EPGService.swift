@@ -156,7 +156,7 @@ class EPGService: NSObject, XMLParserDelegate {
         }.value
     }
     
-    // GZIP Decompression Helper
+    
     private func decompress(data: Data) -> Data? {
         let bufferSize = 64_000_000
         let destinationBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)

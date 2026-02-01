@@ -9,11 +9,11 @@ struct CustomSpinner: View {
     
     var body: some View {
         ZStack {
-            // Background Track
+            
             Circle()
                 .stroke(color.opacity(0.3), lineWidth: lineWidth)
             
-            // Rotating Segment
+            
             Circle()
                 .trim(from: 0, to: 0.25)
                 .stroke(

@@ -14,7 +14,7 @@ struct MultiViewScreen: View {
     @State private var hasAppeared = false
     @State private var isExiting = false
     
-    // Compute active indices based on which slots have channels
+    
     var activeIndices: [Int] {
         viewModel.multiViewSlots.enumerated().compactMap { $0.element != nil ? $0.offset : nil }
     }
@@ -22,7 +22,7 @@ struct MultiViewScreen: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
-                // Background
+                
                 NebulaBackgroundView(
                     color1: .blue.opacity(0.3),
                     color2: .purple.opacity(0.3),
@@ -32,10 +32,10 @@ struct MultiViewScreen: View {
                     point3: .center,
                     targetFPS: 30
                 )
-                .overlay(Color.black.opacity(0.4)) // Darken for video contrast
+                .overlay(Color.black.opacity(0.4)) 
                 .ignoresSafeArea()
                 
-                // Video Grid
+                
                 ForEach(0..<4) { i in
                     let rect = getRect(for: i, size: geo.size)
                     let isVisible = shouldShow(index: i)
@@ -54,13 +54,13 @@ struct MultiViewScreen: View {
                                                 )
                                                 .frame(width: rect.width, height: rect.height)
                                                 .position(x: rect.midX, y: rect.midY)
-                                                // Smoothly animate frame changes
+                                                
                                                 .animation(.spring(response: 0.4, dampingFraction: 0.75), value: rect)
                                                 .transition(.opacity)
                                                                             .onDrag {
                                                                                 return NSItemProvider(object: String(i) as NSString)
                                                                             } preview: {
-                                                                                // High-quality Drag Preview
+                                                                                
                                                                                 if let channel = viewModel.multiViewSlots[i] {
                                                                                     VStack(spacing: 12) {
                                                                                         CachedAsyncImage(urlString: channel.icon ?? "", size: CGSize(width: 60, height: 60))
@@ -91,7 +91,7 @@ struct MultiViewScreen: View {
                                                                 DispatchQueue.main.async {
                                                                     withAnimation {
                                                                         viewModel.swapMultiViewSlots(from: sourceIndex, to: i)
-                                                                        // Update focus if needed
+                                                                        
                                                                         if focusedIndex == sourceIndex {
                                                                             focusedIndex = i
                                                                         } else if focusedIndex == i {
@@ -107,7 +107,7 @@ struct MultiViewScreen: View {
                                                 }
                                             }                }
                 
-                // Empty State / "Add First Stream"
+                
                 if activeIndices.isEmpty {
                     VStack(spacing: 20) {
                         Button(action: { showSearchSheet = true }) {
@@ -128,7 +128,7 @@ struct MultiViewScreen: View {
                     }
                 }
                 
-                // Overlay Controls
+                
                 VStack {
                     HStack(alignment: .center) {
                         Button(action: { handleDismiss() }) {
@@ -142,7 +142,7 @@ struct MultiViewScreen: View {
                         
                         Spacer()
                         
-                        // Only show global "Add" if we have active streams but < 4
+                        
                         if !activeIndices.isEmpty && activeIndices.count < 4 {
                             Button(action: { showSearchSheet = true }) {
                                 HStack(spacing: 6) {
@@ -202,20 +202,20 @@ struct MultiViewScreen: View {
         .statusBar(hidden: true)
     }
     
-    // MARK: - Smart Layout Logic
+    
     
     func shouldShow(index: Int) -> Bool {
-        // Only show slots that actually have a channel
+        
         return activeIndices.contains(index)
     }
     
     func getRect(for index: Int, size: CGSize) -> CGRect {
-        // If not active, hide it (size 0)
+        
         guard let rank = activeIndices.firstIndex(of: index) else {
             return CGRect(x: size.width/2, y: size.height/2, width: 0, height: 0)
         }
         
-        // Define safe area bounds (4pt from screen edges)
+        
         let safePadding: CGFloat = 0
         let safeRect = CGRect(origin: .zero, size: size).insetBy(dx: safePadding, dy: safePadding)
         
@@ -226,9 +226,9 @@ struct MultiViewScreen: View {
         let startY = safeRect.minY
         
         let isLandscape = w > h
-        let padding: CGFloat = 4 // Increased inner gap slightly
+        let padding: CGFloat = 4 
         
-        // Helper to inset rects for spacing between items
+        
         func inset(_ r: CGRect) -> CGRect {
             return r.insetBy(dx: padding, dy: padding)
         }
@@ -239,12 +239,12 @@ struct MultiViewScreen: View {
             
         case 2:
             if isLandscape {
-                // Side-by-side
+                
                 let width = w / 2
                 let x = rank == 0 ? startX : startX + width
                 return inset(CGRect(x: x, y: startY, width: width, height: h))
             } else {
-                // Top-bottom
+                
                 let height = h / 2
                 let y = rank == 0 ? startY : startY + height
                 return inset(CGRect(x: startX, y: y, width: w, height: height))
@@ -252,7 +252,7 @@ struct MultiViewScreen: View {
             
         case 3:
             if isLandscape {
-                // Hero Layout: Main Left (60%), Stacked Right (40%)
+                
                 let mainW = w * 0.60
                 let sideW = w - mainW
                 let sideH = h / 2
@@ -265,7 +265,7 @@ struct MultiViewScreen: View {
                     return inset(CGRect(x: startX + mainW, y: startY + sideH, width: sideW, height: sideH))
                 }
             } else {
-                // Hero Layout: Main Top (60%), Split Bottom (40%)
+                
                 let mainH = h * 0.60
                 let bottomH = h - mainH
                 let bottomW = w / 2
@@ -280,7 +280,7 @@ struct MultiViewScreen: View {
             }
             
         case 4:
-            // 2x2 Grid
+            
             let cellW = w / 2
             let cellH = h / 2
             let row = CGFloat(rank / 2)
@@ -313,7 +313,7 @@ struct MultiViewScreen: View {
     }
 }
 
-// MARK: - Components
+
 
 struct MultiViewSlot: View {
     let channel: StreamChannel?
@@ -333,7 +333,7 @@ struct MultiViewSlot: View {
                 SmartGridPlayer(url: URL(string: c.streamURL)!, isMuted: !isFocused, isPlaying: $isPlaying)
                     .allowsHitTesting(false)
                 
-                // Gradient overlay for better control visibility
+                
                 VStack {
                     LinearGradient(colors: [.black.opacity(0.6), .clear], startPoint: .top, endPoint: .bottom)
                         .frame(height: 60)
@@ -343,7 +343,7 @@ struct MultiViewSlot: View {
                 }
                 .opacity(showControls ? 1 : 0)
                 
-                // Controls
+                
                 VStack {
                     HStack {
                         Spacer()
@@ -361,7 +361,7 @@ struct MultiViewSlot: View {
                     Spacer()
                     
                     HStack {
-                        // Sound Indicator / Toggle
+                        
                         Image(systemName: isFocused ? "speaker.wave.2.fill" : "speaker.slash.fill")
                             .font(.system(size: 16))
                             .foregroundColor(isFocused ? .black : .white.opacity(0.6))
@@ -379,7 +379,7 @@ struct MultiViewSlot: View {
                         
                         Spacer()
                         
-                        // Play/Pause
+                        
                         Button(action: { isPlaying.toggle() }) {
                             Image(systemName: isPlaying ? "pause.fill" : "play.fill")
                                 .font(.system(size: 16))
@@ -402,14 +402,14 @@ struct MultiViewSlot: View {
                 .opacity(showControls ? 1 : 0)
                 .animation(.easeInOut(duration: 0.2), value: showControls)
                 
-                // Focus Border (Subtle)
+                
                 if isFocused {
                     RoundedRectangle(cornerRadius: 48, style: .continuous)
                         .stroke(Color.white.opacity(0.8), lineWidth: 4)
                 }
             } else {
-                // Empty slot styling handled by parent layout logic normally,
-                // but if used directly:
+                
+                
                 Button(action: onAdd) {
                     VStack {
                         Image(systemName: "plus")
@@ -428,7 +428,7 @@ struct MultiViewSlot: View {
     }
 }
 
-// ... (Rest of file: MultiViewSearchSheet and GridVLCPlayer remains same)
+
 
 struct MultiViewSearchSheet: View {
     @ObservedObject var viewModel: ChannelViewModel; var onSelect: (StreamChannel) -> Void; @State private var localSearchText = ""; @Environment(\.dismiss) var dismiss
@@ -459,10 +459,10 @@ struct SmartGridPlayer: UIViewRepresentable {
         var parent: SmartGridPlayer
         weak var containerView: UIView?
         
-        // KSPlayer
+        
         var ksPlayerView: NebuloKSVideoPlayerView?
         
-        // VLC
+        
         var vlcPlayer: VLCMediaPlayer?
         
         var currentURL: URL?
@@ -483,7 +483,7 @@ struct SmartGridPlayer: UIViewRepresentable {
         func update(url: URL, isMuted: Bool, isPlaying: Bool) {
             if currentURL != url {
                 stopAll()
-                isVLCFallback = false // Reset fallback on new URL
+                isVLCFallback = false 
                 currentURL = url
                 startKSPlayer(url: url)
             }
@@ -495,7 +495,7 @@ struct SmartGridPlayer: UIViewRepresentable {
             }
         }
         
-        // MARK: - KSPlayer Logic
+        
         
         func startKSPlayer(url: URL) {
             guard let container = containerView else { return }
@@ -513,14 +513,14 @@ struct SmartGridPlayer: UIViewRepresentable {
             
             player.backgroundColor = .black
             
-            // Configure KSPlayer options
-            // Note: Global options like isAutoPlay are managed by NebuloPlayerEngine
+            
+            
             let options = KSOptions()
             
             let resource = KSPlayerResource(url: url, options: options)
             player.set(resource: resource)
             
-            // Handle State Changes for Fallback
+            
             player.onStateChange = { [weak self] state in
                 guard let self = self else { return }
                 if state == .error {
@@ -529,7 +529,7 @@ struct SmartGridPlayer: UIViewRepresentable {
                 }
             }
             
-            // Also listen for finish/error
+            
             player.onFinish = { [weak self] error in
                 if let err = error {
                     print("⚠️ [MultiView] KSPlayer Finished with Error: \(err)")
@@ -543,13 +543,13 @@ struct SmartGridPlayer: UIViewRepresentable {
         func updateKSPlayer(isMuted: Bool, isPlaying: Bool) {
             guard let player = ksPlayerView, let avPlayer = player.playerLayer?.player else { return }
             
-            // Mute logic - Enforce both isMuted and volume
+            
             avPlayer.isMuted = isMuted
             if let realPlayer = avPlayer as? AVPlayer {
                 realPlayer.volume = isMuted ? 0 : 1.0
             }
             
-            // Play/Pause logic
+            
             if isPlaying {
                 if !avPlayer.isPlaying { player.play() }
             } else {
@@ -570,7 +570,7 @@ struct SmartGridPlayer: UIViewRepresentable {
             }
         }
         
-        // MARK: - VLC Logic
+        
         
         func switchToVLC() {
             DispatchQueue.main.async {
@@ -609,12 +609,12 @@ struct SmartGridPlayer: UIViewRepresentable {
         func updateVLC(isMuted: Bool, isPlaying: Bool) {
             guard let player = vlcPlayer else { return }
             
-            // Mute
+            
             if let audio = player.audio {
                 audio.volume = isMuted ? 0 : 100
             }
             
-            // Play/Pause
+            
             if isPlaying {
                 if !player.isPlaying { player.play() }
             } else {
@@ -623,10 +623,10 @@ struct SmartGridPlayer: UIViewRepresentable {
         }
         
         func mediaPlayerStateChanged(_ aNotification: Notification) {
-            // Optional: Handle VLC errors if needed
+            
         }
         
-        // MARK: - Cleanup
+        
         
         func stopAll() {
             ksPlayerView?.pause()

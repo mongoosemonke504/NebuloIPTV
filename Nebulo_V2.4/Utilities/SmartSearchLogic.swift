@@ -29,12 +29,12 @@ struct SmartSearchLogic {
     nonisolated static func checkLanguageMatch(_ text: String, preference: LanguagePreference) -> Bool {
         if preference == .any { return true }
         
-        // Use the robust detection logic
+        
         if let detected = detectLanguage(text) {
             return detected == preference
         }
         
-        // Fallback to simple token match if detection failed (short strings)
+        
         let lowerText = text.lowercased()
         let tokens = tokenize(lowerText) 
         for tag in preference.searchTokens {
@@ -53,41 +53,41 @@ struct SmartSearchLogic {
             if lang == .any { continue }
             var score = 0
             
-            // 1. Explicit Prefix (e.g. "FR:", "US:", "UK:")
+            
             if let code = lang.searchTokens.first {
                 if lower.hasPrefix(code + ":") || lower.contains(" " + code + ":") || lower.hasPrefix("[" + code + "]") {
                     score += 100
                 }
             }
             
-            // 2. Search Tokens (Strong Indicators)
+            
             for token in lang.searchTokens {
                 if tokens.contains(token) { score += 20 }
             }
             
-            // 3. Language Indicators (Common Words)
+            
             for indicator in lang.languageIndicators {
                 if indicator.contains("'") {
-                    // Substring match for things like "l'", "d'"
+                    
                     if lower.contains(indicator) { score += 5 }
                 } else {
-                    // Token match for whole words
+                    
                     if tokens.contains(indicator) { score += 2 }
                 }
             }
             
-            // Penalize English slightly if it's just "is" or "on" to prevent false positives on short strings? 
-            // No, scoring should handle it.
+            
+            
             
             if score > 0 { scores[lang] = score }
         }
         
-        // Return the language with the highest score
+        
         if let best = scores.max(by: { $0.value < $1.value }) {
             return best.key
         }
         
-        // If no identifiers found, default to English
+        
         return .english
     }
 }

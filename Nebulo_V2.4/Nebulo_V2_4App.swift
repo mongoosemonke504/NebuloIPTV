@@ -63,14 +63,14 @@ class BackgroundManager {
         
         do {
             try BGTaskScheduler.shared.submit(request)
-            // print("Scheduled app refresh for \(request.earliestBeginDate?.description ?? "unknown")")
+            
         } catch {
             print("Could not schedule app refresh: \(error)")
         }
     }
     
     func handleAppRefresh(task: BGAppRefreshTask) {
-        scheduleAppRefresh() // Reschedule for next time
+        scheduleAppRefresh() 
         
         task.expirationHandler = {
             task.setTaskCompleted(success: false)

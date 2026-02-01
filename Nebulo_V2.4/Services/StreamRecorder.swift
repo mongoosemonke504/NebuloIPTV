@@ -160,8 +160,8 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
         
         print("🔴 [StreamRecorder] Starting optimized recording for \(streamURL)")
         
-        // End background task after 10 seconds to satisfy system requirements. 
-        // The active Audio Session (silent player) will keep the app alive.
+        
+        
         DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) { [weak self] in
             self?.endBackgroundTask()
         }
