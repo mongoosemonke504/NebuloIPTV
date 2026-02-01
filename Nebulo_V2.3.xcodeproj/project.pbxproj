@@ -15,22 +15,9 @@
 		E1E35FE42F2F207100ED4515 /* Nebulo_V2.3.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nebulo_V2.3.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
-/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		E1E3611F2F2F214300ED4515 /* Exceptions for "Nebulo_V2.3" folder in "Nebulo_V2.3" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				"Nebulo-V2-3-Info.plist",
-			);
-			target = E1E35FE32F2F207100ED4515 /* Nebulo_V2.3 */;
-		};
-/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
-
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		E1E35FE62F2F207100ED4515 /* Nebulo_V2.3 */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				E1E3611F2F2F214300ED4515 /* Exceptions for "Nebulo_V2.3" folder in "Nebulo_V2.3" target */,
-			);
 			path = Nebulo_V2.3;
 			sourceTree = "<group>";
 		};
@@ -72,10 +59,10 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = E1E35FEF2F2F207300ED4515 /* Build configuration list for PBXNativeTarget "Nebulo_V2.3" */;
 			buildPhases = (
+				E1F2B44D2F0B9633004D9D5D /* Fix libshaderc_combined Bundle Identifier */,
 				E1E35FE02F2F207100ED4515 /* Sources */,
 				E1E35FE12F2F207100ED4515 /* Frameworks */,
 				E1E35FE22F2F207100ED4515 /* Resources */,
-				E1F2B44D2F0B9633004D9D5D /* Fix libshaderc_combined Bundle Identifier */,
 			);
 			buildRules = (
 			);
@@ -88,7 +75,6 @@
 			packageProductDependencies = (
 				E1E35EB32F2F1DC100ED4515 /* KSPlayer */,
 				E1E35EB62F2F1E1E00ED4515 /* VLCKitSPM */,
-				E1E362012F2F230000ED4515 /* FFmpegKit */,
 			);
 			productName = Nebulo_V2.3;
 			productReference = E1E35FE42F2F207100ED4515 /* Nebulo_V2.3.app */;
@@ -121,7 +107,6 @@
 			packageReferences = (
 				E1E35EB22F2F1DC100ED4515 /* XCRemoteSwiftPackageReference "KSPlayer" */,
 				E1E35EB52F2F1E1E00ED4515 /* XCRemoteSwiftPackageReference "vlckit-spm" */,
-				E1E362002F2F230000ED4515 /* XCRemoteSwiftPackageReference "FFmpegKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E1E35FE52F2F207100ED4515 /* Products */;
@@ -161,7 +146,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "echo \"Targeting libshaderc_combined.framework fix in app bundle...\"\n\n# The final path in the app bundle\nFINAL_FRAMEWORK_PATH=\"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/libshaderc_combined.framework\"\n\nif [ -d \"$FINAL_FRAMEWORK_PATH\" ]; then\n    echo \"Found framework at: $FINAL_FRAMEWORK_PATH\"\n    PLIST=\"$FINAL_FRAMEWORK_PATH/Info.plist\"\n    if [ -f \"$PLIST\" ]; then\n        echo \"Current ID: $(/usr/libexec/PlistBuddy -c \"Print :CFBundleIdentifier\" \"$PLIST\" 2>/dev/null || echo \"NONE\")\"\n        \n        # Force set the correct ID (hyphenated)\n        /usr/libexec/PlistBuddy -c \"Set :CFBundleIdentifier com.kintan.ksplayer.libshaderc-combined\" \"$PLIST\" 2>/dev/null || \\\n        /usr/libexec/PlistBuddy -c \"Add :CFBundleIdentifier string com.kintan.ksplayer.libshaderc-combined\" \"$PLIST\" 2>/dev/null\n        \n        echo \"Set new ID: com.kintan.ksplayer.libshaderc-combined\"\n        \n        # CRITICAL: Re-sign the framework inside the bundle after modification\n        # This is essential for code signing validity\n        echo \"Re-signing modified framework in bundle...\"\n        if [ -n \"${EXPANDED_CODE_SIGN_IDENTITY}\" ]; then\n            codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" \"$FINAL_FRAMEWORK_PATH\"\n        else\n            codesign --force --sign - \"$FINAL_FRAMEWORK_PATH\"\n        fi\n        echo \"Re-sign complete.\"\n    fi\nelse\n    echo \"Framework not yet in app bundle. Searching elsewhere...\"\n    OTHER_PATH=$(find \"${BUILT_PRODUCTS_DIR}\" -name \"libshaderc_combined.framework\" -type d | head -n 1 2>/dev/null || echo \"\")\n    if [ -n \"$OTHER_PATH\" ] && [ -d \"$OTHER_PATH\" ]; then\n        echo \"Found at intermediate path: $OTHER_PATH\"\n        /usr/libexec/PlistBuddy -c \"Set :CFBundleIdentifier com.kintan.ksplayer.libshaderc-combined\" \"$OTHER_PATH/Info.plist\" 2>/dev/null\n    fi\nfi\nexit 0\n";
+			shellScript = "echo \"Starting early libshaderc_combined.framework fix...\"\n\n# Search in the broad build directory (before it gets copied into the .app)\n# This ensures Xcode signs the correct version.\nSEARCH_PATHS=(\n    \"${BUILT_PRODUCTS_DIR}\"\n    \"${SYMROOT}\"\n    \"${TARGET_BUILD_DIR}\"\n)\n\nFOUND_PATHS=$(find \"${SEARCH_PATHS[@]}\" -name \"libshaderc_combined.framework\" -type d 2>/dev/null || echo \"\")\n\nfor FRAMEWORK in $FOUND_PATHS; do\n    if [ -d \"$FRAMEWORK\" ]; then\n        echo \"Found framework at: $FRAMEWORK\"\n        PLIST=\"$FRAMEWORK/Info.plist\"\n        if [ -f \"$PLIST\" ]; then\n            # Set the correct hyphenated ID\n            /usr/libexec/PlistBuddy -c \"Set :CFBundleIdentifier com.kintan.ksplayer.libshaderc-combined\" \"$PLIST\" 2>/dev/null\n            echo \"Patched $PLIST\"\n        fi\n    fi\ndone\n\nexit 0\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -310,6 +295,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Nebulo-V2-3-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Nebulo;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -346,6 +332,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Nebulo-V2-3-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Nebulo;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -409,14 +396,6 @@
 				minimumVersion = 3.6.0;
 			};
 		};
-		E1E362002F2F230000ED4515 /* XCRemoteSwiftPackageReference "FFmpegKit" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/nicolastinkl/FFmpegKit";
-			requirement = {
-				branch = main;
-				kind = branch;
-			};
-		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -429,11 +408,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E1E35EB52F2F1E1E00ED4515 /* XCRemoteSwiftPackageReference "vlckit-spm" */;
 			productName = VLCKitSPM;
-		};
-		E1E362012F2F230000ED4515 /* FFmpegKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = E1E362002F2F230000ED4515 /* XCRemoteSwiftPackageReference "FFmpegKit" */;
-			productName = FFmpegKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
