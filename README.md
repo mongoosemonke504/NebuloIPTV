@@ -2,7 +2,7 @@
 
 [![Watch the Demo](https://img.youtube.com/vi/MJFixFWJnyM/maxresdefault.jpg)](https://youtube.com/shorts/MJFixFWJnyM)
 
-**Nebulo V2.4** is here! 
+**Nebulo V2.3** is here! 
 
 ### **What's New in V2.4**
 *   **Redesigned Dashboard:** A completely new home screen with Quick Access cards for Favorites, Sports, and Recordings.
