@@ -1,0 +1,33 @@
+{
+  "originHash" : "eac86f78d619de725d587df6c8ec2c748b85241c3fbed1c27a86e948b8194ee3",
+  "pins" : [
+    {
+      "identity" : "ffmpegkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/kingslay/FFmpegKit.git",
+      "state" : {
+        "revision" : "85b77c589de0360c111de16752db86b60496d70b",
+        "version" : "6.1.3"
+      }
+    },
+    {
+      "identity" : "ksplayer",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/kingslay/KSPlayer",
+      "state" : {
+        "revision" : "bdfa2da39bb18865b317c4ffd08cdef5f8efc043",
+        "version" : "2.3.4"
+      }
+    },
+    {
+      "identity" : "vlc",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/omaralbeik/VLC",
+      "state" : {
+        "revision" : "9ff95718f4edce0368cc095a8e44fd31ddedb71a",
+        "version" : "3.6.0"
+      }
+    }
+  ],
+  "version" : 3
+}
