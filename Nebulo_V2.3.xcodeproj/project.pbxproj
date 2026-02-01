@@ -8,7 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		E1E361222F2F21B000ED4515 /* KSPlayer in Frameworks */ = {isa = PBXBuildFile; productRef = E1E361212F2F21B000ED4515 /* KSPlayer */; };
-		E1E361252F2F220700ED4515 /* VLC in Frameworks */ = {isa = PBXBuildFile; productRef = E1E361242F2F220700ED4515 /* VLC */; };
+		E1E361252F2F220700ED4515 /* VLCKitSPM in Frameworks */ = {isa = PBXBuildFile; productRef = E1E361242F2F220700ED4515 /* VLCKitSPM */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -41,7 +41,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				E1E361252F2F220700ED4515 /* VLC in Frameworks */,
+				E1E361252F2F220700ED4515 /* VLCKitSPM in Frameworks */,
 				E1E361222F2F21B000ED4515 /* KSPlayer in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -87,7 +87,7 @@
 			name = Nebulo_V2.3;
 			packageProductDependencies = (
 				E1E361212F2F21B000ED4515 /* KSPlayer */,
-				E1E361242F2F220700ED4515 /* VLC */,
+				E1E361242F2F220700ED4515 /* VLCKitSPM */,
 				E1E362012F2F230000ED4515 /* FFmpegKit */,
 			);
 			productName = Nebulo_V2.3;
@@ -120,7 +120,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				E1E361202F2F21B000ED4515 /* XCRemoteSwiftPackageReference "KSPlayer" */,
-				E1E361232F2F220700ED4515 /* XCRemoteSwiftPackageReference "VLC" */,
+				E1E361232F2F220700ED4515 /* XCRemoteSwiftPackageReference "vlckit-spm" */,
 				E1E362002F2F230000ED4515 /* XCRemoteSwiftPackageReference "FFmpegKit" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -397,9 +397,9 @@
 				minimumVersion = 2.3.4;
 			};
 		};
-		E1E361232F2F220700ED4515 /* XCRemoteSwiftPackageReference "VLC" */ = {
+		E1E361232F2F220700ED4515 /* XCRemoteSwiftPackageReference "vlckit-spm" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/omaralbeik/VLC";
+			repositoryURL = "https://github.com/tylerjonesio/vlckit-spm";
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 3.6.0;
@@ -421,10 +421,10 @@
 			package = E1E361202F2F21B000ED4515 /* XCRemoteSwiftPackageReference "KSPlayer" */;
 			productName = KSPlayer;
 		};
-		E1E361242F2F220700ED4515 /* VLC */ = {
+		E1E361242F2F220700ED4515 /* VLCKitSPM */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = E1E361232F2F220700ED4515 /* XCRemoteSwiftPackageReference "VLC" */;
-			productName = VLC;
+			package = E1E361232F2F220700ED4515 /* XCRemoteSwiftPackageReference "vlckit-spm" */;
+			productName = VLCKitSPM;
 		};
 		E1E362012F2F230000ED4515 /* FFmpegKit */ = {
 			isa = XCSwiftPackageProductDependency;
