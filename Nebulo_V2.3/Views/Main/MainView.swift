@@ -150,7 +150,16 @@ struct MainViewModifiers: ViewModifier {
                 
                 Text("Recording Player") 
             }
-            .sheet(isPresented: $showSettings) { SettingsView(categories: categories, accentColor: accentColor, viewModel: viewModel, scoreViewModel: scoreViewModel, playAction: playAction, onSave: { viewModel.saveCategorySettings() }) }
+            .sheet(isPresented: $showSettings) { 
+                SettingsView(
+                    categories: categories, 
+                    accentColor: accentColor, 
+                    viewModel: viewModel, 
+                    scoreViewModel: scoreViewModel, 
+                    playAction: playAction, 
+                    onSave: { viewModel.saveCategorySettings() }
+                ) 
+            }
             .alert("No Streams Found", isPresented: showNoStreamsAlert) { Button("OK", role: .cancel) { } } message: { Text("No streams were found. Please search for the channel manually.") }
             .alert("Rename", isPresented: showRenameAlert) {
                 TextField("New Name", text: renameInput)

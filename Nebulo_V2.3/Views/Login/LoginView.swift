@@ -170,6 +170,7 @@ struct LoginView: View {
         username = usernameInput
         password = passwordInput
         loginTypeRaw = selectedLoginType.rawValue
+        UserDefaults.standard.set(true, forKey: "shouldForceNextLoad")
         
         ChannelViewModel.shared.prepareForLogin()
         withAnimation(.easeInOut(duration: 0.5)) {

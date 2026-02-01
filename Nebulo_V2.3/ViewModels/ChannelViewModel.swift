@@ -47,6 +47,11 @@ class ChannelViewModel: ObservableObject {
     @Published var miniPlayerChannel: StreamChannel? = nil
     @Published var currentTime: Date = Date()
     
+    private var shouldForceNextLoad: Bool {
+        get { UserDefaults.standard.bool(forKey: "shouldForceNextLoad") }
+        set { UserDefaults.standard.set(newValue, forKey: "shouldForceNextLoad") }
+    }
+    
     
     @Published var manualChannelOrder: [Int] = []
     
@@ -139,6 +144,8 @@ class ChannelViewModel: ObservableObject {
             }
         }
         
+        let forceLoad = shouldForceNextLoad
+        if forceLoad { shouldForceNextLoad = false }
         
         if self.channels.isEmpty {
             if let (cachedChans, cachedCats) = self.loadFromCache() {
@@ -153,9 +160,9 @@ class ChannelViewModel: ObservableObject {
         let isEPGStale = lastEPGUpdateTime == nil || now.timeIntervalSince(lastEPGUpdateTime!) >= 86400
         
         
-        if !hasData || isEPGStale {
-            print("🔄 [ChannelViewModel] Data missing or EPG stale. Triggering full update.")
-            await loadActiveAccounts(silent: false, performEpgCheck: true)
+        if !hasData || isEPGStale || forceLoad {
+            print("🔄 [ChannelViewModel] Triggering full update. Force: \(forceLoad)")
+            await loadActiveAccounts(silent: false, force: forceLoad, performEpgCheck: true)
         } else {
             print("✅ [ChannelViewModel] Data is fresh. Refreshing silently in background.")
             await loadActiveAccounts(silent: true, performEpgCheck: false)

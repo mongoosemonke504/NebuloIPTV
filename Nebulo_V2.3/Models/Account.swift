@@ -36,15 +36,15 @@ struct Account: Identifiable, Codable, Equatable, Hashable {
     
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
-        name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
-        type = try container.decodeIfPresent(LoginType.self, forKey: .type) ?? .xtream
-        url = try container.decodeIfPresent(String.self, forKey: .url) ?? ""
-        username = try container.decodeIfPresent(String.self, forKey: .username)
-        password = try container.decodeIfPresent(String.self, forKey: .password)
-        externalEPGUrls = try container.decodeIfPresent([String].self, forKey: .externalEPGUrls) ?? []
-        dateAdded = try container.decodeIfPresent(Date.self, forKey: .dateAdded) ?? Date()
-        isActive = try container.decodeIfPresent(Bool.self, forKey: .isActive) ?? true
-        stableID = try container.decodeIfPresent(Int.self, forKey: .stableID) ?? 0
+        id = (try? container.decode(UUID.self, forKey: .id)) ?? UUID()
+        name = (try? container.decode(String.self, forKey: .name)) ?? ""
+        type = (try? container.decode(LoginType.self, forKey: .type)) ?? .xtream
+        url = (try? container.decode(String.self, forKey: .url)) ?? ""
+        username = try? container.decodeIfPresent(String.self, forKey: .username)
+        password = try? container.decodeIfPresent(String.self, forKey: .password)
+        externalEPGUrls = (try? container.decode([String].self, forKey: .externalEPGUrls)) ?? []
+        dateAdded = (try? container.decode(Date.self, forKey: .dateAdded)) ?? Date()
+        isActive = (try? container.decode(Bool.self, forKey: .isActive)) ?? true
+        stableID = (try? container.decode(Int.self, forKey: .stableID)) ?? 0
     }
 }

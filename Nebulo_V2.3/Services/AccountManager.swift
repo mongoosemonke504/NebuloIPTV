@@ -5,15 +5,17 @@ class AccountManager: ObservableObject {
     static let shared = AccountManager()
     
     @Published var isLoggedIn: Bool = false
+    
     @Published var currentAccount: Account? = nil {
         didSet {
             if let account = currentAccount {
                 UserDefaults.standard.set(account.id.uuidString, forKey: "activeAccountID")
-                isLoggedIn = true
+                self.isLoggedIn = true
             } else {
                 UserDefaults.standard.removeObject(forKey: "activeAccountID")
-                isLoggedIn = false
+                self.isLoggedIn = false
             }
+            UserDefaults.standard.synchronize()
         }
     }
     @Published var accounts: [Account] = [] {
@@ -27,24 +29,24 @@ class AccountManager: ObservableObject {
     }
     
     private func loadAccounts() {
-        print("📁 [AccountManager] Loading accounts...")
-        if let data = UserDefaults.standard.data(forKey: "savedAccounts"),
-           let decoded = try? JSONDecoder().decode([Account].self, from: data) {
-            self.accounts = decoded
-            print("✅ [AccountManager] Loaded \(accounts.count) accounts.")
-        } else {
-            print("⚠️ [AccountManager] No accounts found in persistence.")
+        let defaults = UserDefaults.standard
+        if let data = defaults.data(forKey: "savedAccounts") {
+            if let decoded = try? JSONDecoder().decode([Account].self, from: data) {
+                self.accounts = decoded
+            }
         }
         
-        if let activeIDStr = UserDefaults.standard.string(forKey: "activeAccountID"),
-           let activeID = UUID(uuidString: activeIDStr) {
-            print("🔍 [AccountManager] Looking for active account: \(activeIDStr)")
-            let foundAccount = accounts.first(where: { $0.id == activeID })
-            self.currentAccount = foundAccount
-            self.isLoggedIn = (foundAccount != nil)
-            print("🔐 [AccountManager] Session restored: \(self.isLoggedIn)")
+        let activeIDStr = defaults.string(forKey: "activeAccountID")
+        if let idStr = activeIDStr, let activeID = UUID(uuidString: idStr) {
+            let found = accounts.first(where: { $0.id == activeID })
+            self.currentAccount = found
+            self.isLoggedIn = (found != nil)
+        } else if !accounts.isEmpty {
+            // Auto-recover session if we have accounts but lost the active ID
+            let first = accounts.first
+            self.currentAccount = first
+            self.isLoggedIn = (first != nil)
         } else {
-            print("🔓 [AccountManager] No active session found.")
             self.isLoggedIn = false
         }
     }
@@ -52,6 +54,7 @@ class AccountManager: ObservableObject {
     private func saveAccounts() {
         if let encoded = try? JSONEncoder().encode(accounts) {
             UserDefaults.standard.set(encoded, forKey: "savedAccounts")
+            UserDefaults.standard.synchronize()
         }
     }
     
