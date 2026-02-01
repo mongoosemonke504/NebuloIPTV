@@ -258,7 +258,7 @@ struct SportGamesListView: View {
             let a = game.awayCompetitor?.team?.shortDisplayName ?? game.awayCompetitor?.athlete?.shortName ?? ""
             viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.broadcastName)
         }) {
-            ScoreRow(game: game, sport: sport, isScoreHidden: scoreViewModel.hiddenScoreGameIDs.contains(game.id), isReminderSet: scoreViewModel.reminderGameIDs.contains(game.id)).equatable()
+            ScoreRow(game: game, sport: sport, isScoreHidden: scoreViewModel.hiddenScoreGameIDs.contains(game.id), isReminderSet: scoreViewModel.reminderGameIDs.contains(game.id))
         }
         .buttonStyle(.plain)
         .contextMenu {
@@ -357,9 +357,8 @@ struct ManualSelectionSheet: View {
     }
 }
 
-struct ScoreRow: View, Equatable {
+struct ScoreRow: View {
     let game: ESPNEvent; let sport: SportType; var isScoreHidden: Bool = false; var isReminderSet: Bool = false
-    static func == (lhs: ScoreRow, rhs: ScoreRow) -> Bool { lhs.game.id == rhs.game.id && lhs.isScoreHidden == rhs.isScoreHidden && lhs.isReminderSet == rhs.isReminderSet }
     var body: some View { 
         ZStack(alignment: .topTrailing) {
             VStack(spacing: 0) { 
