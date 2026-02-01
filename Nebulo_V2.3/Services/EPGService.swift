@@ -185,7 +185,10 @@ class EPGService: NSObject, XMLParserDelegate {
     private func downloadFileWithProgress(url: URL, expectedSize: Int64?, onProgress: @escaping (Double) -> Void) async throws -> URL {
         try await withCheckedThrowingContinuation { continuation in
             let delegate = EPGDownloadDelegate(onProgress: onProgress, continuation: continuation, expectedSize: expectedSize)
-            let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+            let config = URLSessionConfiguration.default
+            config.timeoutIntervalForRequest = 30
+            config.timeoutIntervalForResource = 60
+            let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
             session.downloadTask(with: url).resume()
         }
     }

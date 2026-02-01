@@ -4,7 +4,6 @@ import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
-    @AppStorage("isLoggedIn") private var isLoggedIn = false
     @AppStorage("viewMode") private var viewMode = ViewMode.automatic.rawValue
     @AppStorage("customAccentHex") private var customAccentHex = "#007AFF"
     
@@ -92,8 +91,9 @@ struct SettingsView: View {
                         Button(action: {
                             if let current = accountManager.currentAccount {
                                 accountManager.removeAccount(current)
+                                viewModel.reset()
                             } else {
-                                withAnimation { viewModel.reset(); isLoggedIn = false }
+                                withAnimation { viewModel.reset() }
                             }
                         }) {
                             Text("Sign Out")

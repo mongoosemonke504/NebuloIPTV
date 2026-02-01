@@ -27,15 +27,25 @@ class AccountManager: ObservableObject {
     }
     
     private func loadAccounts() {
+        print("📁 [AccountManager] Loading accounts...")
         if let data = UserDefaults.standard.data(forKey: "savedAccounts"),
            let decoded = try? JSONDecoder().decode([Account].self, from: data) {
             self.accounts = decoded
+            print("✅ [AccountManager] Loaded \(accounts.count) accounts.")
+        } else {
+            print("⚠️ [AccountManager] No accounts found in persistence.")
         }
         
         if let activeIDStr = UserDefaults.standard.string(forKey: "activeAccountID"),
            let activeID = UUID(uuidString: activeIDStr) {
-            self.currentAccount = accounts.first(where: { $0.id == activeID })
-            self.isLoggedIn = (self.currentAccount != nil)
+            print("🔍 [AccountManager] Looking for active account: \(activeIDStr)")
+            let foundAccount = accounts.first(where: { $0.id == activeID })
+            self.currentAccount = foundAccount
+            self.isLoggedIn = (foundAccount != nil)
+            print("🔐 [AccountManager] Session restored: \(self.isLoggedIn)")
+        } else {
+            print("🔓 [AccountManager] No active session found.")
+            self.isLoggedIn = false
         }
     }
     

@@ -127,92 +127,96 @@ class ChannelViewModel: ObservableObject {
     init() {
         loadSettings()
         startEPGClock()
-        
-        
-        AccountManager.shared.$accounts
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                
-                DispatchQueue.main.async {
-                    Task { await self?.loadActiveAccounts() }
-                }
-            }
-            .store(in: &cancellables)
-            
-        
-        Task { await loadActiveAccounts() }
     }
     
     func handleAppActivation() async {
-        let now = Date()
+        if let task = currentLoadTask {
+            // If task is finished, nil it out and continue, otherwise return
+            if task.isCancelled { 
+                currentLoadTask = nil 
+            } else {
+                return
+            }
+        }
         
         
         if self.channels.isEmpty {
-            print("🔄 [ChannelViewModel] No channels found, triggering immediate load...")
+            if let (cachedChans, cachedCats) = self.loadFromCache() {
+                self.channels = cachedChans
+                self.categories = cachedCats
+                self.categorizeSports()
+            }
+        }
+        
+        let now = Date()
+        let hasData = !self.channels.isEmpty
+        let isEPGStale = lastEPGUpdateTime == nil || now.timeIntervalSince(lastEPGUpdateTime!) >= 86400
+        
+        
+        if !hasData || isEPGStale {
+            print("🔄 [ChannelViewModel] Data missing or EPG stale. Triggering full update.")
             await loadActiveAccounts(silent: false, performEpgCheck: true)
-            return
-        }
-
-        
-        if let lastUpdate = lastEPGUpdateTime, now.timeIntervalSince(lastUpdate) < 86400 {
-            print("✅ [ChannelViewModel] EPG is fresh (< 24h). Skipping update.")
-            
+        } else {
+            print("✅ [ChannelViewModel] Data is fresh. Refreshing silently in background.")
             await loadActiveAccounts(silent: true, performEpgCheck: false)
-            return
         }
-        
-        print("🔄 [ChannelViewModel] EPG is stale (> 24h). triggering update...")
-        await loadActiveAccounts(silent: false, performEpgCheck: true)
+    }
+
+    func prepareForLogin() {
+        self.reset()
+        self.isLoading = true
+        self.loadingStatus = "Connecting..."
     }
 
     func loadActiveAccounts(silent: Bool = false, force: Bool = false, performEpgCheck: Bool = false) async {
+        if currentLoadTask != nil && silent { return }
         
-        if isLoading && silent { return }
+        let loadID = UUID()
+        self.currentLoadID = loadID
         
-        
-        var shouldUpdateEPG = performEpgCheck
-        let now = Date()
-        if performEpgCheck && !force {
-            if let last = lastEPGUpdateTime, now.timeIntervalSince(last) < 86400 {
-                print("✅ [ChannelViewModel] EPG is fresh (< 24h). Suppressing EPG update.")
-                shouldUpdateEPG = false
+        await MainActor.run {
+            if !silent && (self.channels.isEmpty || force) {
+                self.isLoading = true
+                self.loadingStatus = "Loading Channels..."
+            }
+            
+            if force {
+                self.channels = []
+                self.categories = []
+                self.epgData = [:]
+                self.epgNameMap = [:]
+            } else if self.channels.isEmpty {
+                if let (cachedChans, cachedCats) = self.loadFromCache() {
+                    self.channels = cachedChans
+                    self.categories = cachedCats
+                    self.categorizeSports()
+                }
             }
         }
         
         currentLoadTask?.cancel()
-        let loadID = UUID()
-        self.currentLoadID = loadID
-        
         currentLoadTask = Task {
-            let startTime = Date()
-            var hadCachedChannels = false
             
-            
-            await MainActor.run {
-                
-                if !silent {
-                    self.isLoading = true
-                    self.loadingStatus = "Loading Playlists..."
-                }
-                
-                
-                if force {
-                    self.channels = []
-                }
-                
-                if !silent && !force {
-                    if let (cachedChans, cachedCats) = self.loadFromCache() {
-                        if !cachedChans.isEmpty {
-                            hadCachedChannels = true
-                            self.channels = cachedChans
-                            self.categories = cachedCats
-                            self.categorizeSports()
-                            
-                        }
+            defer {
+                Task { @MainActor in
+                    if self.currentLoadID == loadID {
+                        self.isLoading = false
+                        self.isUpdatingEPG = false
+                        self.currentLoadTask = nil
+                        self.stopSmoothingTimer()
                     }
                 }
-                
-                
+            }
+
+            var shouldUpdateEPG = performEpgCheck
+            if performEpgCheck && !force {
+                let now = Date()
+                if let last = lastEPGUpdateTime, now.timeIntervalSince(last) < 86400 {
+                    shouldUpdateEPG = false
+                }
+            }
+
+            await MainActor.run {
                 if shouldUpdateEPG {
                     self.isUpdatingEPG = true
                     self.loadingStatus = "Checking for updates..."
@@ -221,28 +225,7 @@ class ChannelViewModel: ObservableObject {
             }
 
             let accounts = AccountManager.shared.accounts.filter { $0.isActive }
-            if accounts.isEmpty {
-                await MainActor.run {
-                    guard self.currentLoadID == loadID else { return }
-                    self.isUpdatingEPG = false
-                    self.stopSmoothingTimer()
-                    self.isLoading = false
-                }
-                return
-            }
-            if Task.isCancelled {
-                await MainActor.run { 
-                    guard self.currentLoadID == loadID else { return }
-                    self.isUpdatingEPG = false; self.stopSmoothingTimer() 
-                }
-                return
-            }
-            
-            if self.channels.isEmpty {
-                await MainActor.run {
-                    if !silent { self.isLoading = true }
-                }
-            }
+            if accounts.isEmpty { return }
             
             await MainActor.run {
                 self.activeAccountsMap = Dictionary(uniqueKeysWithValues: accounts.map { ($0.id, $0) })
@@ -259,7 +242,6 @@ class ChannelViewModel: ObservableObject {
                         return await self.fetchAccountData(account)
                     }
                 }
-                
                 for await (chans, cats, urls) in group {
                     allChannels.append(contentsOf: chans)
                     allCategories.append(contentsOf: cats)
@@ -267,13 +249,7 @@ class ChannelViewModel: ObservableObject {
                 }
             }
             
-            if Task.isCancelled {
-                await MainActor.run { 
-                    guard self.currentLoadID == loadID else { return }
-                    self.isUpdatingEPG = false; self.stopSmoothingTimer() 
-                }
-                return
-            }
+            if Task.isCancelled { return }
             
             await MainActor.run {
                 self.channels = allChannels
@@ -282,60 +258,21 @@ class ChannelViewModel: ObservableObject {
                 self.saveToCache()
             }
             
-            let silentEpg = silent || (hadCachedChannels && !force && !shouldUpdateEPG)
-            
-            
             if shouldUpdateEPG {
-                print("🔄 [ChannelViewModel] Starting Full EPG Update...")
-                await self.updateEPGFromURLs(epgUrls, force: force, silent: silentEpg)
-            } else {
-                print("✅ [ChannelViewModel] Skipping EPG Update (Fresh or Not Requested).")
-                
-                
-                if self.epgData.isEmpty {
-                    let loaded = await Task.detached(priority: .userInitiated) {
-                        return await EPGService().loadFromDisk()
-                    }.value
-                    
-                    if let cached = loaded, !cached.epg.isEmpty {
-                        print("📂 [ChannelViewModel] Loaded EPG from disk cache.")
-                        await MainActor.run {
-                            self.epgData = cached.epg
-                            self.epgNameMap = cached.map
-                        }
+                await self.updateEPGFromURLs(epgUrls, force: force, silent: silent)
+            } else if self.epgData.isEmpty {
+                if let cached = EPGService().loadFromDisk(), !cached.epg.isEmpty {
+                    await MainActor.run {
+                        self.epgData = cached.epg
+                        self.epgNameMap = cached.map
                     }
                 }
             }
             
-            
             await MainActor.run {
-                guard self.currentLoadID == loadID else { return }
-                
                 self.lastFullLoadTime = Date()
-                self.isLoading = false
-                if shouldUpdateEPG {
-                    self.isUpdatingEPG = false
-                    self.stopSmoothingTimer()
-                }
-            }
-            
-            if !silent && self.isLoading {
-                let elapsed = Date().timeIntervalSince(startTime)
-                if elapsed < 1.5 {
-                    let remaining = 1.5 - elapsed
-                    try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
-                }
-            }
-            
-            if Task.isCancelled {
-                await MainActor.run { 
-                    guard self.currentLoadID == loadID else { return }
-                    self.isUpdatingEPG = false; self.stopSmoothingTimer() 
-                }
-                return
             }
         }
-        
         await currentLoadTask?.value
     }
     
@@ -348,6 +285,11 @@ class ChannelViewModel: ObservableObject {
         var fetchedCategories: [StreamCategory] = []
         var fetchedEPGs: [URL] = []
         
+        
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 15
+        let session = URLSession(configuration: config)
+        
         do {
             if account.type == .xtream {
                 guard let baseURL = URL(string: account.url) else { return ([], [], []) }
@@ -356,14 +298,14 @@ class ChannelViewModel: ObservableObject {
                 
                 
                 let catUrl = try await ChannelViewModel.buildApiUrl(base: baseURL, user: user, pass: pass, action: "get_live_categories")
-                let (cData, _) = try await URLSession.shared.data(from: catUrl)
+                let (cData, _) = try await session.data(from: catUrl)
                 let cats = try JSONDecoder().decode([StreamCategory].self, from: cData)
                 let processedCats = await ChannelViewModel.processCategories(cats, prefix: prefix, idOffset: offset)
                 fetchedCategories = processedCats
                 
                 
                 let streamUrl = try await ChannelViewModel.buildApiUrl(base: baseURL, user: user, pass: pass, action: "get_live_streams")
-                let (sData, _) = try await URLSession.shared.data(from: streamUrl)
+                let (sData, _) = try await session.data(from: streamUrl)
                 let raw = try JSONDecoder().decode([StreamChannel].self, from: sData)
                 let processedChans = await ChannelViewModel.processChannels(raw, safeURL: account.url, user: user, pass: pass, prefix: prefix, idOffset: offset, accountID: account.id)
                 fetchedChannels = processedChans
@@ -377,7 +319,7 @@ class ChannelViewModel: ObservableObject {
             } else {
                 
                 guard let baseURL = URL(string: account.url) else { return ([], [], []) }
-                let (data, _) = try await URLSession.shared.data(from: baseURL)
+                let (data, _) = try await session.data(from: baseURL)
                 if let content = String(data: data, encoding: .utf8) {
                     let (pChannels, pCategories, epgUrl) = await ChannelViewModel.parseM3U(content: content, idOffset: offset, accountID: account.id)
                     fetchedChannels = pChannels
@@ -1442,47 +1384,21 @@ class ChannelViewModel: ObservableObject {
         if urlsChanged { lastFetchedEPGUrls = urls }
         let shouldForce = force || urlsChanged
         
-        if self.epgData.isEmpty {
-             if let cached = EPGService().loadFromDisk(), !cached.epg.isEmpty {
-                await MainActor.run {
-                    self.epgData = cached.epg
-                    self.epgNameMap = cached.map
-                }
-            }
-        }
-        
-        
         if !shouldForce && !isStale && !self.epgData.isEmpty {
             print("✅ [EPG] Data is fresh. Skipping network fetch.")
             return
         }
         
-        
-        
-        let effectivelySilent = silent || (!self.epgData.isEmpty && !shouldForce)
-        
         await MainActor.run {
-            
-            
-            if !silent {
-                self.isLoading = true
-            }
-            
             self.visualProgress = 0
             self.epgProgress = 0
             self.loadingStatus = "Updating Guide..."
-            
-            
-            if !effectivelySilent {
-                withAnimation(.spring()) { self.isUpdatingEPG = true }
-                self.startSmoothingTimer()
-            }
+            withAnimation(.spring()) { self.isUpdatingEPG = true }
+            self.startSmoothingTimer()
         }
         
         let result = await EPGService().fetchAndMergeEPGs(urls: urls) { progress in
-            Task { @MainActor in
-                self.epgProgress = progress
-            }
+            Task { @MainActor in self.epgProgress = progress }
         }
         
         await MainActor.run {
@@ -1491,13 +1407,6 @@ class ChannelViewModel: ObservableObject {
             self.visualProgress = 1.0
             self.epgData = result.epg
             self.epgNameMap = result.map
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                withAnimation(.spring()) { self.isUpdatingEPG = false }
-                self.stopSmoothingTimer()
-            }
-            
-            self.isLoading = false 
         }
     }
     

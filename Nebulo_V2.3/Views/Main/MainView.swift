@@ -42,9 +42,8 @@ struct MainView: SwiftUI.View {
         }
         .ignoresSafeArea()
         .task { 
-            if viewModel.channels.isEmpty { 
-                await viewModel.loadData(url: xstreamURL, user: username, pass: password, type: LoginType(rawValue: loginTypeRaw) ?? .xtream) 
-            }
+            await viewModel.handleAppActivation()
+            
             if showSupportPopup { 
                 let now = Date().timeIntervalSince1970
                 if now - lastSupportPopupTime > 43200 { 
@@ -56,7 +55,7 @@ struct MainView: SwiftUI.View {
         }
         .onReceive(refreshTimer) { _ in 
             Task { 
-                await viewModel.loadData(url: xstreamURL, user: username, pass: password, type: LoginType(rawValue: loginTypeRaw) ?? .xtream, silent: true) 
+                await viewModel.handleAppActivation() 
             } 
         }
         .onChangeCompat(of: viewModel.channelToAutoPlay) { nc in 

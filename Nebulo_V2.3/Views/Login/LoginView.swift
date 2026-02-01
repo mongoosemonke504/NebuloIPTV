@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct LoginView: View {
-    @AppStorage("isLoggedIn") private var isLoggedIn = false
     @AppStorage("xstreamURL") private var xstreamURL = ""
     @AppStorage("username") private var username = ""
     @AppStorage("password") private var password = ""
@@ -14,6 +13,8 @@ struct LoginView: View {
     @State private var showError = false
     @State private var errorMessage = ""
     @State private var selectedLoginType: LoginType = .xtream
+    
+    @ObservedObject private var accountManager = AccountManager.shared
     
     var body: some View {
         NavigationStack {
@@ -164,8 +165,16 @@ struct LoginView: View {
             password: passwordInput
         )
         
-        AccountManager.shared.saveAccount(newAccount, makeActive: true)
-        withAnimation(.easeInOut(duration: 0.5)) { isLoggedIn = true }
+        
+        xstreamURL = safe
+        username = usernameInput
+        password = passwordInput
+        loginTypeRaw = selectedLoginType.rawValue
+        
+        ChannelViewModel.shared.prepareForLogin()
+        withAnimation(.easeInOut(duration: 0.5)) {
+            accountManager.saveAccount(newAccount, makeActive: true)
+        }
     }
 }
 
