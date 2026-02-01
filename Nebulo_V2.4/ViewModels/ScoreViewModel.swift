@@ -6,7 +6,7 @@ import SwiftUI
 class ScoreViewModel: ObservableObject {
     @Published var filteredGames: [SportType: [ESPNEvent]] = [:]
     @Published var filteredSectionsMap: [SportType: [SoccerGameSection]] = [:]
-    @Published var selectedSport: SportType = .nfl
+    @Published var selectedSport: SportType = .pinned
     @Published var isLoading = false
     @Published var errorMessage: String? = nil
     
@@ -19,7 +19,7 @@ class ScoreViewModel: ObservableObject {
     @Published var renamedSportTabs: [String: String] = [:]
     private var currentSearchText = ""
     
-    private static let noCacheSession: URLSession = {
+    static let noCacheSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         return URLSession(configuration: config)
@@ -201,9 +201,7 @@ class ScoreViewModel: ObservableObject {
             if aState == "in" && bState == "in" { return a.gameDate > b.gameDate }
             if aState == "pre" && bState == "post" { return true }
             if aState == "post" && bState == "pre" { return false }
-            if aState == "pre" && bState == "pre" { return a.gameDate > b.gameDate } // Changed from > to match typical 'later games first' or 'earlier games first'? 
-            // Original fetchEvents had > (Descending date). But typically pre-games should be ascending (soonest first).
-            // fetchEvents used > for Pre-Pre. I will keep > for consistency with fetchEvents.
+            if aState == "pre" && bState == "pre" { return a.gameDate > b.gameDate }
             return a.gameDate > b.gameDate
         }
     }
@@ -343,8 +341,6 @@ class ScoreViewModel: ObservableObject {
         self.fetchTask = newTask
         _ = await newTask.result
     }
-        _ = await fetchTask?.result
-    }
     
     nonisolated private func fetchEvents(url: URL) async throws -> [ESPNEvent] {
         let (data, _) = try await ScoreViewModel.noCacheSession.data(from: url)
@@ -424,11 +420,6 @@ class ScoreViewModel: ObservableObject {
             
             var newFilteredMap: [SportType: [SoccerGameSection]] = [:]
             for (sport, sections) in masterSectionsMap {
-                // Soccer sections might need sorting logic too if games are moved, but sections structure makes pinning hard within sections.
-                // We'll just sort games within sections for now if they are pinned?
-                // Or maybe just leave soccer sections as is for now regarding order, unless we want to pull pinned games out of sections.
-                // For simplicity, we'll just return masterSectionsMap but potentially sort games inside sections?
-                // Let's sort games inside each section.
                 newFilteredMap[sport] = sections.map { sec in
                     SoccerGameSection(id: sec.id, league: sec.league, games: sortGames(sec.games))
                 }
