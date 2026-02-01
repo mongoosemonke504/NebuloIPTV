@@ -4,7 +4,9 @@
 
 **Nebulo V2.3** is here! 
 
-### **What's New in V2.4**
+### **Currently can't sideload with certificate because of KSPlayer requiring payment for use. Working on a VLC only version that should work with options other than SideStore and AltStore**
+
+### **What's New in V2.3**
 *   **Redesigned Dashboard:** A completely new home screen with Quick Access cards for Favorites, Sports, and Recordings.
 *   **Multi-Playlist & EPG Support:** Log into multiple accounts and add custom external EPG links to run simultaneously.
 *   **Stream Recording:** Built-in support to record live content and manage your library directly in the app.
