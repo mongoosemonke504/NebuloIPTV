@@ -352,6 +352,7 @@ class ScoreViewModel: ObservableObject {
                     self.updatePinnedGames()
                     self.saveToCache()
                     self.lastFetchTime = Date()
+                    self.applyFilter(text: self.currentSearchText)
                 }
                 await self.preloadImages()
                 await MainActor.run { self.isLoading = false }
