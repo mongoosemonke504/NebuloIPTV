@@ -36,6 +36,7 @@ struct SportsHubView: View {
         .toolbar { 
             ToolbarItem(placement: .principal) {
                 Button(action: {
+                    ChannelViewModel.shared.triggerSelectionHaptic()
                     Task { await scoreViewModel.fetchScores(forceRefresh: true) }
                 }) {
                     Text("Sports")
