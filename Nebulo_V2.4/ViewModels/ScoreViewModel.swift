@@ -19,6 +19,12 @@ class ScoreViewModel: ObservableObject {
     @Published var renamedSportTabs: [String: String] = [:]
     private var currentSearchText = ""
     
+    private static let noCacheSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: config)
+    }()
+    
     private var masterGames: [SportType: [ESPNEvent]] = [:]
     private var masterSectionsMap: [SportType: [SoccerGameSection]] = [:]
     
@@ -324,7 +330,7 @@ class ScoreViewModel: ObservableObject {
                     }
                     
                     for sport in SportType.allCases {
-                        if sport == .soccerLeagues || sport == .domesticCups || sport == .continental || sport == .international { continue }
+                        if sport == .pinned || sport == .soccerLeagues || sport == .domesticCups || sport == .continental || sport == .international { continue }
                         group.addTask {
                             guard let url = URL(string: sport.endpoint) else { return (sport, nil, nil) }
                             do {
@@ -358,10 +364,11 @@ class ScoreViewModel: ObservableObject {
                 await MainActor.run { self.isLoading = false }
             }
         }
+        _ = await fetchTask?.result
     }
     
     nonisolated private func fetchEvents(url: URL) async throws -> [ESPNEvent] {
-        let (data, _) = try await URLSession.shared.data(from: url)
+        let (data, _) = try await ScoreViewModel.noCacheSession.data(from: url)
         let response = try JSONDecoder().decode(ESPNResponse.self, from: data)
         var events = response.events ?? []
         events.sort { a, b in
@@ -388,7 +395,7 @@ class ScoreViewModel: ObservableObject {
                     let urlStr = "https://site.api.espn.com/apis/site/v2/sports/soccer/\(code)/scoreboard"
                     guard let url = URL(string: urlStr) else { return (name, nil) }
                     do {
-                        let (data, _) = try await URLSession.shared.data(from: url)
+                        let (data, _) = try await ScoreViewModel.noCacheSession.data(from: url)
                         let res = try JSONDecoder().decode(ESPNResponse.self, from: data)
                         var events = res.events ?? []
                         events.sort { a, b in
