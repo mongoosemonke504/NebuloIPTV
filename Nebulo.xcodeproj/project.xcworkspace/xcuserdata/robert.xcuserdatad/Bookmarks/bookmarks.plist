@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>top-level-items</key>
+	<array>
+		<dict>
+			<key>destination</key>
+			<dict>
+				<key>location-parameters</key>
+				<dict>
+					<key>Timestamp</key>
+					<string>791746061.462692</string>
+					<key>XcodeLocation</key>
+					<string>{"Selection":{"Editor":"Xcode3SigningEditor","Target":"Nebulo"}}</string>
+				</dict>
+				<key>rebasable-url</key>
+				<dict>
+					<key>base</key>
+					<string>workspace</string>
+					<key>payload</key>
+					<dict>
+						<key>relative-path</key>
+						<string>Nebulo.xcodeproj</string>
+					</dict>
+				</dict>
+				<key>type</key>
+				<string>Xcode3ProjectDocumentLocation</string>
+			</dict>
+			<key>title</key>
+			<string>Nebulo Signing &amp; Capabilities</string>
+			<key>type</key>
+			<string>bookmark</string>
+		</dict>
+	</array>
+</dict>
+</plist>
