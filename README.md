@@ -4,7 +4,7 @@
 
 **Nebulo V2.3** is here! 
 
-### **Currently can't sideload with certificate because of KSPlayer requiring payment for use. Working on a VLC only version that should work with options other than SideStore and AltStore**
+### **If the main ipa does is unable to be verified, try the backup it will work with users using signing apps**
 
 ### **What's New in V2.3**
 *   **Redesigned Dashboard:** A completely new home screen with Quick Access cards for Favorites, Sports, and Recordings.
