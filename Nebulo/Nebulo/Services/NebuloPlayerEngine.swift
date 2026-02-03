@@ -46,23 +46,6 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         print("⚠️ [NebuloEngine] Backend switching is disabled (AVPlayer Only).")
     }
     
-    public var onRequestTimeshiftURL: ((Date) async -> URL?)?
-    private var lastPauseDate: Date?
-    
-    public var currentTimeshiftStartDate: Date? {
-        guard let url = currentURL else { return nil }
-        // Simple regex check for date in URL (same as before)
-        let urlString = url.absoluteString
-        if let range = urlString.range(of: "\\d{4}-\\d{2}-\\d{2}:\\d{2}-\\d{2}", options: .regularExpression) {
-            let dateString = String(urlString[range])
-            let formatter = DateFormatter()
-            formatter.dateFormat = "yyyy-MM-dd:HH-mm"
-            formatter.timeZone = TimeZone(secondsFromGMT: 0)
-            return formatter.date(from: dateString)
-        }
-        return nil
-    }
-    
     public enum VideoQuality: String, CaseIterable, Identifiable {
         case auto = "Auto", high = "1080p", medium = "720p", low = "480p"
         public var id: String { rawValue }
@@ -208,7 +191,6 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     
     public func pause() {
         userPaused = true
-        lastPauseDate = Date()
         avPlayer?.pause()
         isPlaying = false
     }

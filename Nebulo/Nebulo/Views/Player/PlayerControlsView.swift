@@ -18,13 +18,9 @@ struct PlayerControlsView: View {
     @Binding var draggingProgress: Double?
     
     
-    @State private var timeshiftStartTime: Date? = nil
-    
-    
     @State private var isLongPaused = false
     @State private var pauseTimerTask: Task<Void, Never>? = nil
     @State private var isDescriptionExpanded = false
-    @State private var showRecordingSheet = false
     
     
     var onDismiss: () -> Void
@@ -40,13 +36,7 @@ struct PlayerControlsView: View {
         GeometryReader { geo in
             let isLandscape = geo.size.width > geo.size.height
             let currentProg = viewModel?.getCurrentProgram(for: channel)
-            let isRecording = recordingManager.isRecording(channelName: channel.name)
-            let isTrulyLive: Bool = {
-                if isScrubbing { return false }
-                if isLongPaused { return false }
-                if timeshiftStartTime == nil { return true }
-                return playerManager.duration > 0 && playerManager.currentTime >= playerManager.duration - 15
-            }()
+            let isTrulyLive = !isScrubbing && !isLongPaused && playerManager.duration > 0 && playerManager.currentTime >= playerManager.duration - 15
             
             ZStack {
                 
@@ -54,9 +44,6 @@ struct PlayerControlsView: View {
                     .ignoresSafeArea()
                     .onTapGesture {
                         toggleControls()
-                    }
-                    .onChangeCompat(of: isRecording) { newValue in
-                        print("PlayerControlsView: isRecording state changed to \(newValue)")
                     }
                 
                 if showControls {
@@ -69,8 +56,6 @@ struct PlayerControlsView: View {
                         }
                     
                     ZStack {
-                        
-                        
                         
                         HStack(spacing: 60) {
                             
@@ -103,7 +88,6 @@ struct PlayerControlsView: View {
                                         HStack {
                                             Button(action: {
                                                 ChannelViewModel.shared.triggerSelectionHaptic()
-                                                timeshiftStartTime = nil
                                                 onDismiss()
                                             }) {
                                                 Image(systemName: "xmark")
@@ -143,8 +127,6 @@ struct PlayerControlsView: View {
                                                             .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
                                                     }
                                                     .buttonStyle(.plain)
-                                                    .disabled(timeshiftStartTime != nil)
-                                                    .opacity(timeshiftStartTime != nil ? 0.5 : 1.0)
                                                 }
                                             }
                                         }
@@ -160,7 +142,6 @@ struct PlayerControlsView: View {
                                     HStack {
                                         Button(action: {
                                             ChannelViewModel.shared.triggerSelectionHaptic()
-                                            timeshiftStartTime = nil
                                             onDismiss()
                                         }) {
                                             Image(systemName: "xmark")
@@ -207,8 +188,6 @@ struct PlayerControlsView: View {
                                                         .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
                                                 }
                                                 .buttonStyle(.plain)
-                                                .disabled(timeshiftStartTime != nil)
-                                                .opacity(timeshiftStartTime != nil ? 0.5 : 1.0)
                                             }
                                         }
                                     }
@@ -232,21 +211,20 @@ struct PlayerControlsView: View {
                                         
                                         
                                         Button(action: {
-                                            if !isRecording {
+                                            if false { 
                                                 ChannelViewModel.shared.triggerSelectionHaptic()
                                                 playerManager.toggleBackend()
                                             }
                                         }) {
                                             Text(playerManager.activeBackendName)
                                                 .font(.system(size: 9, weight: .black))
-                                                .foregroundColor(.white.opacity(isRecording ? 0.3 : 0.6))
+                                                .foregroundColor(.white.opacity(0.6))
                                                 .padding(.horizontal, 5)
                                                 .padding(.vertical, 1)
                                                 .background(Color.white.opacity(0.12))
                                                 .clipShape(RoundedRectangle(cornerRadius: 4))
                                         }
                                         .buttonStyle(.plain)
-                                        .disabled(isRecording)
                                         
                                         Spacer()
                                     }
@@ -275,262 +253,81 @@ struct PlayerControlsView: View {
                                 
                                 
                                 VStack(spacing: 4) {
-                                    if isRecordingPlayback {
-                                        
-                                        let currentPos = draggingProgress ?? (playerManager.duration > 0 ? playerManager.currentTime / playerManager.duration : 0)
-                                        
-                                        VStack(spacing: 8) {
-                                            HStack {
-                                                Text(formatTime(draggingProgress != nil ? draggingProgress! * playerManager.duration : playerManager.currentTime))
-                                                    .font(.caption2.monospacedDigit())
-                                                    .foregroundColor(.white.opacity(0.7))
-                                                Spacer()
-                                                Text(formatTime(playerManager.duration))
-                                                    .font(.caption2.monospacedDigit())
-                                                    .foregroundColor(.white.opacity(0.7))
-                                            }
-                                            
-                                            GeometryReader { barGeo in
-                                                ZStack(alignment: .leading) {
-                                                    Capsule()
-                                                        .fill(Color.white.opacity(0.2))
-                                                        .frame(height: 6)
-                                                    
-                                                    Capsule()
-                                                        .fill(Color.white)
-                                                        .frame(width: barGeo.size.width * CGFloat(currentPos), height: 6)
-                                                    
-                                                    Circle()
-                                                        .fill(Color.white)
-                                                        .frame(width: 14, height: 14)
-                                                        .shadow(radius: 2)
-                                                        .offset(x: barGeo.size.width * CGFloat(currentPos) - 7)
-                                                }
-                                                .frame(height: 20)
-                                                .contentShape(Rectangle())
-                                                .gesture(
-                                                    DragGesture(minimumDistance: 0)
-                                                        .onChanged { value in
-                                                            isScrubbing = true
-                                                            draggingProgress = max(0, min(1, value.location.x / barGeo.size.width))
-                                                        }
-                                                        .onEnded { value in
-                                                            ChannelViewModel.shared.triggerSelectionHaptic()
-                                                            let dragPercent = max(0, min(1, value.location.x / barGeo.size.width))
-                                                            playerManager.seek(to: playerManager.duration * dragPercent)
-                                                            isScrubbing = false
-                                                            draggingProgress = nil
-                                                        }
-                                                )
-                                            }
-                                            .frame(height: 20)
-                                        }
-                                    } else if let prog = currentProg {
-                                        let totalDuration = prog.stop.timeIntervalSince(prog.start)
-                                        
-                                        
-                                        let currentPlaybackDate: Date = {
-                                            if let start = timeshiftStartTime {
-                                                return start.addingTimeInterval(playerManager.currentTime)
-                                            } else {
-                                                return Date()
-                                            }
-                                        }()
-                                        
-                                        let elapsed = currentPlaybackDate.timeIntervalSince(prog.start)
-                                        let actualProgress = max(0, min(1, elapsed / totalDuration))
-                                        
-                                        
-                                        let liveElapsed = Date().timeIntervalSince(prog.start)
-                                        let liveProgress = max(0, min(1, liveElapsed / totalDuration))
-                                        
-                                        let displayProgress = draggingProgress ?? actualProgress
-                                        
-                                        
+                                    
+                                    let currentPos = draggingProgress ?? (playerManager.duration > 0 ? playerManager.currentTime / playerManager.duration : 0)
+                                    
+                                    VStack(spacing: 8) {
                                         HStack {
-                                            Text(formatClockTime(prog.start))
+                                            Text(formatTime(draggingProgress != nil ? draggingProgress! * playerManager.duration : playerManager.currentTime))
                                                 .font(.caption2.monospacedDigit())
                                                 .foregroundColor(.white.opacity(0.7))
-                                            
                                             Spacer()
-                                            
-                                            if timeshiftStartTime != nil {
-                                                Text("Timeshift: \(formatClockTime(currentPlaybackDate))")
-                                                    .font(.caption2.bold())
-                                                    .foregroundColor(.yellow)
-                                            }
-                                            
-                                            Spacer()
-                                            
-                                            Text(formatClockTime(prog.stop))
+                                            Text(formatTime(playerManager.duration))
                                                 .font(.caption2.monospacedDigit())
                                                 .foregroundColor(.white.opacity(0.7))
                                         }
-                                        
                                         
                                         GeometryReader { barGeo in
                                             ZStack(alignment: .leading) {
-                                                
                                                 Capsule()
-                                                    .fill(Color.white.opacity(channel.hasArchive ? 0.2 : 0.1))
+                                                    .fill(Color.white.opacity(0.2))
                                                     .frame(height: 6)
                                                 
-                                                
-                                                Capsule()
-                                                    .fill(timeshiftStartTime == nil ? Color.white : Color.yellow)
-                                                    .opacity(channel.hasArchive ? 1.0 : 0.3) 
-                                                    .frame(width: barGeo.size.width * CGFloat(displayProgress), height: 6)
-                                                
-                                                
-                                                if channel.hasArchive {
-                                                    Rectangle()
-                                                        .fill(Color.white.opacity(0.3))
-                                                        .frame(width: 1, height: 10)
-                                                        .offset(x: barGeo.size.width * CGFloat(liveProgress))
-                                                }
-                                                
-                                                
-                                                if channel.hasArchive {
-                                                    Circle()
-                                                        .fill(Color.white)
-                                                        .frame(width: 14, height: 14)
-                                                        .shadow(radius: 2)
-                                                        .offset(x: barGeo.size.width * CGFloat(displayProgress) - 7)
-                                                }
-                                            }
-                                            .frame(height: 20) 
-                                            .contentShape(Rectangle())
-                                            .applyIf(channel.hasArchive) { view in
-                                                view.gesture(
-                                                    DragGesture(minimumDistance: 0)
-                                                        .onChanged { value in
-                                                            isScrubbing = true
-                                                            let dragPercent = max(0, min(1, value.location.x / barGeo.size.width))
-                                                            
-                                                            draggingProgress = min(dragPercent, liveProgress)
-                                                        }
-                                                        .onEnded { value in
-                                                            ChannelViewModel.shared.triggerSelectionHaptic()
-                                                            let dragPercent = max(0, min(1, value.location.x / barGeo.size.width))
-                                                            let finalPercent = min(dragPercent, liveProgress)
-                                                            
-                                                            
-                                                            if finalPercent >= liveProgress - 0.01 {
-                                                                timeshiftStartTime = nil
-                                                                if let url = URL(string: channel.streamURL) {
-                                                                    playerManager.play(url: url)
-                                                                }
-                                                            } else {
-                                                                let targetDate = prog.start.addingTimeInterval(totalDuration * Double(finalPercent))
-                                                                handleTimeshift(to: targetDate, program: prog)
-                                                            }
-                                                            
-                                                            
-                                                            isScrubbing = false
-                                                            draggingProgress = nil
-                                                        }
-                                                )
-                                            }
-                                        }
-                                        .frame(height: 20)
-                                    } else {
-                                        
-                                        VStack(spacing: 8) {
-                                            HStack {
-                                                Text("--:--")
-                                                    .font(.caption2.monospacedDigit())
-                                                    .foregroundColor(.white.opacity(0.7))
-                                                
-                                                Spacer()
-                                                
-                                                Text(formatClockTime(viewModel?.currentTime ?? Date()))
-                                                    .font(.caption2.monospacedDigit())
-                                                    .foregroundColor(.white.opacity(0.7))
-                                            }
-                                            
-                                            ZStack(alignment: .trailing) {
                                                 Capsule()
                                                     .fill(Color.white)
-                                                    .frame(height: 6)
+                                                    .frame(width: barGeo.size.width * CGFloat(currentPos), height: 6)
                                                 
                                                 Circle()
                                                     .fill(Color.white)
                                                     .frame(width: 14, height: 14)
                                                     .shadow(radius: 2)
-                                                    .offset(x: 7)
+                                                    .offset(x: barGeo.size.width * CGFloat(currentPos) - 7)
                                             }
                                             .frame(height: 20)
+                                            .contentShape(Rectangle())
+                                            .gesture(
+                                                DragGesture(minimumDistance: 0)
+                                                    .onChanged { value in
+                                                        isScrubbing = true
+                                                        draggingProgress = max(0, min(1, value.location.x / barGeo.size.width))
+                                                    }
+                                                    .onEnded { value in
+                                                        ChannelViewModel.shared.triggerSelectionHaptic()
+                                                        let dragPercent = max(0, min(1, value.location.x / barGeo.size.width))
+                                                        playerManager.seek(to: playerManager.duration * dragPercent)
+                                                        isScrubbing = false
+                                                        draggingProgress = nil
+                                                    }
+                                            )
                                         }
+                                        .frame(height: 20)
                                     }
                                 }
                                 
                                 
                                 HStack(spacing: 8) {
-                                    if !isRecordingPlayback {
-                                        
-                                        Button(action: {
-                                            ChannelViewModel.shared.triggerSelectionHaptic()
-                                            if !isTrulyLive {
-                                                withAnimation {
-                                                    if timeshiftStartTime != nil {
-                                                        timeshiftStartTime = nil
-                                                        if let url = URL(string: channel.streamURL) {
-                                                            playerManager.play(url: url)
-                                                        }
-                                                    } else {
-                                                        playerManager.seek(to: playerManager.duration)
-                                                    }
-                                                }
+                                    
+                                    Button(action: {
+                                        ChannelViewModel.shared.triggerSelectionHaptic()
+                                        if !isTrulyLive {
+                                            withAnimation {
+                                                playerManager.seek(to: playerManager.duration)
                                             }
-                                        }) {
-                                            HStack(spacing: 6) {
-                                                Circle()
-                                                    .fill(isTrulyLive ? Color.red : Color.gray)
-                                                    .frame(width: 6, height: 6)
-                                                Text("LIVE")
-                                                    .font(.caption.bold())
-                                                    .foregroundColor(isTrulyLive ? .red : .gray)
-                                            }
-                                            .frame(maxWidth: .infinity)
-                                            .frame(height: 40)
-                                            .modifier(GlassEffect(cornerRadius: 20, isSelected: true, accentColor: nil))
                                         }
-                                        .buttonStyle(.plain)
-                                        
-                                        
-                                        Button(action: {
-                                            ChannelViewModel.shared.triggerSelectionHaptic()
-                                            if isRecording {
-                                                
-                                                if let rec = recordingManager.recordings.first(where: { $0.channelName == channel.name && $0.status == .recording }) {
-                                                    recordingManager.stopRecording(rec.id)
-                                                }
-                                            } else {
-                                                showRecordingSheet = true
-                                            }
-                                        }) {
-                                            HStack(spacing: 6) {
-                                                Image(systemName: isRecording ? "record.circle.fill" : "record.circle")
-                                                    .font(.caption.bold())
-                                                    .foregroundColor(isRecording ? .red : .white)
-                                                Text(isRecording ? "Stop & Save" : "Record")
-                                                    .font(.caption.bold())
-                                                    .lineLimit(1)
-                                                    .minimumScaleFactor(0.7)
-                                            }
-                                            .padding(.horizontal, 4)
-                                            .frame(maxWidth: .infinity)
-                                            .frame(height: 40)
-                                            .modifier(GlassEffect(cornerRadius: 20, isSelected: true, accentColor: isRecording ? .red : nil))
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: 20)
-                                                    .stroke(Color.red, lineWidth: isRecording ? 2 : 0)
-                                            )
+                                    }) {
+                                        HStack(spacing: 6) {
+                                            Circle()
+                                                .fill(isTrulyLive ? Color.red : Color.gray)
+                                                .frame(width: 6, height: 6)
+                                            Text("LIVE")
+                                                .font(.caption.bold())
+                                                .foregroundColor(isTrulyLive ? .red : .gray)
                                         }
-                                        .buttonStyle(.plain)
-                                        
-                                        .opacity(1.0)
+                                        .frame(maxWidth: .infinity)
+                                        .frame(height: 40)
+                                        .modifier(GlassEffect(cornerRadius: 20, isSelected: true, accentColor: nil))
                                     }
+                                    .buttonStyle(.plain)
                                     
                                     
                                     Button(action: {
@@ -581,18 +378,6 @@ struct PlayerControlsView: View {
                 }
             }
         }
-        .sheet(isPresented: $showRecordingSheet) {
-            let initialStart: Date = {
-                if let tsStart = timeshiftStartTime {
-                    return tsStart.addingTimeInterval(playerManager.currentTime)
-                }
-                return Date()
-            }()
-            
-            RecordingSetupSheet(channel: channel, initialStartTime: initialStart) {
-                showRecordingSheet = false
-            }
-        }
         .onChangeCompat(of: playerManager.isPlaying) { isPlaying in
             pauseTimerTask?.cancel()
             if isPlaying {
@@ -604,11 +389,6 @@ struct PlayerControlsView: View {
                         await MainActor.run { isLongPaused = true }
                     }
                 }
-            }
-        }
-        .onAppear {
-            if timeshiftStartTime == nil {
-                timeshiftStartTime = playerManager.currentTimeshiftStartDate
             }
         }
     }
@@ -627,22 +407,5 @@ struct PlayerControlsView: View {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
         return formatter.string(from: date)
-    }
-    
-    func handleTimeshift(to date: Date, program: EPGProgram) {
-        Task {
-            let url = await viewModel?.buildTimeshiftURL(channel: channel, targetDate: date, program: program)
-            
-            await MainActor.run {
-                if let finalURL = url {
-                    timeshiftStartTime = date
-                    playerManager.play(url: finalURL)
-                } else {
-                    if let original = URL(string: channel.streamURL) {
-                        playerManager.play(url: original)
-                    }
-                }
-            }
-        }
     }
 }

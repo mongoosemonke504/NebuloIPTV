@@ -7,179 +7,34 @@ class RecordingManager: NSObject, ObservableObject {
     @Published var recordings: [Recording] = []
     
     
-    private var activeRecorders: [UUID: StreamRecorder] = [:]
+    // private var activeRecorders: [UUID: StreamRecorder] = [:] // Removed
     
     private let recordingsKey = "saved_recordings_v1"
     
     override init() {
         super.init()
         loadRecordings()
-        restoreActiveRecordings()
+        // restoreActiveRecordings() // Disabled
     }
     
     private func restoreActiveRecordings() {
-        let now = Date()
-        for i in recordings.indices {
-            let rec = recordings[i]
-            if rec.status == .recording {
-                if rec.endTime > now {
-                    
-                    print("🔄 [RecordingManager] Restoring interrupted recording: \(rec.channelName)")
-                    startRecording(rec)
-                } else {
-                    
-                    print("⚠️ [RecordingManager] Found stale recording: \(rec.channelName)")
-                    finalizeStaleRecording(index: i)
-                }
-            }
-        }
+       // Disabled
     }
     
     private func finalizeStaleRecording(index: Int) {
-        let rec = recordings[index]
-        let filename = "\(rec.id.uuidString).ts"
-        let url = getDocumentsDirectory().appendingPathComponent(filename)
-        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
-        
-        if size > 1024 * 1024 {
-            recordings[index].status = .completed
-            recordings[index].localFileName = filename
-        } else {
-            recordings[index].status = .failed
-        }
-        saveRecordings()
+       // Disabled
     }
     
     func scheduleRecording(channel: StreamChannel, startTime: Date, endTime: Date, programTitle: String? = nil, programDescription: String? = nil) {
-        let recording = Recording(
-            id: UUID(),
-            channelName: channel.name,
-            channelIcon: channel.icon,
-            streamURL: channel.streamURL,
-            hasArchive: channel.hasArchive,
-            startTime: startTime,
-            endTime: endTime,
-            createdAt: Date(),
-            programTitle: programTitle,
-            programDescription: programDescription,
-            status: .scheduled,
-            localFileName: nil
-        )
-        
-        recordings.append(recording)
-        saveRecordings()
-        
-        
-        let now = Date()
-        if startTime <= now {
-            startRecording(recording)
-        } else {
-            let delay = startTime.timeIntervalSince(now)
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                self?.startRecording(recording)
-            }
-        }
+        print("⚠️ [RecordingManager] Recording is disabled in this version.")
     }
     
     private func startRecording(_ recording: Recording) {
-        guard let index = recordings.firstIndex(where: { $0.id == recording.id }) else { return }
-        
-        
-        if activeRecorders[recording.id] != nil { return }
-        
-        recordings[index].status = .recording
-        saveRecordings()
-        
-        guard let url = URL(string: recording.streamURL) else {
-            failRecording(recording, reason: "Invalid URL")
-            return
-        }
-        
-        
-        let filename = "\(recording.id.uuidString).ts"
-        let outputURL = getDocumentsDirectory().appendingPathComponent(filename)
-        
-        
-        
-        let player = NebuloPlayerEngine.shared
-        var hijackedPlayer = false
-        
-        if let current = player.currentURL, (current.absoluteString == url.absoluteString || current.path == url.path) {
-            print("🔀 [RecordingManager] Conflict detected! Switching player to local recording file...")
-            player.stop() 
-            hijackedPlayer = true
-        }
-        
-        
-        let recorder = StreamRecorder(streamURL: url, outputURL: outputURL)
-        
-        
-        recorder.onCompletion = { [weak self] in
-            DispatchQueue.main.async {
-                guard let self = self, let idx = self.recordings.firstIndex(where: { $0.id == recording.id }) else { return }
-                
-                let url = self.getDocumentsDirectory().appendingPathComponent(filename)
-                let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
-                
-                
-                if size > 1024 * 1024 {
-                    self.recordings[idx].status = .completed
-                    self.recordings[idx].localFileName = filename
-                } else {
-                    print("⚠️ Recording too small (\(size) bytes), marking as failed.")
-                    self.recordings[idx].status = .failed
-                    try? FileManager.default.removeItem(at: url)
-                }
-                
-                self.saveRecordings()
-                self.activeRecorders.removeValue(forKey: recording.id)
-            }
-        }
-        
-        recorder.onError = { [weak self] error in
-            DispatchQueue.main.async {
-                print("Recording error: \(error)")
-                
-                
-                self?.failRecording(recording, reason: error.localizedDescription)
-                self?.activeRecorders.removeValue(forKey: recording.id)
-            }
-        }
-        
-        activeRecorders[recording.id] = recorder
-        recorder.start()
-        
-        
-        if hijackedPlayer {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                print("▶️ [RecordingManager] Resuming player from local file: \(outputURL)")
-                player.play(url: outputURL)
-            }
-        }
-        
-        
-        let timeUntilEnd = recording.endTime.timeIntervalSince(Date())
-        if timeUntilEnd > 0 {
-            DispatchQueue.main.asyncAfter(deadline: .now() + timeUntilEnd) { [weak self] in
-                self?.stopRecording(recording.id)
-            }
-        } else {
-            stopRecording(recording.id)
-        }
+        print("⚠️ [RecordingManager] Recording is disabled.")
     }
     
     func stopRecording(_ id: UUID) {
-        guard let index = recordings.firstIndex(where: { $0.id == id }) else { return }
-        
-        if let recorder = activeRecorders[id] {
-            recorder.stop() 
-        } else {
-            
-            if recordings[index].status == .recording {
-                recordings[index].status = .completed
-                saveRecordings()
-            }
-        }
+       // No-op
     }
     
     func renameRecording(_ recording: Recording, newName: String) {
@@ -190,44 +45,21 @@ class RecordingManager: NSObject, ObservableObject {
     }
     
     func deleteRecording(_ recording: Recording) {
-        
-        if activeRecorders[recording.id] != nil {
-            stopRecording(recording.id)
-        }
-        
-        
         if let path = recording.localFileName {
             let fileURL = getDocumentsDirectory().appendingPathComponent(path)
             try? FileManager.default.removeItem(at: fileURL)
         }
-        
         recordings.removeAll { $0.id == recording.id }
         saveRecordings()
     }
     
-    private func failRecording(_ recording: Recording, reason: String) {
-        if let index = recordings.firstIndex(where: { $0.id == recording.id }) {
-            recordings[index].status = .failed
-            saveRecordings()
-        }
-        print("Recording failed: \(reason)")
-    }
+    private func failRecording(_ recording: Recording, reason: String) {}
     
     func isRecording(channelName: String) -> Bool {
-        let recordingStatus = recordings.contains(where: { $0.channelName == channelName && $0.status == .recording })
-        print("RecordingManager: isRecording for \(channelName): \(recordingStatus)")
-        return recordingStatus
+        return false
     }
     
     func getActiveRecordingURL(for channel: StreamChannel) -> URL? {
-        
-        if let rec = recordings.first(where: { $0.channelName == channel.name && $0.status == .recording }) {
-            let filename = "\(rec.id.uuidString).ts"
-            let url = getDocumentsDirectory().appendingPathComponent(filename)
-            if FileManager.default.fileExists(atPath: url.path) {
-                return url
-            }
-        }
         return nil
     }
     
