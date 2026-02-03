@@ -1,6 +1,5 @@
 import SwiftUI
-import MobileVLCKit
-import AVFoundation
+import AVKit
 
 struct MultiViewScreen: View {
     @ObservedObject var viewModel: ChannelViewModel
@@ -440,7 +439,7 @@ struct SmartGridPlayer: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     
     func makeUIView(context: Context) -> UIView {
-        let view = UIView()
+        let view = PlayerView(frame: .zero)
         view.backgroundColor = .black
         context.coordinator.setup(view: view, url: url)
         return view
@@ -454,10 +453,10 @@ struct SmartGridPlayer: UIViewRepresentable {
         coordinator.stopAll()
     }
     
-    class Coordinator: NSObject, VLCMediaPlayerDelegate {
+    class Coordinator: NSObject {
         var parent: SmartGridPlayer
-        weak var containerView: UIView?
-        var vlcPlayer: VLCMediaPlayer?
+        weak var playerView: PlayerView?
+        var avPlayer: AVPlayer?
         var currentURL: URL?
         
         init(_ parent: SmartGridPlayer) {
@@ -465,64 +464,40 @@ struct SmartGridPlayer: UIViewRepresentable {
             super.init()
         }
         
-        func setup(view: UIView, url: URL) {
-            self.containerView = view
+        func setup(view: PlayerView, url: URL) {
+            self.playerView = view
             self.currentURL = url
-            startVLC(url: url)
+            start(url: url)
         }
         
         func update(url: URL, isMuted: Bool, isPlaying: Bool) {
             if currentURL != url {
                 stopAll()
                 currentURL = url
-                startVLC(url: url)
+                start(url: url)
             }
-            updateVLC(isMuted: isMuted, isPlaying: isPlaying)
-        }
-        
-        func startVLC(url: URL) {
-            guard let container = containerView else { return }
             
-            let player = VLCMediaPlayer()
-            player.delegate = self
-            player.drawable = container
-            
-            let media = VLCMedia(url: url)
-            media.addOptions([
-                "network-caching": 1500,
-                "clock-jitter": 0,
-                "clock-synchro": 0,
-                "avcodec-hw": "any",
-                "videotoolbox": 1
-            ])
-            player.media = media
-            player.play()
-            
-            self.vlcPlayer = player
-        }
-        
-        func updateVLC(isMuted: Bool, isPlaying: Bool) {
-            guard let player = vlcPlayer else { return }
-            
-            if let audio = player.audio {
-                audio.volume = isMuted ? 0 : 100
-            }
+            avPlayer?.isMuted = isMuted
             
             if isPlaying {
-                if !player.isPlaying { player.play() }
+                avPlayer?.play()
             } else {
-                if player.isPlaying { player.pause() }
+                avPlayer?.pause()
             }
+        }
+        
+        func start(url: URL) {
+            let player = AVPlayer(url: url)
+            player.isMuted = parent.isMuted
+            playerView?.player = player
+            player.play()
+            self.avPlayer = player
         }
         
         func stopAll() {
-            vlcPlayer?.stop()
-            vlcPlayer?.drawable = nil
-            vlcPlayer = nil
-        }
-        
-        deinit {
-            stopAll()
+            avPlayer?.pause()
+            avPlayer = nil
+            playerView?.player = nil
         }
     }
 }

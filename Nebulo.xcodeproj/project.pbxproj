@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		E19E18102F311958009B28B3 /* VLCKitSPM in Frameworks */ = {isa = PBXBuildFile; productRef = E19E180F2F311958009B28B3 /* VLCKitSPM */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -53,7 +52,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				E19E18102F311958009B28B3 /* VLCKitSPM in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -97,7 +95,6 @@
 			);
 			name = Nebulo;
 			packageProductDependencies = (
-				E19E180F2F311958009B28B3 /* VLCKitSPM */,
 			);
 			productName = Nebulo;
 			productReference = E135AFB02EDB774700D3FCD5 /* Nebulo.app */;
@@ -128,7 +125,6 @@
 			mainGroup = E135AFA72EDB774700D3FCD5;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				E19E180E2F311958009B28B3 /* XCRemoteSwiftPackageReference "vlckit-spm" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E135AFB12EDB774700D3FCD5 /* Products */;
@@ -378,22 +374,9 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		E19E180E2F311958009B28B3 /* XCRemoteSwiftPackageReference "vlckit-spm" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/tylerjonesio/vlckit-spm";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 3.6.0;
-			};
-		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		E19E180F2F311958009B28B3 /* VLCKitSPM */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = E19E180E2F311958009B28B3 /* XCRemoteSwiftPackageReference "vlckit-spm" */;
-			productName = VLCKitSPM;
-		};
 /* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = E135AFA82EDB774700D3FCD5 /* Project object */;

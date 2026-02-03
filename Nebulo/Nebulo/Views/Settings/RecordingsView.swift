@@ -1,6 +1,5 @@
 import SwiftUI
 import AVKit
-import MobileVLCKit
 import Combine
 
 struct RecordingsView: View {

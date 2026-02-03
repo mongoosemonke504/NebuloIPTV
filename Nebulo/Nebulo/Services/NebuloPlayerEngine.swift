@@ -2,34 +2,21 @@ import Foundation
 import Combine
 import UIKit
 import SwiftUI
-import MobileVLCKit
 import AVFoundation
+import AVKit
 import MediaPlayer
+// import FFmpegKit // Removed dependency
 
 public class NebuloPlayerEngine: NSObject, ObservableObject {
     public static let shared = NebuloPlayerEngine()
     
-    @Published public var isBuffering = false {
-        didSet {
-            if isBuffering {
-                startBufferWatchdog()
-            } else {
-                stopBufferWatchdog()
-            }
-        }
-    }
+    @Published public var isBuffering = false
     @Published public var isPlaying = false {
         didSet {
-            if isPlaying { 
-                isBuffering = false
-                stopBufferWatchdog()
-            }
             updatePlaybackState(force: true)
         }
     }
     
-    private var bufferWatchdogTimer: Timer?
-    private var bufferStartTime: Date?
     @Published public var currentQuality: VideoQuality = .auto
     @Published public var availableQualities: [VideoQuality] = VideoQuality.allCases
     @Published public var currentTime: Double = 0
@@ -39,23 +26,24 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     @Published public var currentSubtitle: VideoSubtitle? = nil
     @Published public var activeCaption: String? = nil
     @Published public var currentResolution: String = ""
-    @Published public var activeBackendName: String = "VLC" 
+    @Published public var activeBackendName: String = "AVPlayer" // Changed from VLC
     @Published public var playbackFailed: Bool = false
     
-    public let renderView = UIView()
-    public let useNativeBridge = false
+    public let renderView = PlayerView() // Custom UIView subclass for Layer management
+    public let useNativeBridge = true
     
-    private var vlcMediaPlayer: VLCMediaPlayer = VLCMediaPlayer()
+    private var avPlayer: AVPlayer?
+    private var avPlayerItem: AVPlayerItem?
+    private var pipController: AVPictureInPictureController?
+    private var timeObserver: Any?
     
     private var isInteractionSeeking = false
-    private var pendingSeekWorkItem: DispatchWorkItem?
     private var userPaused = false
     
     public private(set) var currentURL: URL?
     
     public func toggleBackend() {
-        // Only VLC backend is available
-        print("⚠️ [NebuloEngine] Only VLC backend is available.")
+        print("⚠️ [NebuloEngine] Backend switching is disabled (AVPlayer Only).")
     }
     
     public var onRequestTimeshiftURL: ((Date) async -> URL?)?
@@ -63,6 +51,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     
     public var currentTimeshiftStartDate: Date? {
         guard let url = currentURL else { return nil }
+        // Simple regex check for date in URL (same as before)
         let urlString = url.absoluteString
         if let range = urlString.range(of: "\\d{4}-\\d{2}-\\d{2}:\\d{2}-\\d{2}", options: .regularExpression) {
             let dateString = String(urlString[range])
@@ -73,11 +62,6 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         }
         return nil
     }
-    
-    private var timeObserverTimer: Timer?
-    
-    private var lastProgressCheckTime: Date?
-    private var lastProgressValue: Double = -1
     
     public enum VideoQuality: String, CaseIterable, Identifiable {
         case auto = "Auto", high = "1080p", medium = "720p", low = "480p"
@@ -95,17 +79,23 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     
     override init() {
         super.init()
-        renderView.insetsLayoutMarginsFromSafeArea = false
-        renderView.preservesSuperviewLayoutMargins = false
-        setupVLC()
         setupAudioSession()
         setupRemoteTransportControls()
+        setupPiP()
     }
     
-    public func pauseAllMultiViewPlayers() {
-        // MultiView players are managed separately in MultiViewScreen, but if any were attached here:
-        // This function was mainly for the KSPlayer instances stored in the array.
+    private func setupPiP() {
+        if pipController != nil { return }
+        if AVPictureInPictureController.isPictureInPictureSupported(),
+           let layer = renderView.layer as? AVPlayerLayer {
+            pipController = AVPictureInPictureController(playerLayer: layer)
+            if #available(iOS 14.2, *) {
+                pipController?.canStartPictureInPictureAutomaticallyFromInline = true
+            }
+        }
     }
+    
+    public func pauseAllMultiViewPlayers() {}
     
     private func setupRemoteTransportControls() {
         let commandCenter = MPRemoteCommandCenter.shared()
@@ -130,20 +120,6 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             if self.isPlaying { self.pause() } else { self.resume() }
             return .success
         }
-        
-        commandCenter.seekBackwardCommand.isEnabled = true
-        commandCenter.seekBackwardCommand.addTarget { [weak self] _ in
-            guard let self = self else { return .commandFailed }
-            self.seek(to: self.currentTime - 15)
-            return .success
-        }
-        
-        commandCenter.seekForwardCommand.isEnabled = true
-        commandCenter.seekForwardCommand.addTarget { [weak self] _ in
-            guard let self = self else { return .commandFailed }
-            self.seek(to: self.currentTime + 15)
-            return .success
-        }
     }
      
     public func updateNowPlayingMetadata(title: String, subtitle: String?, imageURL: String?) {
@@ -151,8 +127,6 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         nowPlayingInfo[MPMediaItemPropertyTitle] = title
         if let sub = subtitle { 
             nowPlayingInfo[MPMediaItemPropertyArtist] = sub 
-        } else {
-            nowPlayingInfo.removeValue(forKey: MPMediaItemPropertyArtist)
         }
         
         if let urlStr = imageURL, let url = URL(string: urlStr) {
@@ -176,200 +150,134 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     
     private func updatePlaybackState(force: Bool = false) {
         let now = Date()
-        
         if !force, let last = lastInfoUpdateTime, now.timeIntervalSince(last) < 2.0 { return }
         
         var info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [String: Any]()
-        
         info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
         info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
-        info[MPNowPlayingInfoPropertyMediaType] = MPNowPlayingInfoMediaType.video.rawValue
-        
-        info[MPNowPlayingInfoPropertyIsLiveStream] = true
-        info[MPMediaItemPropertyPlaybackDuration] = 0 
         
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
         lastInfoUpdateTime = now
     }
-    
-    private func setupVLC() { vlcMediaPlayer.delegate = self }
     
     private func setupAudioSession() {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [.allowAirPlay, .allowBluetoothA2DP, .mixWithOthers])
         try? AVAudioSession.sharedInstance().setActive(true, options: .notifyOthersOnDeactivation)
     }
     
+    public func prepareNextChannel(url: URL) {
+        // AVPlayer handles its own buffering; this is a no-op for now.
+    }
+
     public func play(url: URL) {
-        setupAudioSession() 
+        setupAudioSession()
         if let current = currentURL, current == url, (isPlaying || isBuffering) { return }
         self.currentURL = url
         stop()
+        
         self.isBuffering = true
         self.userPaused = false
         self.playbackFailed = false
         
-        self.lastProgressValue = -1
-        self.lastProgressCheckTime = Date()
+        let item = AVPlayerItem(url: url)
+        self.avPlayerItem = item
         
-        playVLC(url: url)
+        let player = AVPlayer(playerItem: item)
+        self.avPlayer = player
+        
+        // Attach to render view
+        renderView.player = player
+        
+        // Ensure PiP is ready
+        setupPiP()
+        
+        // Observers
+        item.addObserver(self, forKeyPath: "status", options: [.new, .old], context: nil)
+        item.addObserver(self, forKeyPath: "playbackBufferEmpty", options: [.new], context: nil)
+        item.addObserver(self, forKeyPath: "playbackLikelyToKeepUp", options: [.new], context: nil)
+        
+        player.play()
+        self.isPlaying = true
+        
+        // Time observer
+        let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+        timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
+            self?.handleTimeUpdate(time)
+        }
     }
     
     public func pause() {
         userPaused = true
         lastPauseDate = Date()
-        if vlcMediaPlayer.isPlaying { vlcMediaPlayer.pause() }
+        avPlayer?.pause()
         isPlaying = false
     }
     
     public func resume() {
          setupAudioSession()
          userPaused = false 
-         if let pauseDate = lastPauseDate, -pauseDate.timeIntervalSinceNow > 15 {
-             if let url = currentURL, !url.absoluteString.contains("/timeshift/") {
-                 Task {
-                     if let tsURL = await onRequestTimeshiftURL?(pauseDate) {
-                         await MainActor.run { self.play(url: tsURL) }
-                         return
-                     }
-                     await MainActor.run { self.standardResume() }
-                 }
-                 return
-             }
-         }
-         standardResume()
-    }
-    
-    private func standardResume() {
-         if !vlcMediaPlayer.isPlaying { vlcMediaPlayer.play() }
+         avPlayer?.play()
          isPlaying = true
     }
     
-    private func startBufferWatchdog() {
-        stopBufferWatchdog()
-        
-        bufferStartTime = Date()
-        bufferWatchdogTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            guard let self = self, self.isBuffering, let start = self.bufferStartTime else { return }
-            let duration = Date().timeIntervalSince(start)
-            
-            if duration > 25.0 {
-                self.handleStuckBuffer()
-            }
-        }
-    }
-    
-    private func stopBufferWatchdog() {
-        bufferWatchdogTimer?.invalidate()
-        bufferWatchdogTimer = nil
-        bufferStartTime = nil
-    }
-    
-    private func handleStuckBuffer() {
-        guard let url = currentURL, !userPaused else { return }
-        print("🚨 [NebuloEngine] Buffer stuck for >20s or playback stalled.")
-        stopBufferWatchdog()
-        
-        DispatchQueue.main.async {
-            self.play(url: url)
-        }
-    }
-    
     public func stop() {
-        vlcMediaPlayer.stop()
-        vlcMediaPlayer.drawable = nil
-        isPlaying = false; isBuffering = false; stopTicker(); currentTime = 0; duration = 0
+        if let item = avPlayerItem {
+            item.removeObserver(self, forKeyPath: "status")
+            item.removeObserver(self, forKeyPath: "playbackBufferEmpty")
+            item.removeObserver(self, forKeyPath: "playbackLikelyToKeepUp")
+        }
+        
+        if let observer = timeObserver {
+            avPlayer?.removeTimeObserver(observer)
+            timeObserver = nil
+        }
+        
+        avPlayer?.pause()
+        avPlayer = nil
+        avPlayerItem = nil
+        renderView.player = nil
+        
+        isPlaying = false
+        isBuffering = false
+        currentTime = 0
+        duration = 0
     }
     
     public func seek(to time: Double) {
-        self.currentTime = time; self.isInteractionSeeking = true
-        pendingSeekWorkItem?.cancel()
-        let workItem = DispatchWorkItem { [weak self] in
-            guard let self = self else { return }
-            self.vlcMediaPlayer.time = VLCTime(int: Int32(time * 1000))
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.isInteractionSeeking = false }
+        let cmTime = CMTime(seconds: time, preferredTimescale: 1000)
+        avPlayer?.seek(to: cmTime)
+    }
+    
+    private func handleTimeUpdate(_ time: CMTime) {
+        self.currentTime = time.seconds
+        if let dur = avPlayerItem?.duration.seconds, !dur.isNaN {
+            self.duration = dur
         }
-        pendingSeekWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: workItem)
-    }
-    public func prepareNextChannel(url: URL) {}
-    
-    private func playVLC(url: URL) {
-        vlcMediaPlayer.drawable = renderView
-        let media = VLCMedia(url: url)
-        
-        let autoBufferObj = UserDefaults.standard.object(forKey: "autoBuffer")
-        let isAuto = (autoBufferObj as? Bool) ?? true
-        
-        var bufferMs: Int = 10000
-        if !isAuto {
-            let userTime = UserDefaults.standard.double(forKey: "bufferTime")
-            if userTime > 0 { bufferMs = Int(userTime * 1000) } else { bufferMs = 10000 }
-        }
-        
-        let userAgent = "com.apple.avfoundation.videoplayer (iPhone; iOS 17.5.1; Scale/3.00)"
-        media.addOptions([
-            "network-caching": bufferMs,
-            "clock-jitter": 0,
-            "clock-synchro": 0,
-            "user-agent": userAgent
-        ])
-        
-        vlcMediaPlayer.media = media
-        vlcMediaPlayer.play()
-        isBuffering = true; startTicker()
     }
     
-    private func startTicker() {
-        stopTicker()
-        timeObserverTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.updateState() }
-    }
-    
-    private func stopTicker() { timeObserverTimer?.invalidate(); timeObserverTimer = nil }
-    
-    private func updateState() {
-        if isPlaying && !userPaused && !isBuffering {
-            let now = Date()
-            
-            if abs(currentTime - lastProgressValue) < 0.1 {
-                if let lastCheck = lastProgressCheckTime, now.timeIntervalSince(lastCheck) > 30.0 {
-                    print("🚨 [NebuloEngine] Playback stalled (time not advancing). Triggering Watchdog.")
-                    handleStuckBuffer()
-                    lastProgressCheckTime = now 
-                }
-            } else {
-                lastProgressValue = currentTime
-                lastProgressCheckTime = now
+    public override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
+        guard let keyPath = keyPath else { return }
+        
+        if keyPath == "status" {
+            if let item = avPlayerItem, item.status == .readyToPlay {
+                // Ready
+            } else if let item = avPlayerItem, item.status == .failed {
+                print("❌ [NebuloEngine] AVPlayer Error: \(String(describing: item.error))")
+                self.playbackFailed = true
             }
-        }
-        
-        let time = vlcMediaPlayer.time
-        if let val = time.value, !isInteractionSeeking { self.currentTime = Double(truncating: val) / 1000.0 }
-        if let media = vlcMediaPlayer.media {
-            let length = media.length
-            if let val = length.value { self.duration = Double(truncating: val) / 1000.0 }
-        }
-        self.isPlaying = vlcMediaPlayer.isPlaying
-        self.updatePlaybackState()
-        if availableSubtitles.isEmpty, let tracks = vlcMediaPlayer.videoSubTitlesNames as? [String] {
-            if let indexes = vlcMediaPlayer.videoSubTitlesIndexes as? [Int], tracks.count == indexes.count {
-                var subs: [VideoSubtitle] = []
-                for (i, name) in tracks.enumerated() { subs.append(VideoSubtitle(id: "vlc_\(indexes[i])", name: name, index: indexes[i])) }
-                self.availableSubtitles = subs
-            }
+        } else if keyPath == "playbackBufferEmpty" {
+            self.isBuffering = true
+        } else if keyPath == "playbackLikelyToKeepUp" {
+            self.isBuffering = false
+            if !userPaused { self.isPlaying = true }
         }
     }
     
-    public func selectSubtitle(_ subtitle: VideoSubtitle) {
-        currentSubtitle = subtitle
-        vlcMediaPlayer.currentVideoSubTitleIndex = Int32(subtitle.index)
-    }
-    
+    public func selectSubtitle(_ subtitle: VideoSubtitle) {}
     public func setQuality(_ quality: VideoQuality) { currentQuality = quality }
-    
     public func setAspectRatio(_ ratio: VideoAspectRatio) {
         currentAspectRatio = ratio; applyAspectRatio(ratio)
     }
-    
     public func toggleAspectRatio() {
         let all = VideoAspectRatio.allCases
         guard let idx = all.firstIndex(of: currentAspectRatio) else { return }
@@ -378,74 +286,31 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     }
     
     private func applyAspectRatio(_ ratio: VideoAspectRatio) {
-        vlcMediaPlayer.scaleFactor = 0
-        vlcMediaPlayer.videoCropGeometry = nil
-        vlcMediaPlayer.videoAspectRatio = nil
-        
-        var ratioString: String? = nil
-        
+        guard let layer = renderView.layer as? AVPlayerLayer else { return }
         switch ratio {
-        case .sixteenNine: ratioString = "16:9"
-        case .fourThree: ratioString = "4:3"
-        case .twentyOneNine: ratioString = "21:9"
-        case .oneEightFive: ratioString = "185:100"
-        case .fill:
-            let vSize = vlcMediaPlayer.videoSize
-            let rSize = renderView.bounds.size
-            
-            if vSize.width > 0 && vSize.height > 0 && rSize.width > 0 && rSize.height > 0 {
-                let widthScale = rSize.width / vSize.width
-                let heightScale = rSize.height / vSize.height
-                let targetScale = max(widthScale, heightScale)
-                vlcMediaPlayer.scaleFactor = Float(targetScale)
-            } else {
-                if Thread.isMainThread {
-                    let w = Int(renderView.bounds.width)
-                    let h = Int(renderView.bounds.height)
-                    if h > 0 { ratioString = "\(w):\(h)" }
-                } else {
-                    DispatchQueue.main.sync {
-                        let w = Int(renderView.bounds.width)
-                        let h = Int(renderView.bounds.height)
-                        if h > 0 { ratioString = "\(w):\(h)" }
-                    }
-                }
-            }
-        case .default:
-            break
-        }
-        
-        if let s = ratioString {
-            let charArray = s.cString(using: .utf8)!
-            charArray.withUnsafeBufferPointer { ptr in
-               vlcMediaPlayer.videoAspectRatio = UnsafeMutablePointer<Int8>(mutating: ptr.baseAddress)
-            }
+        case .fill, .sixteenNine, .twentyOneNine: 
+            layer.videoGravity = .resizeAspectFill
+        default:
+            layer.videoGravity = .resizeAspect
         }
     }
 }
 
-extension NebuloPlayerEngine: VLCMediaPlayerDelegate {
-    public func mediaPlayerStateChanged(_ aNotification: Notification) {
-        guard let player = aNotification.object as? VLCMediaPlayer else { return }
-        
-        switch player.state {
-        case .buffering:
-            self.isBuffering = true
-        case .playing:
-            self.isBuffering = false
-            self.isPlaying = true
-        case .error:
-            self.isBuffering = false
-            print("❌ [NebuloEngine] VLC Error")
-            if currentURL?.isFileURL == true {
-                self.playbackFailed = true
-            } else {
-                handleStuckBuffer()
-            }
-        case .ended, .stopped:
-            self.isPlaying = false
-        default:
-            break
-        }
+// Custom UIView to host AVPlayerLayer
+public class PlayerView: UIView {
+    public override static var layerClass: AnyClass { AVPlayerLayer.self }
+    
+    public var player: AVPlayer? {
+        get { (layer as? AVPlayerLayer)?.player }
+        set { (layer as? AVPlayerLayer)?.player = newValue }
+    }
+    
+    public override init(frame: CGRect) {
+        super.init(frame: frame)
+        (layer as? AVPlayerLayer)?.videoGravity = .resizeAspect
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
     }
 }
