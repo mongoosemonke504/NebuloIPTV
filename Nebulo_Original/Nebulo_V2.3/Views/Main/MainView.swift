@@ -214,6 +214,7 @@ extension MainView {
                 if selectedChannel?.id == channel.id { 
                     withAnimation(.easeInOut(duration: 0.4)) { 
                         selectedChannel = nil
+                        selectedCategory = viewModel.lastSourceCategory
                         showQuickSwitcher = false 
                     }
                     
