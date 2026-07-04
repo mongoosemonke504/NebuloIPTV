@@ -5,6 +5,7 @@ import SwiftUI
 import MobileVLCKit
 import KSPlayer
 import AVFoundation
+import AVKit
 import MediaPlayer
 
 public class NebuloKSVideoPlayerView: IOSVideoPlayerView {
@@ -19,11 +20,19 @@ public class NebuloKSVideoPlayerView: IOSVideoPlayerView {
         super.layoutSubviews()
         if allowNativeControls { return }
         func hideControls(in view: UIView) {
+            // Prevent hiding actual video layers
             if view.layer is CAMetalLayer || view.layer is AVPlayerLayer { return }
             let layerType = String(describing: type(of: view.layer))
             if layerType.contains("AVPlayerLayer") || layerType.contains("Metal") { return }
+            
             let viewType = String(describing: type(of: view))
-            if view is UILabel || view is UIImageView || viewType.contains("Control") || viewType.contains("Cover") || viewType.contains("Button") || viewType.contains("Slider") || viewType.contains("Time") || viewType.contains("Label") {
+            // Only hide views that are clearly UI elements
+            let uiClasses = ["UILabel", "UIImageView", "UIButton", "UISlider", "UISwitch", "UIStepper"]
+            let isUIControl = uiClasses.contains(where: { viewType.contains($0) }) || 
+                               viewType.contains("Control") || 
+                               viewType.contains("Button")
+            
+            if isUIControl {
                 view.alpha = 0
                 view.isHidden = true
                 view.isUserInteractionEnabled = false
@@ -78,6 +87,23 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     @Published public var currentTime: Double = 0
     @Published public var duration: Double = 0
     @Published public var progress: Double = 0
+
+    /// When true, the playback backends (VLC / KSPlayer) are NOT allowed to
+    /// overwrite `currentTime` or `duration` from their internal clocks. Used
+    /// for recording playback where:
+    ///   • VLC reports TS time in broadcast-epoch PTS (huge unusable numbers)
+    ///   • The true duration is already known from recording metadata
+    /// The owning view supplies its own wall-clock time advance instead.
+    @Published public var externalTimeManagement: Bool = false
+
+    /// PTS offset (in seconds) captured from VLC when an external-time-managed
+    /// recording first starts playing. Recording TS files keep their original
+    /// broadcast PCR/PTS timestamps, so VLC's "time 0" is actually e.g. 90,000s
+    /// since some broadcast epoch. Without compensating for this offset, asking
+    /// VLC to seek to "300 seconds" lands before the file's actual PTS range
+    /// and the seek hangs forever buffering. We capture the offset on the
+    /// first non-zero VLC time reading and add it to every seek target.
+    public var externalTimeOffset: Double = 0
     @Published public var availableSubtitles: [VideoSubtitle] = []
     @Published public var currentSubtitle: VideoSubtitle? = nil
     @Published public var activeCaption: String? = nil
@@ -91,8 +117,9 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     public var multiViewPlayers: [NebuloKSVideoPlayerView] = []
     
     private var vlcMediaPlayer: VLCMediaPlayer = VLCMediaPlayer()
-    private var ksPlayerView = NebuloKSVideoPlayerView() 
-    
+    private var ksPlayerView = NebuloKSVideoPlayerView()
+    private var pipController: AVPictureInPictureController?
+
     private enum ActiveBackend { case none, ksplayer, vlc }
     private var currentBackend: ActiveBackend = .none {
         didSet {
@@ -106,7 +133,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     private var isInteractionSeeking = false
     private var pendingSeekWorkItem: DispatchWorkItem?
     private var playerConstraints: [NSLayoutConstraint] = []
-    private var userPaused = false
+    @Published public var userPaused = false
     private var triedFallback = false
     private var ksPlayerRetryCount = 0
     private var unexpectedPauseCount = 0
@@ -172,7 +199,13 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     public struct VideoSubtitle: Identifiable, Hashable {
         public let id: String, name: String, index: Int
     }
-    
+    public struct VideoAudioTrack: Identifiable, Hashable {
+        public let id: String, name: String, index: Int
+    }
+
+    @Published public var availableAudioTracks: [VideoAudioTrack] = []
+    @Published public var currentAudioTrack: VideoAudioTrack? = nil
+
     @Published public var currentAspectRatio: VideoAspectRatio = .default
     
     override init() {
@@ -306,9 +339,11 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                     if self.isBuffering { self.isBuffering = false }
                     if !self.isPlaying { self.isPlaying = true }
                 }
-                self.currentTime = current
-                self.duration = total
-                
+                if !self.externalTimeManagement {
+                    self.currentTime = current
+                    self.duration = total
+                }
+
                 self.updatePlaybackState()
             }
         }
@@ -329,26 +364,48 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     }
     
     public func play(url: URL) {
-        setupAudioSession() 
+        setupAudioSession()
         if let current = currentURL, current == url, (isPlaying || isBuffering) { return }
         self.currentURL = url
-        self.ksPlayerRetryCount = 0 
+        self.ksPlayerRetryCount = 0
         self.unexpectedPauseCount = 0
         stop()
         self.isBuffering = true
         self.userPaused = false
         self.playbackFailed = false
         self.triedFallback = false
+        // Clear per-stream audio-track list so the next stream re-detects fresh tracks
+        self.availableAudioTracks = []
+        self.currentAudioTrack = nil
         
         self.lastProgressValue = -1
         self.lastProgressCheckTime = Date()
         
-        if url.isFileURL { playVLC(url: url); return }
+        // Local file routing:
+        //  • .mp4  → KSPlayer (AVPlayer). MP4 has a moov atom seek table so
+        //            scrubbing is instant and accurate. No crashes.
+        //  • .ts   → VLC. Concatenated TS files lack a seek index and KSPlayer's
+        //            FFmpeg backend (MEPlayerItem) crashes with EXC_BAD_ACCESS when
+        //            the recording file handle is closed while it's still open.
+        //            VLC handles both conditions gracefully.
+        if url.isFileURL {
+            if url.pathExtension.lowercased() == "mp4" {
+                _ = attemptKSPlayerPlayback(url: url)
+                currentBackend = .ksplayer
+            } else {
+                playVLC(url: url)
+                // VLC often reports duration = -1 for concatenated .ts files until it
+                // has scanned to the end. Probe via AVURLAsset (which reads the TS
+                // container header) so the scrub bar has a valid total-time immediately.
+                probeAndSetDuration(from: url)
+            }
+            return
+        }
         
         
         let defaultEngine = UserDefaults.standard.string(forKey: "defaultPlayerEngine") ?? "VLC"
         if defaultEngine == "KSPlayer" {
-            if attemptKSPlayerPlayback(url: url) { currentBackend = .ksplayer; return }
+            attemptKSPlayerPlayback(url: url); currentBackend = .ksplayer; return
         }
         
         playVLC(url: url)
@@ -367,7 +424,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
          setupAudioSession()
          userPaused = false 
          if let pauseDate = lastPauseDate, -pauseDate.timeIntervalSinceNow > 15 {
-             if let url = currentURL, !url.absoluteString.contains("/timeshift/") {
+             if let url = currentURL, !url.isFileURL, !url.absoluteString.contains("/timeshift/") {
                  Task {
                      if let tsURL = await onRequestTimeshiftURL?(pauseDate) {
                          await MainActor.run { self.play(url: tsURL) }
@@ -459,18 +516,52 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     }
     
     public func seek(to time: Double) {
+        // Lazy-capture VLC's PTS offset if a user scrubs before the ticker has
+        // had a chance to record it. Without this, the first scrub on a freshly
+        // opened recording would seek with offset 0 and hang.
+        if currentBackend == .vlc && externalTimeManagement && externalTimeOffset == 0 {
+            if let val = vlcMediaPlayer.time.value {
+                let valSec = Double(truncating: val) / 1000.0
+                if valSec > 0 { externalTimeOffset = valSec }
+            }
+        }
+
         self.currentTime = time; self.isInteractionSeeking = true
         pendingSeekWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
-            if self.currentBackend == .vlc { self.vlcMediaPlayer.time = VLCTime(int: Int32(time * 1000)) }
-            else if self.currentBackend == .ksplayer { self.ksPlayerView.seek(time: TimeInterval(time), completion: { _ in }) }
+            if self.currentBackend == .vlc {
+                // For recordings, target = user-facing seconds + captured PTS offset
+                // so VLC lands inside the file's actual PTS range.
+                let targetSec = self.externalTimeManagement
+                    ? (time + self.externalTimeOffset)
+                    : time
+                self.vlcMediaPlayer.time = VLCTime(int: Int32(targetSec * 1000))
+            } else if self.currentBackend == .ksplayer {
+                self.ksPlayerView.seek(time: TimeInterval(time), completion: { _ in })
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.isInteractionSeeking = false }
         }
         pendingSeekWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: workItem)
     }
     public func prepareNextChannel(url: URL) {}
+
+    /// Reads the duration of a local file via AVURLAsset and publishes it.
+    /// Used for .ts recordings where VLC reports –1 until it has read the whole file.
+    private func probeAndSetDuration(from url: URL) {
+        Task { [weak self] in
+            guard let self else { return }
+            let asset = AVURLAsset(url: url)
+            guard let duration = try? await asset.load(.duration) else { return }
+            let seconds = duration.seconds
+            guard seconds.isFinite, seconds > 0 else { return }
+            await MainActor.run {
+                // Only set if VLC hasn't already found a positive duration itself.
+                if self.duration <= 0 { self.duration = seconds }
+            }
+        }
+    }
     
     private func attemptKSPlayerPlayback(url: URL) -> Bool {
         DispatchQueue.main.async { [weak self] in
@@ -516,29 +607,33 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     private func playVLC(url: URL) {
         currentBackend = .vlc
         ksPlayerView.removeFromSuperview()
-        vlcMediaPlayer.drawable = renderView
-        let media = VLCMedia(url: url)
         
-        let autoBufferObj = UserDefaults.standard.object(forKey: "autoBuffer")
-        let isAuto = (autoBufferObj as? Bool) ?? true
-        
-        var bufferMs: Int = 10000
-        if !isAuto {
-            let userTime = UserDefaults.standard.double(forKey: "bufferTime")
-            if userTime > 0 { bufferMs = Int(userTime * 1000) } else { bufferMs = 10000 }
+        DispatchQueue.main.async {
+            self.renderView.isHidden = false
+            self.renderView.alpha = 1.0
+            self.vlcMediaPlayer.drawable = self.renderView
+            let media = VLCMedia(url: url)
+            
+            let autoBufferObj = UserDefaults.standard.object(forKey: "autoBuffer")
+            let isAuto = (autoBufferObj as? Bool) ?? true
+            
+            var bufferMs: Int = 10000
+            if !isAuto {
+                let userTime = UserDefaults.standard.double(forKey: "bufferTime")
+                if userTime > 0 { bufferMs = Int(userTime * 1000) }
+            }
+            
+            media.addOptions([
+                "network-caching": bufferMs,
+                "clock-jitter": 500,
+                "clock-synchro": 0,
+                "drop-late-frames": 1,
+                "skip-frames": 1
+            ])
+            
+            self.vlcMediaPlayer.media = media
+            self.vlcMediaPlayer.play()
         }
-        
-        let userAgent = "com.apple.avfoundation.videoplayer (iPhone; iOS 17.5.1; Scale/3.00)"
-        media.addOptions([
-            "network-caching": bufferMs,
-            "clock-jitter": 0,
-            "clock-synchro": 0,
-            "user-agent": userAgent
-        ])
-        
-        vlcMediaPlayer.media = media
-        vlcMediaPlayer.play()
-        isBuffering = true; startTicker()
     }
     
     private func startTicker() {
@@ -570,10 +665,27 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     
         if currentBackend == .vlc {
             let time = vlcMediaPlayer.time
-            if let val = time.value, !isInteractionSeeking { self.currentTime = Double(truncating: val) / 1000.0 }
-            if let media = vlcMediaPlayer.media {
+            if let val = time.value {
+                let valSec = Double(truncating: val) / 1000.0
+                if externalTimeManagement {
+                    // First time we see a nonzero PTS reading, snapshot it as
+                    // the offset. Subsequent reads are ignored — external code
+                    // (the recording view's wall-clock ticker) owns currentTime.
+                    if externalTimeOffset == 0 && valSec > 0 {
+                        externalTimeOffset = valSec
+                    }
+                } else if !isInteractionSeeking {
+                    self.currentTime = valSec
+                }
+            }
+            if let media = vlcMediaPlayer.media, !externalTimeManagement {
                 let length = media.length
-                if let val = length.value { self.duration = Double(truncating: val) / 1000.0 }
+                if let val = length.value {
+                    let d = Double(truncating: val) / 1000.0
+                    // Only accept a positive duration from VLC so we don't overwrite
+                    // the value probed via AVURLAsset for files where VLC returns -1.
+                    if d > 0 { self.duration = d }
+                }
             }
             self.isPlaying = vlcMediaPlayer.isPlaying
             self.updatePlaybackState()
@@ -584,8 +696,24 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                     self.availableSubtitles = subs
                 }
             }
+            // Audio tracks (VLC)
+            if let names = vlcMediaPlayer.audioTrackNames as? [String],
+               let indexes = vlcMediaPlayer.audioTrackIndexes as? [Int],
+               names.count == indexes.count {
+                if availableAudioTracks.count != names.count {
+                    var tracks: [VideoAudioTrack] = []
+                    for (i, name) in names.enumerated() {
+                        tracks.append(VideoAudioTrack(id: "vlc_\(indexes[i])", name: name, index: indexes[i]))
+                    }
+                    self.availableAudioTracks = tracks
+                }
+                let cur = Int(vlcMediaPlayer.currentAudioTrackIndex)
+                if currentAudioTrack?.index != cur, let match = availableAudioTracks.first(where: { $0.index == cur }) {
+                    self.currentAudioTrack = match
+                }
+            }
         } else if currentBackend == .ksplayer {
-            
+
             if let player = ksPlayerView.playerLayer?.player {
                 let tracks = player.tracks(mediaType: AVMediaType.subtitle)
                 if !tracks.isEmpty && availableSubtitles.count != tracks.count {
@@ -594,6 +722,18 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                         subs.append(VideoSubtitle(id: "ks_\(i)", name: track.name, index: i))
                     }
                     self.availableSubtitles = subs
+                }
+                // Audio tracks (KSPlayer)
+                let audioTracks = player.tracks(mediaType: AVMediaType.audio)
+                if !audioTracks.isEmpty && availableAudioTracks.count != audioTracks.count {
+                    var tracks: [VideoAudioTrack] = []
+                    for (i, t) in audioTracks.enumerated() {
+                        tracks.append(VideoAudioTrack(id: "ks_\(i)", name: t.name, index: i))
+                    }
+                    self.availableAudioTracks = tracks
+                }
+                if currentAudioTrack == nil, let first = availableAudioTracks.first {
+                    self.currentAudioTrack = first
                 }
             }
         }
@@ -667,6 +807,21 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             }
         }
     }
+
+    public func selectAudioTrack(_ track: VideoAudioTrack) {
+        currentAudioTrack = track
+        if currentBackend == .vlc {
+            vlcMediaPlayer.currentAudioTrackIndex = Int32(track.index)
+        } else if currentBackend == .ksplayer {
+            if let player = ksPlayerView.playerLayer?.player {
+                let tracks = player.tracks(mediaType: AVMediaType.audio)
+                if track.index < tracks.count {
+                    let selectedTrack = tracks[track.index]
+                    player.select(track: selectedTrack)
+                }
+            }
+        }
+    }
     
     public func setQuality(_ quality: VideoQuality) { currentQuality = quality }
     
@@ -680,7 +835,33 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         let next = all[(idx + 1) % all.count]
         setAspectRatio(next)
     }
-    
+
+    /// Enable Picture-in-Picture (PiP) mode for video playback
+    public func enablePictureInPicture() {
+        if currentBackend == .ksplayer {
+            // KSPlayer uses AVPlayer internally, try to enable PiP
+            // Access the AVPlayer through KSPlayer's layer
+            if let avPlayerLayer = ksPlayerView.layer as? AVPlayerLayer {
+                // Enable PiP if supported
+                if AVPictureInPictureController.isPictureInPictureSupported() {
+                    // Stop any existing PiP session first
+                    if pipController?.isPictureInPictureActive ?? false {
+                        pipController?.stopPictureInPicture()
+                    }
+
+                    // Create new PiP controller
+                    let newPipController = AVPictureInPictureController(playerLayer: avPlayerLayer)
+                    newPipController?.delegate = self
+                    self.pipController = newPipController
+
+                    // Start PiP
+                    newPipController?.startPictureInPicture()
+                }
+            }
+        }
+        // Note: VLC backend does not natively support PiP in iOS
+    }
+
     private func applyAspectRatio(_ ratio: VideoAspectRatio) {
         if currentBackend == .vlc {
             
@@ -867,7 +1048,7 @@ extension NebuloPlayerEngine: VLCMediaPlayerDelegate {
     public func mediaPlayerStateChanged(_ aNotification: Notification) {
         guard let player = aNotification.object as? VLCMediaPlayer,
               currentBackend == .vlc else { return }
-        
+
         switch player.state {
         case .buffering:
             self.isBuffering = true
@@ -887,5 +1068,19 @@ extension NebuloPlayerEngine: VLCMediaPlayerDelegate {
         default:
             break
         }
+    }
+}
+
+extension NebuloPlayerEngine: AVPictureInPictureControllerDelegate {
+    public func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        print("📱 [NebuloEngine] PiP started")
+    }
+
+    public func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        print("📱 [NebuloEngine] PiP stopped")
+    }
+
+    public func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
+        print("⚠️ [NebuloEngine] PiP failed to start: \(error.localizedDescription)")
     }
 }

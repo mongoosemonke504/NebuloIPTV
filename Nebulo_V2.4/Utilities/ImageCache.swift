@@ -228,58 +228,82 @@ final class ImageCache: @unchecked Sendable {
 
 }
 
+@MainActor
 class ImageLoader: ObservableObject {
     @Published var image: UIImage?
-    private let urlString: String
-    private var task: Task<Void, Never>?
-    
+    let urlString: String
+    private var loadedURL: String? = nil
+
     init(urlString: String) {
         self.urlString = urlString
-        
-        if let cached = ImageCache.shared.getMemoryCache(forKey: urlString) {
+        // Populate synchronously from memory OR disk cache so the first
+        // frame never shows a placeholder for an already-cached image.
+        // Without the disk fallback, rows created mid-transition (e.g. the
+        // directional sport swipe) rendered gray boxes for a beat and their
+        // logos popped in after the slide instead of moving with it. The
+        // disk read is a small downsampled decode — the loader already does
+        // the same synchronous read on MainActor in loadAsync.
+        if let cached = ImageCache.shared.getMemoryCache(forKey: urlString)
+            ?? ImageCache.shared.get(forKey: urlString) {
             self.image = cached
+            self.loadedURL = urlString
+        }
+    }
+
+    // targetURL allows callers to request a different URL than the one the
+    // loader was initialised with — needed when @StateObject preserves the
+    // loader instance across channel changes.
+    func loadAsync(targetURL: String? = nil) async {
+        let url = targetURL ?? urlString
+        guard !url.isEmpty else { return }
+
+        // Already showing the right image — nothing to do.
+        if loadedURL == url { return }
+
+        // Memory cache — instant, no flicker.
+        if let cached = ImageCache.shared.getMemoryCache(forKey: url) {
+            image = cached
+            loadedURL = url
             return
         }
-        load()
-    }
-    
-    func load() {
-        if image != nil { return }
-        
-        task = Task {
-            
-            if let cached = ImageCache.shared.get(forKey: urlString) {
-                await MainActor.run { self.image = cached }
-                return
-            }
-            
-            guard let url = URL(string: urlString) else { return }
-            do {
-                let (data, _) = try await URLSession.shared.data(from: url)
-                if let downloadedImage = UIImage(data: data) {
-                    ImageCache.shared.set(downloadedImage, forKey: urlString)
-                    await MainActor.run { self.image = downloadedImage }
-                }
-            } catch {
-                
-            }
+
+        // Clear stale image so the spinner shows while the new one loads.
+        image = nil
+
+        // Disk cache — synchronous read but we're already on MainActor.
+        if let cached = ImageCache.shared.get(forKey: url) {
+            image = cached
+            loadedURL = url
+            return
         }
-    }
-    
-    func cancel() {
-        task?.cancel()
+
+        guard let imageURL = URL(string: url) else { return }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: imageURL)
+            // Bail out if the view disappeared while we were downloading.
+            guard !Task.isCancelled else { return }
+            if let downloaded = UIImage(data: data) {
+                ImageCache.shared.set(downloaded, forKey: url)
+                image = downloaded
+                loadedURL = url
+            }
+        } catch {
+            // Covers cancellation and network errors — nothing to do.
+        }
     }
 }
 
 struct CachedAsyncImage: View {
     @StateObject private var loader: ImageLoader
+    private let urlString: String
     let size: CGSize?
-    
+
     init(urlString: String, size: CGSize? = nil) {
+        self.urlString = urlString
         _loader = StateObject(wrappedValue: ImageLoader(urlString: urlString))
         self.size = size
     }
-    
+
     var body: some View {
         Group {
             if let image = loader.image {
@@ -288,7 +312,7 @@ struct CachedAsyncImage: View {
                     .aspectRatio(contentMode: .fit)
             } else {
                 ZStack {
-                    Color.white.opacity(0.1) 
+                    Color.white.opacity(0.1)
                     if size != nil {
                         CustomSpinner(color: .white.opacity(0.5), lineWidth: 2, size: 15)
                     }
@@ -298,17 +322,28 @@ struct CachedAsyncImage: View {
         .applyIf(size != nil) { view in
             view.frame(width: size!.width, height: size!.height)
         }
-        .onAppear {
-            loader.load()
-        }
-        .onDisappear {
-            loader.cancel()
+        // .task(id:) fires when the view appears and re-fires on URL change
+        // (e.g. channel switch) — passes the new URL so the persisted
+        // @StateObject loader fetches the correct image.
+        .task(id: urlString) {
+            await loader.loadAsync(targetURL: urlString)
         }
     }
 }
 
 private extension String {
+    /// Stable FNV-1a 64-bit hash for disk-cache filenames. The previous
+    /// implementation used `String.hashValue`, which Swift RANDOMIZES on
+    /// every launch — so all disk-cached images became unreachable each
+    /// session and had to be re-downloaded. That hit the soccer tabs
+    /// hardest: their large logo sets get evicted from the memory cache,
+    /// and the disk copies from earlier sessions could never be found.
     nonisolated var hashValueStr: String {
-        return String(format: "%016llx", UInt64(bitPattern: Int64(self.hashValue)))
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in self.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x100000001b3
+        }
+        return String(format: "%016llx", hash)
     }
 }

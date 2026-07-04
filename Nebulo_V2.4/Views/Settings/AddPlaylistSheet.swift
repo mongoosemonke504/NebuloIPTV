@@ -2,7 +2,7 @@ import SwiftUI
 
 struct AddPlaylistSheet: View {
     @Environment(\.dismiss) private var dismiss
-    
+
     @State private var urlInput = ""
     @State private var usernameInput = ""
     @State private var passwordInput = ""
@@ -10,22 +10,39 @@ struct AddPlaylistSheet: View {
     @State private var showError = false
     @State private var errorMessage = ""
     @State private var selectedLoginType: LoginType = .xtream
-    
+
+    @AppStorage("nebColor1") private var nebColor1 = "#1A2538"
+    @AppStorage("nebColor2") private var nebColor2 = "#11101A"
+    @AppStorage("nebColor3") private var nebColor3 = "#1F1A24"
+    @AppStorage("nebX1") private var nebX1 = 0.5
+    @AppStorage("nebY1") private var nebY1 = 0.0
+    @AppStorage("nebX2") private var nebX2 = 0.5
+    @AppStorage("nebY2") private var nebY2 = 0.5
+    @AppStorage("nebX3") private var nebX3 = 0.5
+    @AppStorage("nebY3") private var nebY3 = 1.0
+
     var accountToEdit: Account? = nil
-    
-    
-    
+
+
+
     var body: some View {
         NavigationStack {
             ZStack {
                 Color.black.ignoresSafeArea()
-                NebulaBackgroundView(color1: .blue, color2: .purple, color3: .pink, point1: .init(x: 0.2, y: 0.2), point2: .init(x: 0.8, y: 0.8), point3: .init(x: 0.5, y: 0.5))
+                NebulaBackgroundView(
+                    color1: Color(hex: nebColor1) ?? .purple,
+                    color2: Color(hex: nebColor2) ?? .blue,
+                    color3: Color(hex: nebColor3) ?? .pink,
+                    point1: UnitPoint(x: nebX1, y: nebY1),
+                    point2: UnitPoint(x: nebX2, y: nebY2),
+                    point3: UnitPoint(x: nebX3, y: nebY3)
+                )
                 
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 30) {
                         Text(accountToEdit != nil ? "Edit Playlist" : "Add New Playlist")
                             .font(.system(size: 28, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
                             .padding(.top, 40)
                         
                         
@@ -97,7 +114,7 @@ struct AddPlaylistSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
-                        .foregroundColor(.white)
+                        .foregroundStyle(.primary)
                 }
             }
             .alert("Input Error", isPresented: $showError) {
@@ -169,18 +186,18 @@ struct PlaylistGlassTextField: View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 16, weight: .medium))
-                .foregroundColor(.white.opacity(0.6))
+                .foregroundStyle(.secondary)
                 .frame(width: 20)
             
             Group {
                 if isSecure {
-                    SecureField("", text: $text, prompt: Text(placeholder).foregroundColor(.white.opacity(0.3)))
+                    SecureField("", text: $text, prompt: Text(placeholder).foregroundColor(.secondary))
                 } else {
-                    TextField("", text: $text, prompt: Text(placeholder).foregroundColor(.white.opacity(0.3)))
+                    TextField("", text: $text, prompt: Text(placeholder).foregroundColor(.secondary))
                 }
             }
             .font(.system(size: 15))
-            .foregroundColor(.white)
+            .foregroundStyle(.primary)
             .autocorrectionDisabled()
             .textInputAutocapitalization(.never)
             .keyboardType(keyboard)

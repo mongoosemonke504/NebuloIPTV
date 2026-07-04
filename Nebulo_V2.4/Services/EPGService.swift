@@ -51,7 +51,7 @@ class EPGService: NSObject, XMLParserDelegate {
     }
     
     func fetchAndMergeEPGs(urls: [URL], progress: @escaping (Double) -> Void) async -> (epg: [String: [EPGProgram]], map: [String: String]) {
-        return await Task.detached(priority: .userInitiated) {
+        return await Task.detached(priority: .background) {
             var mergedEPG: [String: [EPGProgram]] = [:]
             var mergedMap: [String: String] = [:]
             
@@ -191,7 +191,7 @@ class EPGService: NSObject, XMLParserDelegate {
     }
     
     private func parseEPGData(_ data: Data) async -> (epg: [String: [EPGProgram]], map: [String: String]) {
-        return await Task.detached(priority: .userInitiated) {
+        return await Task.detached(priority: .background) {
             let parser = XMLParser(data: data)
             let delegate = EPGParserDelegate()
             parser.delegate = delegate

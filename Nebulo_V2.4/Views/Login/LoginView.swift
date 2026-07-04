@@ -6,7 +6,17 @@ struct LoginView: View {
     @AppStorage("username") private var username = ""
     @AppStorage("password") private var password = ""
     @AppStorage("loginTypeRaw") private var loginTypeRaw = LoginType.xtream.rawValue
-    
+
+    @AppStorage("nebColor1") private var nebColor1 = "#1A2538"
+    @AppStorage("nebColor2") private var nebColor2 = "#11101A"
+    @AppStorage("nebColor3") private var nebColor3 = "#1F1A24"
+    @AppStorage("nebX1") private var nebX1 = 0.5
+    @AppStorage("nebY1") private var nebY1 = 0.0
+    @AppStorage("nebX2") private var nebX2 = 0.5
+    @AppStorage("nebY2") private var nebY2 = 0.5
+    @AppStorage("nebX3") private var nebX3 = 0.5
+    @AppStorage("nebY3") private var nebY3 = 1.0
+
     @State private var urlInput = ""
     @State private var usernameInput = ""
     @State private var passwordInput = ""
@@ -14,12 +24,19 @@ struct LoginView: View {
     @State private var showError = false
     @State private var errorMessage = ""
     @State private var selectedLoginType: LoginType = .xtream
-    
+
     var body: some View {
         NavigationStack {
             ZStack {
                 Color.black.ignoresSafeArea()
-                NebulaBackgroundView(color1: .blue, color2: .purple, color3: .pink, point1: .init(x: 0.2, y: 0.2), point2: .init(x: 0.8, y: 0.8), point3: .init(x: 0.5, y: 0.5))
+                NebulaBackgroundView(
+                    color1: Color(hex: nebColor1) ?? .purple,
+                    color2: Color(hex: nebColor2) ?? .blue,
+                    color3: Color(hex: nebColor3) ?? .pink,
+                    point1: UnitPoint(x: nebX1, y: nebY1),
+                    point2: UnitPoint(x: nebX2, y: nebY2),
+                    point3: UnitPoint(x: nebX3, y: nebY3)
+                )
                 
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 30) {
@@ -33,19 +50,19 @@ struct LoginView: View {
                                 
                                 Image(systemName: "play.tv.fill")
                                     .font(.system(size: 70))
-                                    .foregroundStyle(.white)
+                                    .foregroundStyle(.primary)
                                     .shadow(color: .white.opacity(0.3), radius: 10)
                             }
                             
                             VStack(spacing: 4) {
                                 Text("Nebulo")
                                     .font(.system(size: 42, weight: .black, design: .rounded))
-                                    .foregroundStyle(.white)
+                                    .foregroundStyle(.primary)
                                 
                                 Text("STREAMING REIMAGINED")
                                     .font(.system(size: 10, weight: .bold))
                                     .kerning(2.5)
-                                    .foregroundStyle(.white.opacity(0.5))
+                                    .foregroundStyle(.secondary)
                             }
                         }
                         .padding(.top, 60)
@@ -119,7 +136,7 @@ struct LoginView: View {
                         
                         Text(" ")
                             .font(.caption2)
-                            .foregroundColor(.white.opacity(0.4))
+                            .foregroundStyle(.tertiary)
                     }
                     .padding(.bottom, 50)
                 }
@@ -180,18 +197,18 @@ struct GlassTextField: View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 16, weight: .medium))
-                .foregroundColor(.white.opacity(0.6))
+                .foregroundStyle(.secondary)
                 .frame(width: 20)
             
             Group {
                 if isSecure {
-                    SecureField("", text: $text, prompt: Text(placeholder).foregroundColor(.white.opacity(0.3)))
+                    SecureField("", text: $text, prompt: Text(placeholder).foregroundColor(.secondary))
                 } else {
-                    TextField("", text: $text, prompt: Text(placeholder).foregroundColor(.white.opacity(0.3)))
+                    TextField("", text: $text, prompt: Text(placeholder).foregroundColor(.secondary))
                 }
             }
             .font(.system(size: 15))
-            .foregroundColor(.white)
+            .foregroundStyle(.primary)
             .autocorrectionDisabled()
             .textInputAutocapitalization(.never)
             .keyboardType(keyboard)

@@ -37,6 +37,43 @@ extension View {
     }
 }
 
+/// Swipe-down-to-dismiss: a 25-pt transparent hit zone at the top of the view
+/// detects a downward drag and calls `onDismiss` when the drag exceeds 80 pts.
+/// Mirrors SwipeBackModifier's edge-zone pattern so the gesture feels native.
+struct SwipeDownDismissModifier: ViewModifier {
+    let onDismiss: () -> Void
+    @State private var dragY: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        ZStack(alignment: .top) {
+            content
+                .offset(y: max(0, dragY))
+
+            Color.clear
+                .frame(height: 25)
+                .contentShape(Rectangle())
+                .highPriorityGesture(
+                    DragGesture(minimumDistance: 10)
+                        .onChanged { value in
+                            if value.translation.height > 0 {
+                                dragY = value.translation.height
+                            }
+                        }
+                        .onEnded { value in
+                            if value.translation.height > 80 {
+                                dragY = 0
+                                onDismiss()
+                            } else {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                    dragY = 0
+                                }
+                            }
+                        }
+                )
+        }
+    }
+}
+
 struct SkeletonBox: View {
     var width: CGFloat? = nil
     var height: CGFloat
@@ -67,22 +104,92 @@ extension AnyTransition {
             identity: BlurFadeModifier(blurRadius: 0, opacity: 1)
         )
     }
+
+    /// iOS navigation-style push/pop: the arriving view slides in from the
+    /// trailing (right) edge; the departing view slides back out the same way.
+    /// Pair with a spring animation and SwipeBackModifier for a native feel.
+    static var pagePush: AnyTransition {
+        .asymmetric(
+            insertion: .move(edge: .trailing),
+            removal: .move(edge: .trailing)
+        )
+    }
+}
+
+/// Horizontal tab-swipes ride simultaneously with the vertical scroll, but a
+/// drag that starts and ends inside a full-width button's bounds ALSO fires
+/// that button's action on release. The swipe gestures mark a short window
+/// here while a horizontal drag is in flight; row/card tap actions check
+/// `tapsAllowed` and no-op during it.
+enum SwipeTapGuard {
+    static var suppressTapsUntil = Date.distantPast
+    static var tapsAllowed: Bool { Date() > suppressTapsUntil }
+    static func suppress(for interval: TimeInterval = 0.4) {
+        suppressTapsUntil = Date().addingTimeInterval(interval)
+    }
+}
+
+/// Scroll offsets reported by ScrollOffsetProbe, keyed by an arbitrary page id
+/// so screens with multiple scroll views (paged tabs) can read just the one
+/// that's currently visible.
+struct SectionScrollOffsetsKey: PreferenceKey {
+    static var defaultValue: [String: CGFloat] = [:]
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
+        value.merge(nextValue()) { _, new in new }
+    }
+}
+
+/// Invisible zero-height probe placed at the very top of scrollable content.
+/// Reports the content's minY in the named coordinate space: ~0 at rest,
+/// increasingly negative as the user scrolls down. Drives collapsing headers.
+struct ScrollOffsetProbe: View {
+    let space: String
+    let id: String
+    var body: some View {
+        GeometryReader { g in
+            Color.clear.preference(
+                key: SectionScrollOffsetsKey.self,
+                value: [id: g.frame(in: .named(space)).minY]
+            )
+        }
+        .frame(height: 0)
+    }
 }
 
 struct GlassEffect: ViewModifier {
-    @AppStorage("glassOpacity") private var glassOpacity = 0.15
-    @AppStorage("glassShade") private var glassShade = 1.0
     let cornerRadius: CGFloat
     let isSelected: Bool
     let accentColor: Color?
+
     func body(content: Content) -> some View {
-        content
-            .background(isSelected ? AnyShapeStyle(Color(white: glassShade).opacity(glassOpacity + 0.1)) : AnyShapeStyle(Color(white: glassShade).opacity(glassOpacity)))
-            .cornerRadius(cornerRadius)
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius)
-                    .stroke(isSelected && accentColor != nil ? accentColor!.opacity(0.8) : Color.white.opacity(0.1), lineWidth: isSelected ? 1.5 : 1)
-            )
-            .compositingGroup()
+        applyGlass(to: content)
+    }
+
+    // @ViewBuilder lets both branches return different concrete types
+    // without AnyView — SwiftUI keeps stable view identity across renders.
+    @ViewBuilder
+    private func applyGlass(to content: Content) -> some View {
+        let shape       = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let strokeColor = isSelected && accentColor != nil
+            ? accentColor!.opacity(0.6)
+            : Color.white.opacity(0.08)
+        let strokeWidth: CGFloat = isSelected ? 1.2 : 0.5
+        if #available(iOS 26.0, *) {
+            let glass: Glass = {
+                if isSelected, let accent = accentColor {
+                    return .regular.tint(accent.opacity(0.35))
+                }
+                return .regular
+            }()
+            content
+                .glassEffect(glass, in: shape)
+                .overlay(shape.stroke(strokeColor, lineWidth: strokeWidth))
+                .contentShape(shape)
+        } else {
+            content
+                .background(.ultraThinMaterial, in: shape)
+                .overlay(shape.stroke(strokeColor, lineWidth: strokeWidth))
+                .contentShape(shape)
+        }
     }
 }

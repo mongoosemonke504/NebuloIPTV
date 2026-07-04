@@ -28,66 +28,53 @@ struct SmartSearchLogic {
     
     nonisolated static func checkLanguageMatch(_ text: String, preference: LanguagePreference) -> Bool {
         if preference == .any { return true }
-        
-        
         if let detected = detectLanguage(text) {
             return detected == preference
         }
-        
-        
-        let lowerText = text.lowercased()
-        let tokens = tokenize(lowerText) 
-        for tag in preference.searchTokens {
-            if tokens.contains(tag) { return true }
-        }
-        return false
+        // Language-neutral channel — no penalty, treat as matching any preference
+        return true
     }
-    
+
+    // Returns nil when no language can be confidently detected (channel is language-neutral).
+    // Returning nil avoids incorrectly penalising neutral channels (e.g. "ESPN HD") when the
+    // user has a non-English preference.
     nonisolated static func detectLanguage(_ text: String) -> LanguagePreference? {
         let lower = text.lowercased()
         let tokens = tokenize(lower)
-        
+
         var scores: [LanguagePreference: Int] = [:]
-        
+
         for lang in LanguagePreference.allCases {
             if lang == .any { continue }
             var score = 0
-            
-            
+
+            // Strong explicit prefix/bracket markers, e.g. "ES: La Liga" or "[FR]"
             if let code = lang.searchTokens.first {
                 if lower.hasPrefix(code + ":") || lower.contains(" " + code + ":") || lower.hasPrefix("[" + code + "]") {
                     score += 100
                 }
             }
-            
-            
+
             for token in lang.searchTokens {
                 if tokens.contains(token) { score += 20 }
             }
-            
-            
+
             for indicator in lang.languageIndicators {
                 if indicator.contains("'") {
-                    
                     if lower.contains(indicator) { score += 5 }
                 } else {
-                    
                     if tokens.contains(indicator) { score += 2 }
                 }
             }
-            
-            
-            
-            
+
             if score > 0 { scores[lang] = score }
         }
-        
-        
-        if let best = scores.max(by: { $0.value < $1.value }) {
-            return best.key
+
+        guard let best = scores.max(by: { $0.value < $1.value }), best.value >= 20 else {
+            // Threshold of 20 (at least one strong token match) required to assign a language.
+            // Below that the detection is noise — treat the channel as language-neutral.
+            return nil
         }
-        
-        
-        return .english
+        return best.key
     }
 }

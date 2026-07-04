@@ -6,7 +6,16 @@ struct PlayerControlsView: View {
     let channel: StreamChannel
     var viewModel: ChannelViewModel?
     var isRecordingPlayback: Bool = false
-    
+
+    /// When true, the controls render with smaller paddings and hide the bottom
+    /// row of feature pills (Record / Subtitles / Aspect) — those live in the
+    /// info panel below the video instead.
+    var isInlineMode: Bool = false
+
+    /// Bound to the parent's portrait-fullscreen toggle so the chrome can show
+    /// an "expand / shrink" button.
+    @Binding var isFullscreenInPortrait: Bool
+
     @Binding var showControls: Bool
     @Binding var showSubtitlePanel: Bool
     @Binding var showResolutionPanel: Bool
@@ -33,12 +42,18 @@ struct PlayerControlsView: View {
     var seekForward: () -> Void
     var seekBackward: () -> Void
     
-    @AppStorage("accentColor") private var accentHex = "#007AFF"
+    @AppStorage("accentColor") private var accentHex = "#FFFFFF"
     var accentColor: Color { Color(hex: accentHex) ?? .blue }
     
     var body: some View {
         GeometryReader { geo in
-            let isLandscape = geo.size.width > geo.size.height
+            // In inline (portrait split) mode, the GeometryReader is sized to
+            // the 16:9 video tile — which is always wider than tall, so
+            // measuring `width > height` here would wrongly read as landscape
+            // and hide the portrait-fullscreen toggle. Inline mode only ever
+            // exists in portrait, so we force the flag false there. In all
+            // other cases the actual geometry is authoritative.
+            let isLandscape = isInlineMode ? false : (geo.size.width > geo.size.height)
             let currentProg = viewModel?.getCurrentProgram(for: channel)
             let isRecording = recordingManager.isRecording(channelName: channel.name)
             let isTrulyLive: Bool = {
@@ -82,15 +97,13 @@ struct PlayerControlsView: View {
                             }) {
                                 Image(systemName: playerManager.playbackFailed ? "xmark" : (playerManager.isPlaying ? "pause.fill" : "play.fill"))
                                     .font(.system(size: 34, weight: .bold))
-                                    .foregroundColor(.white)
+                                    .foregroundStyle(.primary)
                                     .frame(width: 82, height: 82)
                                     .modifier(GlassEffect(cornerRadius: 42, isSelected: true, accentColor: nil))
                             }
                             .buttonStyle(.plain)
-                            .opacity(playerManager.isBuffering ? 0 : 1)
-                            .disabled(playerManager.isBuffering || playerManager.playbackFailed)
+                            .disabled(playerManager.playbackFailed)
                         }
-                        .allowsHitTesting(!playerManager.isBuffering)
                         
                         
                         
@@ -99,179 +112,80 @@ struct PlayerControlsView: View {
                             
                             Group {
                                 if isLandscape {
-                                    ZStack {
-                                        HStack {
-                                            Button(action: {
-                                                ChannelViewModel.shared.triggerSelectionHaptic()
-                                                timeshiftStartTime = nil
-                                                onDismiss()
-                                            }) {
-                                                Image(systemName: "xmark")
-                                                    .font(.system(size: 18, weight: .bold))
-                                                    .foregroundColor(.white)
-                                                    .padding(12)
-                                                    .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
-                                            }
-                                            .buttonStyle(.plain)
-                                            
-                                            Spacer()
-                                            
-                                            
-                                            HStack(spacing: 16) {
-                                                if let vm = viewModel {
-                                                    Button(action: {
-                                                        vm.triggerSelectionHaptic()
-                                                        vm.miniPlayerChannel = channel
-                                                        onDismiss()
-                                                    }) {
-                                                        Image(systemName: "pip.enter")
-                                                            .font(.system(size: 18, weight: .bold))
-                                                            .foregroundColor(.white)
-                                                            .padding(12)
-                                                            .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
-                                                    }
-                                                    .buttonStyle(.plain)
-                                                    
-                                                    Button(action: {
-                                                        vm.triggerSelectionHaptic()
-                                                        vm.triggerMultiViewFromPlayer(with: channel)
-                                                    }) {
-                                                        Image(systemName: "square.grid.2x2.fill")
-                                                            .font(.system(size: 18, weight: .bold))
-                                                            .foregroundColor(.white)
-                                                            .padding(12)
-                                                            .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
-                                                    }
-                                                    .buttonStyle(.plain)
-                                                    .disabled(timeshiftStartTime != nil)
-                                                    .opacity(timeshiftStartTime != nil ? 0.5 : 1.0)
-                                                }
-                                            }
-                                        }
-                                        
-                                        Text(channel.name)
-                                            .font(.headline)
-                                            .foregroundColor(.white)
-                                            .shadow(radius: 2)
-                                            .lineLimit(1)
-                                            .frame(maxWidth: geo.size.width * 0.5)
+                                    HStack {
+                                        closeButton
+                                        Spacer()
+                                        topRightActions(isLandscape: true)
                                     }
                                 } else {
-                                    HStack {
-                                        Button(action: {
-                                            ChannelViewModel.shared.triggerSelectionHaptic()
-                                            timeshiftStartTime = nil
-                                            onDismiss()
-                                        }) {
-                                            Image(systemName: "xmark")
-                                                .font(.system(size: 18, weight: .bold))
-                                                .foregroundColor(.white)
-                                                .padding(12)
-                                                .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
-                                        }
-                                        .buttonStyle(.plain)
-                                        
+                                    // Portrait mode - hide channel name to avoid crowding buttons
+                                    HStack(spacing: 8) {
+                                        closeButton
                                         Spacer()
-                                        
-                                        Text(channel.name)
-                                            .font(.headline)
-                                            .foregroundColor(.white)
-                                            .shadow(radius: 2)
-                                        
-                                        Spacer()
-                                        
-                                        
-                                        HStack(spacing: 16) {
-                                            if let vm = viewModel {
-                                                Button(action: {
-                                                    vm.triggerSelectionHaptic()
-                                                    vm.miniPlayerChannel = channel
-                                                    onDismiss()
-                                                }) {
-                                                    Image(systemName: "pip.enter")
-                                                        .font(.system(size: 18, weight: .bold))
-                                                        .foregroundColor(.white)
-                                                        .padding(12)
-                                                        .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
-                                                }
-                                                .buttonStyle(.plain)
-                                                
-                                                Button(action: {
-                                                    vm.triggerSelectionHaptic()
-                                                    vm.triggerMultiViewFromPlayer(with: channel)
-                                                }) {
-                                                    Image(systemName: "square.grid.2x2.fill")
-                                                        .font(.system(size: 18, weight: .bold))
-                                                        .foregroundColor(.white)
-                                                        .padding(12)
-                                                        .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
-                                                }
-                                                .buttonStyle(.plain)
-                                                .disabled(timeshiftStartTime != nil)
-                                                .opacity(timeshiftStartTime != nil ? 0.5 : 1.0)
-                                            }
-                                        }
+                                        topRightActions(isLandscape: false)
                                     }
                                 }
                             }
-                            .padding(.top, isLandscape ? 40 : 60)
-                            .padding(.horizontal)
+                            .padding(.top, isInlineMode ? 8 : (isLandscape ? 40 : 60))
+                            .padding(.horizontal, isInlineMode ? 8 : 16)
                             
                             Spacer()
-                            
-                            
+
+
                             VStack(spacing: 8) {
-                                
-                                
-                                VStack(alignment: .leading, spacing: 2) {
-                                    HStack(spacing: 8) {
-                                        Text(isRecordingPlayback ? (channel.originalName ?? channel.name) : (currentProg?.title ?? "No Information"))
-                                            .font(.subheadline.bold())
-                                            .foregroundColor(.white)
-                                            .lineLimit(1)
-                                        
-                                        
-                                        Button(action: {
-                                            if !isRecording {
-                                                ChannelViewModel.shared.triggerSelectionHaptic()
-                                                playerManager.toggleBackend()
-                                            }
-                                        }) {
-                                            Text(playerManager.activeBackendName)
-                                                .font(.system(size: 9, weight: .black))
-                                                .foregroundColor(.white.opacity(isRecording ? 0.3 : 0.6))
-                                                .padding(.horizontal, 5)
-                                                .padding(.vertical, 1)
-                                                .background(Color.white.opacity(0.12))
-                                                .clipShape(RoundedRectangle(cornerRadius: 4))
-                                        }
-                                        .buttonStyle(.plain)
-                                        .disabled(isRecording)
-                                        
-                                        Spacer()
-                                    }
-                                    
-                                    let displayDesc = isRecordingPlayback ? channel.streamURL : (currentProg?.description ?? "")
-                                    
-                                    if !displayDesc.isEmpty {
-                                        Text(displayDesc)
-                                            .font(.system(size: 11))
-                                            .foregroundColor(.white.opacity(0.7))
-                                            .lineLimit(isDescriptionExpanded ? nil : 1)
-                                            .frame(width: geo.size.width - 40, alignment: .leading)
-                                            .id(isDescriptionExpanded)
-                                            .transition(.opacity)
-                                            .contentShape(Rectangle())
-                                            .onTapGesture {
-                                                ChannelViewModel.shared.triggerSelectionHaptic()
-                                                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                                    isDescriptionExpanded.toggle()
+
+                                // Title and description — only shown in landscape, not in portrait split mode
+                                if !isInlineMode {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        HStack(spacing: 8) {
+                                            Text(isRecordingPlayback ? (channel.originalName ?? channel.name) : (currentProg?.title ?? "No Information"))
+                                                .font(.subheadline.bold())
+                                                .foregroundStyle(.primary)
+                                                .lineLimit(1)
+
+
+                                            Button(action: {
+                                                if !isRecording {
+                                                    ChannelViewModel.shared.triggerSelectionHaptic()
+                                                    playerManager.toggleBackend()
                                                 }
+                                            }) {
+                                                Text(playerManager.activeBackendName)
+                                                    .font(.system(size: 9, weight: .black))
+                                                    .foregroundColor(.white.opacity(isRecording ? 0.3 : 0.6))
+                                                    .padding(.horizontal, 5)
+                                                    .padding(.vertical, 1)
+                                                    .background(Color.white.opacity(0.12))
+                                                    .clipShape(RoundedRectangle(cornerRadius: 4))
                                             }
+                                            .buttonStyle(.plain)
+                                            .disabled(isRecording)
+
+                                            Spacer()
+                                        }
+
+                                        let displayDesc = isRecordingPlayback ? (channel.epgID ?? "") : (currentProg?.description ?? "")
+
+                                        if !displayDesc.isEmpty {
+                                            Text(displayDesc)
+                                                .font(.system(size: 11))
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(isDescriptionExpanded ? nil : 1)
+                                                .frame(width: geo.size.width - 40, alignment: .leading)
+                                                .id(isDescriptionExpanded)
+                                                .transition(.opacity)
+                                                .contentShape(Rectangle())
+                                                .onTapGesture {
+                                                    ChannelViewModel.shared.triggerSelectionHaptic()
+                                                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                                        isDescriptionExpanded.toggle()
+                                                    }
+                                                }
+                                        }
                                     }
-                                }
-                                .shadow(radius: 2)
-                                .padding(.bottom, -4) 
+                                    .shadow(radius: 2)
+                                    .padding(.bottom, -4)
+                                } 
                                 
                                 
                                 VStack(spacing: 4) {
@@ -283,11 +197,11 @@ struct PlayerControlsView: View {
                                             HStack {
                                                 Text(formatTime(draggingProgress != nil ? draggingProgress! * playerManager.duration : playerManager.currentTime))
                                                     .font(.caption2.monospacedDigit())
-                                                    .foregroundColor(.white.opacity(0.7))
+                                                    .foregroundStyle(.secondary)
                                                 Spacer()
                                                 Text(formatTime(playerManager.duration))
                                                     .font(.caption2.monospacedDigit())
-                                                    .foregroundColor(.white.opacity(0.7))
+                                                    .foregroundStyle(.secondary)
                                             }
                                             
                                             GeometryReader { barGeo in
@@ -350,7 +264,7 @@ struct PlayerControlsView: View {
                                         HStack {
                                             Text(formatClockTime(prog.start))
                                                 .font(.caption2.monospacedDigit())
-                                                .foregroundColor(.white.opacity(0.7))
+                                                .foregroundStyle(.secondary)
                                             
                                             Spacer()
                                             
@@ -364,7 +278,7 @@ struct PlayerControlsView: View {
                                             
                                             Text(formatClockTime(prog.stop))
                                                 .font(.caption2.monospacedDigit())
-                                                .foregroundColor(.white.opacity(0.7))
+                                                .foregroundStyle(.secondary)
                                         }
                                         
                                         
@@ -439,13 +353,13 @@ struct PlayerControlsView: View {
                                             HStack {
                                                 Text("--:--")
                                                     .font(.caption2.monospacedDigit())
-                                                    .foregroundColor(.white.opacity(0.7))
+                                                    .foregroundStyle(.secondary)
                                                 
                                                 Spacer()
                                                 
                                                 Text(formatClockTime(viewModel?.currentTime ?? Date()))
                                                     .font(.caption2.monospacedDigit())
-                                                    .foregroundColor(.white.opacity(0.7))
+                                                    .foregroundStyle(.secondary)
                                             }
                                             
                                             ZStack(alignment: .trailing) {
@@ -464,7 +378,8 @@ struct PlayerControlsView: View {
                                     }
                                 }
                                 
-                                
+
+                                if !isInlineMode {
                                 HStack(spacing: 8) {
                                     if !isRecordingPlayback {
                                         
@@ -568,12 +483,12 @@ struct PlayerControlsView: View {
                                     }
                                     .buttonStyle(.plain)
                                 }
+                                }   // end if !isInlineMode
                             }
                             .padding(.horizontal, 20)
-                            .padding(.bottom, isLandscape ? 20 : 40)
+                            .padding(.bottom, isLandscape ? 20 : (isInlineMode ? 12 : 40))
                             .background(
-                                LinearGradient(colors: [.clear, .black.opacity(0.8)], startPoint: .top, endPoint: .bottom)
-                                    .ignoresSafeArea()
+                                LinearGradient(colors: [.clear, .black.opacity(isInlineMode ? 0.6 : 0.8)], startPoint: .top, endPoint: .bottom)
                             )
                         }
                     }
@@ -613,6 +528,84 @@ struct PlayerControlsView: View {
         }
     }
     
+    // MARK: - Top bar helpers (shared between portrait & landscape)
+
+    private var closeButton: some View {
+        Button(action: {
+            ChannelViewModel.shared.triggerSelectionHaptic()
+            timeshiftStartTime = nil
+            onDismiss()
+        }) {
+            Image(systemName: "xmark")
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(.primary)
+                .padding(12)
+                .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func topRightActions(isLandscape: Bool) -> some View {
+        HStack(spacing: isLandscape ? 12 : 8) {
+            // AirPlay (system route picker, universal)
+            AirPlayButton()
+                .frame(width: 22, height: 22)
+                .padding(isLandscape ? 11 : 8)
+                .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
+
+            if let vm = viewModel {
+                // Miniplayer (floating player)
+                Button(action: {
+                    vm.triggerSelectionHaptic()
+                    vm.miniPlayerChannel = channel
+                    onDismiss()
+                }) {
+                    Image(systemName: "pip.enter")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(.primary)
+                        .padding(isLandscape ? 12 : 8)
+                        .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
+                }
+                .buttonStyle(.plain)
+
+                // Multi-view
+                Button(action: {
+                    vm.triggerSelectionHaptic()
+                    vm.triggerMultiViewFromPlayer(with: channel)
+                }) {
+                    Image(systemName: "square.grid.2x2.fill")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(.primary)
+                        .padding(isLandscape ? 12 : 8)
+                        .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
+                }
+                .buttonStyle(.plain)
+                .disabled(timeshiftStartTime != nil)
+                .opacity(timeshiftStartTime != nil ? 0.5 : 1.0)
+            }
+
+            // Fullscreen toggle — portrait only (in landscape we're already fullscreen)
+            if !isLandscape {
+                Button(action: {
+                    ChannelViewModel.shared.triggerSelectionHaptic()
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                        isFullscreenInPortrait.toggle()
+                    }
+                }) {
+                    Image(systemName: isFullscreenInPortrait
+                          ? "arrow.down.right.and.arrow.up.left"
+                          : "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(.primary)
+                        .padding(8)
+                        .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
     func formatTime(_ seconds: Double) -> String {
         guard !seconds.isNaN, !seconds.isInfinite else { return "--:--" }
         let s = Int(seconds)

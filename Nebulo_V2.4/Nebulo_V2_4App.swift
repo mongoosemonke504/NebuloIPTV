@@ -5,17 +5,50 @@ import SwiftUI
 import SwiftUI
 import Combine
 import BackgroundTasks
+import UIKit
+
+// MARK: - Orientation manager
+// Allows the video player to unlock landscape while keeping everything else portrait.
+final class PlayerOrientationManager {
+    static let shared = PlayerOrientationManager()
+    private init() {}
+
+    var allowsLandscape = false {
+        didSet {
+            // Tell every window's root view controller to re-query supported orientations.
+            DispatchQueue.main.async {
+                UIApplication.shared.connectedScenes
+                    .compactMap { $0 as? UIWindowScene }
+                    .flatMap { $0.windows }
+                    .forEach { $0.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations() }
+            }
+        }
+    }
+}
+
+// MARK: - App delegate
+class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(
+        _ application: UIApplication,
+        supportedInterfaceOrientationsFor window: UIWindow?
+    ) -> UIInterfaceOrientationMask {
+        PlayerOrientationManager.shared.allowsLandscape
+            ? [.portrait, .landscapeLeft, .landscapeRight]
+            : .portrait
+    }
+}
 
 @main
 struct Nebulo_V2_4App: App {
-    
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+
     @StateObject private var channelViewModel = ChannelViewModel.shared
     @StateObject private var scoreViewModel = ScoreViewModel()
     @Environment(\.scenePhase) var scenePhase
-    
-    
+
+
     let timer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
-    
+
     init() {
         BackgroundManager.shared.register()
     }

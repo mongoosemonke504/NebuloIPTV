@@ -29,16 +29,42 @@ struct ESPNEvent: Codable, Identifiable, Hashable, Sendable {
         self.date = try container.decode(String.self, forKey: .date)
         self.groupings = try container.decodeIfPresent([ESPNGrouping].self, forKey: .groupings)
         self.leagueLabel = try container.decodeIfPresent(String.self, forKey: .leagueLabel)
-        
-        
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = formatter.date(from: self.date) {
-            self._dateParsed = d
-        } else {
-            formatter.formatOptions = [.withInternetDateTime]
-            self._dateParsed = formatter.date(from: self.date)
+
+        self._dateParsed = ESPNEvent.parseDate(self.date)
+    }
+
+    /// ESPN's scoreboard API isn't strictly consistent — some endpoints return
+    /// `2024-03-15T19:00Z` (no seconds), others include fractional seconds, and
+    /// occasionally non-ISO formats slip through. Trying multiple shapes here
+    /// matters: if parsing falls through and `_dateParsed` ends up `nil`, the
+    /// home-screen smart header used to read `gameDate` as `Date()` and tell
+    /// the user every unparseable game was starting "in 1 minute". Now we hand
+    /// back nil and the consumer uses `.distantFuture` as a safe sentinel.
+    private static func parseDate(_ raw: String) -> Date? {
+        // 1. ISO-8601 with fractional seconds: 2024-03-15T19:00:00.123Z
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = iso.date(from: raw) { return d }
+        // 2. ISO-8601 with seconds: 2024-03-15T19:00:00Z
+        iso.formatOptions = [.withInternetDateTime]
+        if let d = iso.date(from: raw) { return d }
+        // 3. Hand-rolled fallbacks for non-standard ESPN shapes (no seconds,
+        //    no timezone marker, etc.). UTC enforced when the string is naïve.
+        let formats = [
+            "yyyy-MM-dd'T'HH:mm'Z'",
+            "yyyy-MM-dd'T'HH:mmZZZZZ",
+            "yyyy-MM-dd'T'HH:mm",
+            "yyyy-MM-dd'T'HH:mm:ssZZZZZ",
+            "yyyy-MM-dd HH:mm:ss"
+        ]
+        for fmt in formats {
+            let df = DateFormatter()
+            df.locale = Locale(identifier: "en_US_POSIX")
+            df.timeZone = TimeZone(identifier: "UTC")
+            df.dateFormat = fmt
+            if let d = df.date(from: raw) { return d }
         }
+        return nil
     }
     
     func encode(to encoder: Encoder) throws {
@@ -70,7 +96,11 @@ struct ESPNEvent: Codable, Identifiable, Hashable, Sendable {
     var broadcastName: String? { allCompetitions.first?.broadcasts?.first?.names.first }
     
     nonisolated var gameDate: Date {
-        return _dateParsed ?? Date()
+        // Use .distantFuture as a safe sentinel when the date string couldn't
+        // be parsed at all. Falling back to `Date()` would make the home-screen
+        // smart header announce every unparseable game as starting "in 1
+        // minute", which is exactly the false-positive we were seeing.
+        return _dateParsed ?? .distantFuture
     }
 }
 

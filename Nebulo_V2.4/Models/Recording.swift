@@ -9,32 +9,58 @@ struct Recording: Identifiable, Codable, Hashable {
     let startTime: Date
     let endTime: Date
     let createdAt: Date
-    
-    
+
     var programTitle: String? = nil
     var programDescription: String? = nil
-    
-    
     var customTitle: String? = nil
-    
+
     var status: RecordingStatus
-    var localFileName: String? 
-    
+    var localFileName: String?
+    var category: RecordingCategory = .other
+
+    // MARK: - Computed
+
     var duration: TimeInterval {
-        return endTime.timeIntervalSince(startTime)
+        endTime.timeIntervalSince(startTime)
     }
-    
+
     var displayName: String {
         if let custom = customTitle, !custom.isEmpty { return custom }
         if let title = programTitle, !title.isEmpty { return title }
         return channelName
     }
-    
+
+    /// Reads the actual file size from disk (metadata only — fast).
+    var fileSizeBytes: Int64 {
+        guard let filename = localFileName else { return 0 }
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let url = dir.appendingPathComponent(filename)
+        return (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
+    }
+
+    // MARK: - Enums
+
     enum RecordingStatus: String, Codable {
         case scheduled
         case recording
         case completed
         case failed
         case cancelled
+    }
+
+    enum RecordingCategory: String, Codable, CaseIterable, Hashable {
+        case sports
+        case movies
+        case tvShows
+        case other
+
+        var displayName: String {
+            switch self {
+            case .sports:  return "Sports"
+            case .movies:  return "Movies"
+            case .tvShows: return "TV"
+            case .other:   return "Other"
+            }
+        }
     }
 }

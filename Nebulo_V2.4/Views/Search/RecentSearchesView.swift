@@ -11,7 +11,7 @@ struct RecentSearchesView: View {
                     Text("RECENT SEARCHES")
                         .font(.system(size: 11, weight: .black))
                         .kerning(1.2)
-                        .foregroundColor(.white.opacity(0.5))
+                        .foregroundStyle(.secondary)
                     Spacer()
                     Button(action: {
                         withAnimation {
@@ -32,13 +32,13 @@ struct RecentSearchesView: View {
                                 Button(action: { viewModel.searchText = query }) {
                                     Text(query)
                                         .font(.system(size: 14, weight: .medium))
-                                        .foregroundColor(.white)
+                                        .foregroundStyle(.primary)
                                 }
                                 
                                 Button(action: { viewModel.removeRecentQuery(query) }) {
                                     Image(systemName: "xmark")
                                         .font(.system(size: 10, weight: .bold))
-                                        .foregroundColor(.white.opacity(0.4))
+                                        .foregroundStyle(.tertiary)
                                 }
                             }
                             .padding(.horizontal, 12)

@@ -2,6 +2,13 @@ import SwiftUI
 import Combine
 import UIKit
 
+/// Holds transient EPG-update progress state in its own ObservableObject so that
+/// high-frequency progress publishes (10 fps timer) only cause the tiny loading
+/// banner to re-render — never the main channel list or category views.
+final class EPGLoadingState: ObservableObject {
+    @Published fileprivate(set) var progress: Double = 0
+}
+
 @MainActor
 class ChannelViewModel: ObservableObject {
     static let shared = ChannelViewModel()
@@ -52,10 +59,15 @@ class ChannelViewModel: ObservableObject {
     
     
     @Published var epgData: [String: [EPGProgram]] = [:]
-    private var epgNameMap: [String: String] = [:] 
-    @Published var epgProgress: Double = 0
+    private var epgNameMap: [String: String] = [:]
+    /// Pre-computed curated carousel — one live channel per broad genre group.
+    /// Populated on a background thread before isLoading flips to false so the
+    /// home screen never has to compute this on first render.
+    @Published var featuredChannels: [StreamChannel] = [] 
+    private var epgProgress: Double = 0          // internal only — not published
     @Published var isUpdatingEPG: Bool = false
-    @Published var loadingStatus: String = "Loading..." 
+    @Published var loadingStatus: String = "Loading..."
+    @Published var categoryColors: [Int: String] = [:]
     private var lastFetchedEPGUrls: [URL] = []
     
     
@@ -111,9 +123,13 @@ class ChannelViewModel: ObservableObject {
     }
     
     
-    @Published private var visualProgress: Double = 0
+    private var visualProgress: Double = 0        // internal only — not published
     private var epgClockTimer: AnyCancellable?
     private var smoothingTimer: AnyCancellable?
+
+    /// Observed only by the loading banner — isolates high-frequency progress
+    /// updates from the rest of the view hierarchy.
+    let epgState = EPGLoadingState()
     
     private var onRenameConfirm: ((String) -> Void)?
     private var renamedChannels: [Int: String] = [:]
@@ -123,18 +139,35 @@ class ChannelViewModel: ObservableObject {
     var activeMultiViewCount: Int { multiViewSlots.compactMap { $0 }.count }
     
     private var cancellables = Set<AnyCancellable>()
+    private var lastKnownAccountCount: Int = 0
     
     init() {
         loadSettings()
         startEPGClock()
         
         
+        // Seed with the current count and skip the publisher's replay of the
+        // existing value: without dropFirst, every app launch looked like a
+        // freshly-added account and kicked off a forced full reload + EPG
+        // update that raced the normal startup load — the loser's cleanup was
+        // discarded (stale loadID), leaving the "Loading Playlists…" pill
+        // spinning forever.
+        lastKnownAccountCount = AccountManager.shared.accounts.count
         AccountManager.shared.$accounts
+            .dropFirst()
             .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                
+            .sink { [weak self] newAccounts in
+                guard let self = self else { return }
+                let accountAdded = newAccounts.count > self.lastKnownAccountCount
+                self.lastKnownAccountCount = newAccounts.count
                 DispatchQueue.main.async {
-                    Task { await self?.loadActiveAccounts() }
+                    if accountAdded {
+                        // New login — force a full reload including EPG so the
+                        // freshly-added account's guide data loads immediately.
+                        Task { await self.loadActiveAccounts(force: true, performEpgCheck: true) }
+                    } else {
+                        Task { await self.loadActiveAccounts() }
+                    }
                 }
             }
             .store(in: &cancellables)
@@ -207,7 +240,25 @@ class ChannelViewModel: ObservableObject {
                             self.channels = cachedChans
                             self.categories = cachedCats
                             self.categorizeSports()
-                            
+                        }
+                    }
+                }
+
+                // Restore the guide from disk straight away (in parallel with
+                // the network fetch) so programme info is on screen at launch
+                // instead of appearing only after the full reload finishes.
+                if self.epgData.isEmpty {
+                    Task {
+                        let loaded = await Task.detached(priority: .userInitiated) {
+                            await EPGService().loadFromDisk()
+                        }.value
+                        if let cached = loaded, !cached.epg.isEmpty {
+                            await MainActor.run {
+                                if self.epgData.isEmpty {
+                                    self.epgData = cached.epg
+                                    self.epgNameMap = cached.map
+                                }
+                            }
                         }
                     }
                 }
@@ -217,6 +268,12 @@ class ChannelViewModel: ObservableObject {
                     self.isUpdatingEPG = true
                     self.loadingStatus = "Checking for updates..."
                     self.startSmoothingTimer()
+                } else if self.isUpdatingEPG {
+                    // A previous load was cancelled mid-EPG-update (its cleanup
+                    // is discarded once currentLoadID changes). This load owns
+                    // the state now — clear the stale banner.
+                    self.isUpdatingEPG = false
+                    self.stopSmoothingTimer()
                 }
             }
 
@@ -306,11 +363,20 @@ class ChannelViewModel: ObservableObject {
                     }
                 }
             }
-            
-            
+            // Pre-warm the featured carousel before the home screen appears.
+            // refreshFeaturedChannels snapshots data on the main actor then
+            // does the heavy O(channels) scan on a background thread, so this
+            // await does NOT block the main thread — it just suspends the load
+            // task until the background work finishes. isLoading = false fires
+            // only after the result is ready, so the home screen is smooth
+            // on first paint with no carousel pop-in.
+            if !Task.isCancelled && self.currentLoadID == loadID {
+                await self.refreshFeaturedChannels()
+            }
+
             await MainActor.run {
                 guard self.currentLoadID == loadID else { return }
-                
+
                 self.lastFullLoadTime = Date()
                 self.isLoading = false
                 if shouldUpdateEPG {
@@ -490,11 +556,181 @@ class ChannelViewModel: ObservableObject {
         return schedule.filter { $0.start >= current.stop }.sorted { $0.start < $1.start }.first
     }
 
-    
+    /// Re-computes the curated featured carousel on a background thread.
+    /// All required data is snapshotted on the main actor before the detached
+    /// task starts — the closure therefore needs no actor isolation.
+    /// Awaiting this before `isLoading = false` guarantees the carousel is
+    /// ready the instant the home screen first appears.
+    func refreshFeaturedChannels() async {
+        // Snapshot everything needed — avoids actor-crossing inside the detached task.
+        let channels    = self.channels
+        let hiddenIDs   = self.hiddenIDs
+        let categories  = self.categories
+        let epgData     = self.epgData
+        let epgNameMap  = self.epgNameMap
+        let currentTime = self.currentTime
+        let favoriteIDs = self.favoriteIDs
+        let recentIDs   = self.recentIDs
+
+        let picked = await Task.detached(priority: .userInitiated) {
+            // Fast lookups
+            let catLookup = Dictionary(uniqueKeysWithValues: categories.map { ($0.id, $0) })
+            let chanByID  = Dictionary(uniqueKeysWithValues: channels.map { ($0.id, $0) })
+            let visible   = channels.filter { !hiddenIDs.contains($0.id) }
+
+            // Inline EPG check — operates entirely on snapshotted value-types.
+            @inline(__always)
+            func hasLiveProgram(_ channel: StreamChannel) -> Bool {
+                let eID: String? = {
+                    if let id = channel.epgID, epgData[id] != nil { return id }
+                    if let d = epgNameMap[channel.name.lowercased()]  { return d }
+                    let c = NameCleaner.clean(channel.name).lowercased()
+                    return epgNameMap[c]
+                }()
+                guard let id = eID, let sched = epgData[id] else { return false }
+                return sched.first { currentTime >= $0.start && currentTime <= $0.stop } != nil
+            }
+
+            @inline(__always)
+            func groupOf(_ channel: StreamChannel) -> HomeCategoryGroup {
+                catLookup[channel.categoryID]
+                    .map { HomeCategoryGroup.classify($0) } ?? .other
+            }
+
+            // ── Personalization: weight genres by recency-ranked watch history.
+            // Most-recent watch gets the highest weight (1/(rank+1)). Bias toward
+            // genres the user actually watches without rigidly excluding others.
+            var genreScores: [HomeCategoryGroup: Double] = [:]
+            for (rank, id) in recentIDs.enumerated() {
+                guard let ch = chanByID[id], !hiddenIDs.contains(id) else { continue }
+                let g = groupOf(ch)
+                guard g != .other else { continue }
+                genreScores[g, default: 0] += 1.0 / Double(rank + 1)
+            }
+
+            // Cold-start defaults: popular news / local-broadcast / sports / kids,
+            // padded with movies/docs/lifestyle so the carousel still has variety
+            // for users with sparse libraries.
+            //
+            // Note: "local" channels (US ABC/NBC/CBS/Fox affiliates, regional UK,
+            // etc.) classify as `.news` via the broadcast-network keywords in
+            // HomeCategoryGroup.classify, so .news doubles as the local bucket.
+            let defaultGenres: [HomeCategoryGroup] = [.news, .sports, .kids, .lifestyle, .movies, .documentary, .international]
+
+            // Trigger personalization once the user has watched roughly three
+            // channels (weighted: 1 + 1/2 + 1/3 ≈ 1.83). Below that, defaults win.
+            let hasHistory = genreScores.values.reduce(0, +) >= 1.5
+
+            let preferredGenres: [HomeCategoryGroup]
+            if hasHistory {
+                let topUserGenres = genreScores.sorted { $0.value > $1.value }.map { $0.key }
+                var ordered = topUserGenres
+                for g in defaultGenres where !ordered.contains(g) { ordered.append(g) }
+                preferredGenres = ordered
+            } else {
+                preferredGenres = defaultGenres
+            }
+
+            // Bucket all visible channels by genre once — avoids repeatedly
+            // scanning the full channel list for each preferred genre.
+            var byGenre: [HomeCategoryGroup: [StreamChannel]] = [:]
+            for ch in visible {
+                let g = groupOf(ch)
+                byGenre[g, default: []].append(ch)
+            }
+
+            // Pick: walk preferredGenres, take the best live channel from each,
+            // falling back to any visible channel if no live ones exist. Cap 6.
+            var result: [StreamChannel] = []
+            var seen = Set<Int>()
+            for genre in preferredGenres {
+                guard let pool = byGenre[genre], !pool.isEmpty else { continue }
+                if let live = pool.first(where: { hasLiveProgram($0) && !seen.contains($0.id) }) {
+                    result.append(live); seen.insert(live.id)
+                } else if let any = pool.first(where: { !seen.contains($0.id) }) {
+                    result.append(any); seen.insert(any.id)
+                }
+                if result.count >= 6 { break }
+            }
+
+            // Pad to ≥5 with any other live channel (genre-agnostic) so the
+            // carousel still has hero-card-worthy content even when the user's
+            // top genres are sparse.
+            if result.count < 5 {
+                for ch in visible where !seen.contains(ch.id) {
+                    guard hasLiveProgram(ch) else { continue }
+                    result.append(ch); seen.insert(ch.id)
+                    if result.count >= 5 { break }
+                }
+            }
+
+            // Last resort — surface favourites for users with no EPG at all.
+            if result.isEmpty {
+                return Array(channels.filter { favoriteIDs.contains($0.id) }.prefix(5))
+            }
+            return result
+        }.value
+
+        // Prefetch carousel icons before flipping isLoading off so the home
+        // screen never appears with empty/loading hero cards. Bounded by a
+        // 2-second wall clock so a single slow CDN icon can't hold the
+        // loading screen forever — anything not back in time will just
+        // pop in once it does, but the home view appears on schedule.
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+            group.addTask {
+                await withTaskGroup(of: Void.self) { inner in
+                    for channel in picked {
+                        guard let url = channel.icon, !url.isEmpty else { continue }
+                        inner.addTask {
+                            await ImageCache.prefetchAndWait(urlString: url)
+                        }
+                    }
+                }
+            }
+            // Whichever finishes first wins — either all icons cached, or
+            // the 2s timeout fires.
+            await group.next()
+            group.cancelAll()
+        }
+
+        // Also prefetch a few Continue Watching icons so the second shelf
+        // is ready by the time the user scrolls past the carousel.
+        let recentIcons = self.recentIDs.prefix(8).compactMap { id in
+            channels.first(where: { $0.id == id })?.icon
+        }
+        Task.detached(priority: .background) {
+            await withTaskGroup(of: Void.self) { group in
+                for url in recentIcons where !url.isEmpty {
+                    group.addTask { await ImageCache.prefetchAndWait(urlString: url) }
+                }
+            }
+        }
+
+        self.featuredChannels = picked
+    }
+
+
+    /// Maximum number of results returned per result bucket (EPG matches and
+    /// channel-name matches). The UI never shows more than this and computing
+    /// past the cap just heats the device — a phone with a 10k-channel
+    /// playlist was previously scanning the entire list on every keystroke.
+    private static let searchResultCap: Int = 80
+
+    /// Minimum query length that triggers a full search. Single-character
+    /// queries match thousands of channels and are almost never useful — we
+    /// short-circuit them so typing the first letter doesn't kick off a
+    /// 10k-channel scan that gets cancelled on the second letter anyway.
+    private static let searchMinChars: Int = 2
+
     private func performSearch() {
         searchTask?.cancel()
-        
+
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Empty query — clear everything and bail. (Don't show a spinner.)
         if query.isEmpty {
             self.filteredEPGChannels = []
             self.filteredNameChannels = []
@@ -502,74 +738,100 @@ class ChannelViewModel: ObservableObject {
             self.isSearching = false
             return
         }
-        
+
+        // Sub-threshold query — clear results but keep `isSearching` false so
+        // the empty-results panel doesn't flash a skeleton. The user will hit
+        // the threshold on the next keystroke and we'll run for real then.
+        if query.count < Self.searchMinChars {
+            self.filteredEPGChannels = []
+            self.filteredNameChannels = []
+            self.filteredCategories = []
+            self.isSearching = false
+            return
+        }
+
         self.isSearching = true
         let searchQuery = query
-        
-        searchTask = Task.detached(priority: .userInitiated) { [weak self, searchQuery] in
+        let resultCap = Self.searchResultCap
+
+        searchTask = Task.detached(priority: .userInitiated) { [weak self, searchQuery, resultCap] in
             guard let self = self else { return }
-            
-            
-            try? await Task.sleep(nanoseconds: 200_000_000)
+
+            // Debounce — 300ms is the sweet spot for typing-driven search:
+            // long enough that a fast typist hits a few keys before any work
+            // happens, short enough that the result panel feels live.
+            try? await Task.sleep(nanoseconds: 300_000_000)
             guard !Task.isCancelled else { return }
-            
-            let allChannels = await self.channels
+
+            let allChannels   = await self.channels
             let allCategories = await self.categories
-            let hidden = await self.hiddenIDs
-            let epg = await self.epgData
-            let now = await self.currentTime
-            let manualOrder = await self.manualChannelOrder
-            let tokens = query.lowercased().components(separatedBy: " ").filter { !$0.isEmpty }
-            
+            let hidden        = await self.hiddenIDs
+            let epg           = await self.epgData
+            let now           = await self.currentTime
+            let manualOrder   = await self.manualChannelOrder
+            let tokens        = searchQuery.lowercased()
+                                    .components(separatedBy: " ")
+                                    .filter { !$0.isEmpty }
+
             var orderMap: [Int: Int] = [:]
             for (index, id) in manualOrder.enumerated() { orderMap[id] = index }
-            
-            var epgMatches: [StreamChannel] = []
+
+            var epgMatches:  [StreamChannel] = []
             var nameMatches: [StreamChannel] = []
-            var catMatches: [StreamCategory] = []
-            
+            var catMatches:  [StreamCategory] = []
+
+            // Cap-aware scan — once both buckets are full we can stop scanning
+            // entirely. Categories are tiny so we always finish those.
             for channel in allChannels {
                 if hidden.contains(channel.id) { continue }
-                
-                var currentProgramTitleLower = ""
-                if let eID = channel.epgID, let schedule = epg[eID] {
-                    if let program = schedule.first(where: { now >= $0.start && now <= $0.stop }) {
-                        currentProgramTitleLower = program.title.lowercased()
-                    }
-                }
-                
+
                 let lowerName = channel.searchNormalizedName
-                let lowerGuide = currentProgramTitleLower
-                
-                let guideMatch = tokens.allSatisfy { lowerGuide.contains($0) }
                 let nameMatch = tokens.allSatisfy { lowerName.contains($0) }
-                
-                if guideMatch { epgMatches.append(channel) }
-                else if nameMatch { nameMatches.append(channel) }
-            }
-            
-            for cat in allCategories {
-                if !cat.isHidden {
-                    let lowerCat = cat.name.lowercased()
-                    if tokens.allSatisfy({ lowerCat.contains($0) }) {
-                        catMatches.append(cat)
-                    }
+
+                // Skip the EPG dictionary lookup unless the channel has an
+                // EPG id at all — saves a hash probe per channel for
+                // playlists that don't ship guide data for every entry.
+                var guideMatch = false
+                if let eID = channel.epgID,
+                   let schedule = epg[eID],
+                   let program = schedule.first(where: { now >= $0.start && now <= $0.stop }) {
+                    let lowerGuide = program.title.lowercased()
+                    guideMatch = tokens.allSatisfy { lowerGuide.contains($0) }
+                }
+
+                if guideMatch {
+                    if epgMatches.count < resultCap { epgMatches.append(channel) }
+                } else if nameMatch {
+                    if nameMatches.count < resultCap { nameMatches.append(channel) }
+                }
+
+                // Early exit — both buckets full, nothing more to find.
+                if epgMatches.count >= resultCap && nameMatches.count >= resultCap {
+                    break
                 }
             }
-            
-            let sortedEPG = ChannelViewModel.prioritySort(epgMatches, order: manualOrder, precomputedOrderMap: orderMap)
+
+            for cat in allCategories where !cat.isHidden {
+                let lowerCat = cat.name.lowercased()
+                if tokens.allSatisfy({ lowerCat.contains($0) }) {
+                    catMatches.append(cat)
+                }
+            }
+
+            let sortedEPG  = ChannelViewModel.prioritySort(epgMatches,  order: manualOrder, precomputedOrderMap: orderMap)
             let sortedName = ChannelViewModel.prioritySort(nameMatches, order: manualOrder, precomputedOrderMap: orderMap)
-            
+
             guard !Task.isCancelled else { return }
-            
+
             let finalCatMatches = catMatches
             await MainActor.run {
-                self.filteredEPGChannels = sortedEPG
+                self.filteredEPGChannels  = sortedEPG
                 self.filteredNameChannels = sortedName
-                self.filteredCategories = finalCatMatches
+                self.filteredCategories   = finalCatMatches
                 self.isSearching = false
-                
-                
+
+                // Only persist queries the user clearly committed to — skip
+                // the partial-typing noise that fired on every keystroke.
                 if (!sortedEPG.isEmpty || !sortedName.isEmpty || !finalCatMatches.isEmpty) && searchQuery.count > 2 {
                     self.addRecentQuery(searchQuery)
                 }
@@ -1489,15 +1751,17 @@ class ChannelViewModel: ObservableObject {
             self.lastEPGUpdateTime = Date()
             self.epgProgress = 1.0
             self.visualProgress = 1.0
+            self.epgState.progress = 1.0   // ensure banner shows 100%
             self.epgData = result.epg
             self.epgNameMap = result.map
-            
+
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                 withAnimation(.spring()) { self.isUpdatingEPG = false }
                 self.stopSmoothingTimer()
+                self.epgState.progress = 0
             }
-            
-            self.isLoading = false 
+
+            self.isLoading = false
         }
     }
     
@@ -1508,7 +1772,7 @@ class ChannelViewModel: ObservableObject {
     
     
     var displayEPGProgress: Double {
-        return visualProgress
+        return epgState.progress
     }
 
     func loadSettings() {
@@ -1518,6 +1782,7 @@ class ChannelViewModel: ObservableObject {
         }
         self.renamedChannels = load("renamedChannels", type: [Int: String].self) ?? [:]
         self.renamedCategories = load("renamedCategories", type: [Int: String].self) ?? [:]
+        self.categoryColors = load("categoryColors", type: [Int: String].self) ?? [:]
         self.excludedSportsIDs = Set(load("excludedSportsIDs", type: [Int].self) ?? [])
         self.favoriteIDs = Set(load("favoriteChannelIDs", type: [Int].self) ?? [])
         self.hiddenIDs = Set(load("hiddenChannelIDs", type: [Int].self) ?? [])
@@ -1570,6 +1835,8 @@ class ChannelViewModel: ObservableObject {
     func hideChannel(_ id: Int) { hiddenIDs.insert(id); if let d = try? JSONEncoder().encode(Array(hiddenIDs)) { UserDefaults.standard.set(d, forKey: settingsPrefix + "hiddenChannelIDs") } }
     func unhideChannel(_ id: Int) { hiddenIDs.remove(id); if let d = try? JSONEncoder().encode(Array(hiddenIDs)) { UserDefaults.standard.set(d, forKey: settingsPrefix + "hiddenChannelIDs") } }
     func hideCategory(_ id: Int) { if let idx = categories.firstIndex(where: { $0.id == id }) { categories[idx].isHidden = true; saveCategorySettings() } }
+    func categoryColor(for id: Int) -> Color? { guard let hex = categoryColors[id] else { return nil }; return Color(hex: hex) }
+    func setCategoryColor(id: Int, hex: String?) { if let hex { categoryColors[id] = hex } else { categoryColors.removeValue(forKey: id) }; if let d = try? JSONEncoder().encode(categoryColors) { UserDefaults.standard.set(d, forKey: settingsPrefix + "categoryColors") } }
     func addToRecent(_ id: Int) { recentIDs.removeAll { $0 == id }; recentIDs.insert(id, at: 0); if recentIDs.count > 20 { recentIDs = Array(recentIDs.prefix(20)) }; if let d = try? JSONEncoder().encode(recentIDs) { UserDefaults.standard.set(d, forKey: settingsPrefix + "recentChannelIDs") } }
     func removeFromRecent(_ id: Int) { if let idx = recentIDs.firstIndex(of: id) { recentIDs.remove(at: idx); if let d = try? JSONEncoder().encode(recentIDs) { UserDefaults.standard.set(d, forKey: settingsPrefix + "recentChannelIDs") } } }
     
@@ -1705,21 +1972,25 @@ class ChannelViewModel: ObservableObject {
     }
     
     private func startSmoothingTimer() {
-        stopSmoothingTimer() 
+        stopSmoothingTimer()
         self.visualProgress = 0
         self.epgProgress = 0
-        smoothingTimer = Timer.publish(every: 0.016, on: .main, in: .common)
+        self.epgState.progress = 0
+        // 10 fps is imperceptibly smooth for a progress ring and avoids
+        // flooding ChannelViewModel.objectWillChange (which would force
+        // re-renders of every channel list, category grid, etc.).
+        smoothingTimer = Timer.publish(every: 0.1, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in
-                guard let self = self else { return }
-                if self.isUpdatingEPG {
-                    let diff = self.epgProgress - self.visualProgress
-                    if abs(diff) > 0.001 {
-                        self.visualProgress += diff * 0.04
-                    } else {
-                        self.visualProgress = self.epgProgress
-                    }
+                guard let self = self, self.isUpdatingEPG else { return }
+                let diff = self.epgProgress - self.visualProgress
+                if abs(diff) > 0.001 {
+                    self.visualProgress += diff * 0.25   // faster catch-up at 10 fps
+                } else {
+                    self.visualProgress = self.epgProgress
                 }
+                // Write only to the isolated state object — never to self.
+                self.epgState.progress = self.visualProgress
             }
     }
 
@@ -1747,5 +2018,72 @@ class ChannelViewModel: ObservableObject {
     private func stopSmoothingTimer() {
         smoothingTimer?.cancel()
         smoothingTimer = nil
+    }
+
+    func orderedFavoriteChannels() -> [StreamChannel] {
+        let favOrder = UserDefaults.standard.array(forKey: settingsPrefix + "favoriteChannelOrder") as? [Int] ?? []
+        let favSet = favoriteIDs
+        var orderMap: [Int: Int] = [:]
+        for (i, id) in favOrder.enumerated() { orderMap[id] = i }
+
+        return channels
+            .filter { favSet.contains($0.id) }
+            .sorted { a, b in
+                let ia = orderMap[a.id]
+                let ib = orderMap[b.id]
+                if let ia = ia, let ib = ib { return ia < ib }
+                if ia != nil { return true }
+                if ib != nil { return false }
+                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            }
+    }
+
+    func moveFavoriteChannels(from source: IndexSet, to destination: Int) {
+        var ordered = orderedFavoriteChannels()
+        ordered.move(fromOffsets: source, toOffset: destination)
+        let newOrder = ordered.map { $0.id }
+        UserDefaults.standard.set(newOrder, forKey: settingsPrefix + "favoriteChannelOrder")
+        objectWillChange.send()
+    }
+
+    func scheduledRecording(for game: ESPNEvent) -> Recording? {
+        let key = game.shortName.lowercased()
+        return RecordingManager.shared.recordings.first { rec in
+            rec.status == .scheduled &&
+            ((rec.programTitle?.lowercased() == key) || (rec.customTitle?.lowercased() == key))
+        }
+    }
+
+    func toggleGameRecording(game: ESPNEvent, sport: SportType) {
+        if let existing = scheduledRecording(for: game) {
+            RecordingManager.shared.deleteRecording(existing)
+            return
+        }
+
+        let home = game.homeCompetitor?.team?.shortDisplayName ?? game.homeCompetitor?.athlete?.shortName ?? ""
+        let away = game.awayCompetitor?.team?.shortDisplayName ?? game.awayCompetitor?.athlete?.shortName ?? ""
+        let hiddenCatIDs = Set(categories.filter { $0.isHidden }.map { $0.id })
+
+        guard let channel = ChannelViewModel.resolveBestMatch(
+            home: home, away: away, network: game.broadcastName,
+            channels: channels, hiddenIDs: hiddenIDs,
+            hiddenCatIDs: hiddenCatIDs,
+            epg: epgData, now: currentTime,
+            preferredLanguage: preferredLanguage, preferredQuality: preferredQuality
+        ) else {
+            showNoStreamsAlert = true
+            return
+        }
+
+        let startTime = game.gameDate
+        let endTime = startTime.addingTimeInterval(3 * 3600)
+
+        RecordingManager.shared.scheduleRecording(
+            channel: channel,
+            startTime: startTime,
+            endTime: endTime,
+            programTitle: game.shortName,
+            category: .sports
+        )
     }
 }

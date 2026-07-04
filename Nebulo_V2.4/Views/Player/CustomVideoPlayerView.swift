@@ -5,16 +5,25 @@ import KSPlayer
 struct CustomVideoPlayerView: SwiftUI.View {
     let channel: StreamChannel
     var viewModel: ChannelViewModel? = nil
+    var scoreViewModel: ScoreViewModel? = nil
     var epgTime: Date = Date()
     var namespace: Namespace.ID? = nil
     var onDismiss: (() -> Void)? = nil
     var onPlayChannel: ((StreamChannel) -> Void)? = nil
-    
+    /// When true: suppresses the record button and active-recording URL hijack.
+    var isRecordingPlayback: Bool = false
+    /// When true: stays fullscreen in portrait (skips the split video+info layout).
+    var forceFullscreen: Bool = false
+    /// Optional real channel passed to PlayerInfoPanel in recording playback mode,
+    /// so EPG / schedule / channel list reflect the actual live channel.
+    var infoChannel: StreamChannel? = nil
+
     @Binding var showQuickSwitcher: Bool
-    
-    
+
+
     @ObservedObject var playerManager = NebuloPlayerEngine.shared
-    
+
+    @State private var currentChannel: StreamChannel?
     @State private var showControls = true
     @State private var offset: CGSize = .zero
     @State private var timer: AnyCancellable?
@@ -22,189 +31,195 @@ struct CustomVideoPlayerView: SwiftUI.View {
     @State private var descriptionHeight: CGFloat = 0
     @State private var currentStreamURL: URL?
     @Environment(\.scenePhase) var scenePhase
-    
-    
+
+
     @State private var quickSwitcherOffset: CGFloat = 200
     @State private var switcherCategory: StreamCategory = StreamCategory(id: -2, name: "Recently Watched")
     @State private var showCategoryPicker = false
     @State private var frozenRecentIDs: [Int] = []
     @State private var switcherChannels: [StreamChannel] = []
-    
-    
+
+
     @State private var isMenuOpen = false
     @State private var showSubtitlePanel = false
+    @State private var showAudioPanel = false
     @State private var showResolutionPanel = false
     @State private var showAspectRatioPanel = false
     @State private var captionContainerSize: CGSize = CGSize(width: 600, height: 150)
     @State private var isCaptionResizeMode = false
-    
-    
+
+    /// In portrait, if true: video takes full screen (current behavior).
+    /// If false: video is at top in 16:9, info panel is below.
+    @State private var isFullscreenInPortrait = false
+
     @State private var dismissalTask: Task<Void, Never>? = nil
-    
-    
+
+
     @State private var isScrubbing = false
     @State private var draggingProgress: Double? = nil
-    
-    @AppStorage("accentColor") private var accentHex = "#007AFF"
+
+    @AppStorage("accentColor") private var accentHex = "#FFFFFF"
     var accentColor: Color { Color(hex: accentHex) ?? .blue }
+
+    // MARK: - Apple-like dismiss transform
+    //
+    // Pattern follows iOS native sheet/Music-app dismissal:
+    //   • Drag phase: player follows the finger 1:1 vertically with a subtle
+    //     depth pull-back (gentle scale + corner radius growth). No horizontal
+    //     drift, no anchor tricks — keeps the motion feeling rooted to the touch.
+    //   • Commit:   springs off the bottom of the screen with momentum,
+    //     swapping to the miniplayer just as the slide finishes.
+    //   • Cancel:   springs back to identity.
+    //
+    // Trying to morph the source view into the destination view (YouTube/Music's
+    // illusion) is fragile in SwiftUI without matchedGeometryEffect on the
+    // underlying AVPlayer layer. Instead we slide the source cleanly away and
+    // let the miniplayer animate in independently — the same playback engine
+    // continues, so the audio/video feels continuous regardless.
+
+    /// 0 = idle, 1 = ~mid-drag.  Drives subtle scale + corner radius only.
+    /// Capped at 1 so the visuals don't keep growing past the threshold.
+    private var dragProgress: CGFloat {
+        let h = max(0, offset.height)
+        return min(h / 240, 1)
+    }
+
+    /// Subtle scale-down for depth (1.0 → 0.94). Apple uses this on most
+    /// modal dismissals — small but recognisable.
+    private var dismissScale: CGFloat {
+        1.0 - dragProgress * 0.06
+    }
+
+    /// Corner radius grows so the player looks like a "card" being pulled away.
+    private var dismissCornerRadius: CGFloat {
+        dragProgress * 16
+    }
     
     var body: some SwiftUI.View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            
-            
-            UnifiedPlayerViewBridge()
-                .applyIf(namespace != nil) { $0.matchedGeometryEffect(id: "videoPlayer", in: namespace!) }
-                .ignoresSafeArea()
-                .persistentSystemOverlays(.hidden)
-            
-            
-            PlayerControlsView(
-                playerManager: playerManager,
-                channel: channel,
-                viewModel: viewModel,
-                showControls: $showControls,
-                showSubtitlePanel: $showSubtitlePanel,
-                showResolutionPanel: $showResolutionPanel,
-                showAspectRatioPanel: $showAspectRatioPanel,
-                showFullDescription: $showFullDescription,
-                isScrubbing: $isScrubbing,
-                draggingProgress: $draggingProgress,
-                onDismiss: { dismissAnimate() },
-                togglePlay: { togglePlay() },
-                toggleControls: { toggleControls() },
-                seekForward: { playerManager.seek(to: playerManager.currentTime + 15); resetTimer() },
-                seekBackward: { playerManager.seek(to: playerManager.currentTime - 15); resetTimer() }
-            )
-            
-            
-            if playerManager.isBuffering {
-                CustomSpinner(color: .white, lineWidth: 5, size: 50)
-                    .frame(width: 82, height: 82)
-                    .modifier(GlassEffect(cornerRadius: 42, isSelected: true, accentColor: nil))
-                    .ignoresSafeArea()
-                    .allowsHitTesting(false)
-            }
-            
-            
-            if showQuickSwitcher {
-                Color.black.opacity(0.01).ignoresSafeArea().onTapGesture { withAnimation { showQuickSwitcher = false } }
-                
-                QuickSwitcherView(
-                    channels: switcherChannels,
-                    currentChannelID: channel.id,
-                    switcherCategory: $switcherCategory,
-                    categories: viewModel?.categories ?? [],
-                    viewModel: viewModel,
-                    onPlay: { c in
-                        UISelectionFeedbackGenerator().selectionChanged()
-                        onPlayChannel?(c)
-                    }
-                )
-                .frame(maxHeight: .infinity, alignment: .bottom)
-                .offset(y: quickSwitcherOffset)
-                .transition(.move(edge: .bottom))
-                .gesture(
-                    DragGesture()
-                        .onChanged { val in
-                            if val.translation.height > 0 { quickSwitcherOffset = min(200, val.translation.height) }
+        GeometryReader { geo in
+            let isLandscape = geo.size.width > geo.size.height
+            let useSplit = !isLandscape && !isFullscreenInPortrait && !forceFullscreen
+
+            ZStack {
+                Color.black.ignoresSafeArea()
+
+                if useSplit {
+                    splitLayoutWithBuffering(geo: geo)
+                } else {
+                    fullscreenLayoutWithBuffering
+                }
+
+                if showQuickSwitcher {
+                    Color.black.opacity(0.01).ignoresSafeArea().onTapGesture { withAnimation { showQuickSwitcher = false } }
+
+                    QuickSwitcherView(
+                        channels: switcherChannels,
+                        currentChannelID: (currentChannel ?? channel).id,
+                        switcherCategory: $switcherCategory,
+                        categories: viewModel?.categories ?? [],
+                        viewModel: viewModel,
+                        onPlay: { c in
+                            currentChannel = c
+                            UISelectionFeedbackGenerator().selectionChanged()
+                            onPlayChannel?(c)
                         }
-                        .onEnded { val in
-                            if val.translation.height > 50 { withAnimation { showQuickSwitcher = false } }
-                            else { withAnimation { quickSwitcherOffset = 0 } }
-                        }
-                )
-            }
-            
-            
-            if showSubtitlePanel {
-                settingsPanelOverlay {
-                    SettingsList(
-                        items: playerManager.availableSubtitles,
-                        selectedItem: playerManager.currentSubtitle,
-                        title: "Subtitles",
-                        onSelect: { sub in playerManager.selectSubtitle(sub) },
-                        itemLabel: { $0.name }
                     )
-                } onClose: { showSubtitlePanel = false }
-            }
-            
-            
-            if showResolutionPanel {
-                settingsPanelOverlay {
-                    SettingsList(
-                        items: playerManager.availableQualities,
-                        selectedItem: playerManager.currentQuality,
-                        title: "Quality",
-                        onSelect: { q in
-                            playerManager.setQuality(q)
-                            withAnimation { showResolutionPanel = false }
-                            resetTimer()
-                        },
-                        itemLabel: { $0.rawValue }
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .offset(y: quickSwitcherOffset)
+                    .transition(.move(edge: .bottom))
+                    .gesture(
+                        DragGesture()
+                            .onChanged { val in
+                                if val.translation.height > 0 { quickSwitcherOffset = min(200, val.translation.height) }
+                            }
+                            .onEnded { val in
+                                if val.translation.height > 50 { withAnimation { showQuickSwitcher = false } }
+                                else { withAnimation { quickSwitcherOffset = 0 } }
+                            }
                     )
-                } onClose: { showResolutionPanel = false }
-            }
-            
-            
-            if showAspectRatioPanel {
-                settingsPanelOverlay {
-                    SettingsList(
-                        items: NebuloPlayerEngine.VideoAspectRatio.allCases,
-                        selectedItem: playerManager.currentAspectRatio,
-                        title: "Aspect Ratio",
-                        onSelect: { ratio in
-                            playerManager.setAspectRatio(ratio)
-                            withAnimation { showAspectRatioPanel = false }
-                            resetTimer()
-                        },
-                        itemLabel: { $0.rawValue }
-                    )
-                } onClose: { showAspectRatioPanel = false }
+                }
+
+                if showSubtitlePanel {
+                    settingsPanelOverlay {
+                        SettingsList(
+                            items: playerManager.availableSubtitles,
+                            selectedItem: playerManager.currentSubtitle,
+                            title: "Subtitles",
+                            onSelect: { sub in playerManager.selectSubtitle(sub) },
+                            itemLabel: { $0.name }
+                        )
+                    } onClose: { showSubtitlePanel = false }
+                }
+
+                if showAudioPanel {
+                    settingsPanelOverlay {
+                        SettingsList(
+                            items: playerManager.availableAudioTracks,
+                            selectedItem: playerManager.currentAudioTrack,
+                            title: "Audio",
+                            onSelect: { track in playerManager.selectAudioTrack(track) },
+                            itemLabel: { $0.name }
+                        )
+                    } onClose: { showAudioPanel = false }
+                }
+
+                if showResolutionPanel {
+                    settingsPanelOverlay {
+                        SettingsList(
+                            items: playerManager.availableQualities,
+                            selectedItem: playerManager.currentQuality,
+                            title: "Quality",
+                            onSelect: { q in
+                                playerManager.setQuality(q)
+                                withAnimation { showResolutionPanel = false }
+                                resetTimer()
+                            },
+                            itemLabel: { $0.rawValue }
+                        )
+                    } onClose: { showResolutionPanel = false }
+                }
+
+                if showAspectRatioPanel {
+                    settingsPanelOverlay {
+                        SettingsList(
+                            items: NebuloPlayerEngine.VideoAspectRatio.allCases,
+                            selectedItem: playerManager.currentAspectRatio,
+                            title: "Aspect Ratio",
+                            onSelect: { ratio in
+                                playerManager.setAspectRatio(ratio)
+                                withAnimation { showAspectRatioPanel = false }
+                                resetTimer()
+                            },
+                            itemLabel: { $0.rawValue }
+                        )
+                    } onClose: { showAspectRatioPanel = false }
+                }
             }
         }
+        // Apple-like dismiss transform applied to the whole view:
+        //   • finger-tracked vertical translation
+        //   • subtle scale-down for depth
+        //   • corner radius growth so it feels like a card being pulled away
+        // The fullScreenCover's own slide-down handles the final removal once
+        // we set selectedChannel = nil.
+        .scaleEffect(dismissScale)
+        .offset(y: offset.height)
+        .clipShape(RoundedRectangle(cornerRadius: dismissCornerRadius, style: .continuous))
         .ignoresSafeArea()
         .statusBar(hidden: true)
         .preferredColorScheme(.dark)
         .tint(.white)
-        .offset(y: offset.height)
-        .gesture(DragGesture().onChanged { val in
-            if showQuickSwitcher { return }
-            
-            if val.startLocation.y < 60 { return }
-            
-            if val.translation.height > 0 && abs(val.translation.height) > abs(val.translation.width) { offset = val.translation }
-        }
-        .onEnded { val in 
-            if showQuickSwitcher { return }
-            if val.startLocation.y < 60 { return }
-            
-            if val.translation.height > 100 && abs(val.translation.height) > abs(val.translation.width) { 
-                
-                withAnimation(.easeInOut(duration: 0.35)) {
-                    viewModel?.miniPlayerChannel = channel
-                    onDismiss?()
-                }
-            } else if val.translation.height < -100 && abs(val.translation.height) > abs(val.translation.width) {
-                frozenRecentIDs = viewModel?.recentIDs ?? []
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                    showQuickSwitcher = true
-                    quickSwitcherOffset = 0
-                    showControls = true
-                    timer?.cancel()
-                }
-            } else if val.translation.width < -50 && abs(val.translation.width) > abs(val.translation.height) { 
-                switchChannel(offset: 1); withAnimation { offset = .zero } 
-            } else if val.translation.width > 50 && abs(val.translation.width) > abs(val.translation.height) { 
-                switchChannel(offset: -1); withAnimation { offset = .zero } 
-            } else { withAnimation { offset = .zero } } 
-        })
+        .defersSystemGesturesIfAvailable()
+        .simultaneousGesture(playerSwipeGesture)
         .onAppear {
+            // Unlock landscape so the player can rotate while watching.
+            PlayerOrientationManager.shared.allowsLandscape = true
+
             setupPlayer()
-            if showQuickSwitcher { 
+            if showQuickSwitcher {
                 frozenRecentIDs = viewModel?.recentIDs ?? []
                 quickSwitcherOffset = 0
-                showControls = false 
+                showControls = false
             } else {
                 showControls = true
                 resetTimer()
@@ -213,14 +228,26 @@ struct CustomVideoPlayerView: SwiftUI.View {
         }
         .onDisappear {
             dismissalTask?.cancel()
-            
-            
+
+            // Re-lock to portrait now that the player is gone.
+            PlayerOrientationManager.shared.allowsLandscape = false
+            lockToPortrait()
+
             if scenePhase == .active && viewModel?.miniPlayerChannel == nil && viewModel?.triggerMultiView != true {
                 playerManager.stop()
             }
             timer?.cancel()
         }
-        .onChangeCompat(of: channel) { _ in 
+        .onAppear {
+            if currentChannel == nil {
+                currentChannel = channel
+            }
+        }
+        .onChangeCompat(of: channel) { newChannel in
+            // If parent updates the channel prop, sync currentChannel
+            currentChannel = newChannel
+        }
+        .onChangeCompat(of: currentChannel) { _ in
             setupPlayer()
             withAnimation { showControls = true }
             resetTimer()
@@ -248,12 +275,287 @@ struct CustomVideoPlayerView: SwiftUI.View {
         }
     }
     
+    // MARK: - Layouts
+
+    /// Original full-bleed layout: video fills the screen, controls overlay it.
+    /// Used in landscape orientation, and in portrait when the user expands to fullscreen.
+    @ViewBuilder
+    private var fullscreenLayout: some View {
+        UnifiedPlayerViewBridge()
+            .applyIf(namespace != nil) { $0.matchedGeometryEffect(id: "videoPlayer", in: namespace!) }
+            .ignoresSafeArea()
+            .persistentSystemOverlays(.hidden)
+
+        PlayerControlsView(
+            playerManager: playerManager,
+            channel: currentChannel ?? channel,
+            viewModel: viewModel,
+            isRecordingPlayback: isRecordingPlayback,
+            isInlineMode: false,
+            isFullscreenInPortrait: $isFullscreenInPortrait,
+            showControls: $showControls,
+            showSubtitlePanel: $showSubtitlePanel,
+            showResolutionPanel: $showResolutionPanel,
+            showAspectRatioPanel: $showAspectRatioPanel,
+            showFullDescription: $showFullDescription,
+            isScrubbing: $isScrubbing,
+            draggingProgress: $draggingProgress,
+            onDismiss: { dismissAnimate() },
+            togglePlay: { togglePlay() },
+            toggleControls: { toggleControls() },
+            seekForward: { playerManager.seek(to: playerManager.currentTime + 15); resetTimer() },
+            seekBackward: { playerManager.seek(to: playerManager.currentTime - 15); resetTimer() }
+        )
+
+        // Portrait fullscreen pushes the close/AirPlay/Mini/Multi-view/expand
+        // row to ~60pt + 44pt = 104pt. Landscape fullscreen pushes it to
+        // ~40pt + 44pt = 84pt. Putting the score badge at 80pt overlapped
+        // both — drop it below the buttons.
+        liveScoreOverlay(topInset: isFullscreenInPortrait ? 120 : 90)
+    }
+
+    /// Wrapper for fullscreen layout with buffering spinner properly positioned
+    @ViewBuilder
+    private var fullscreenLayoutWithBuffering: some View {
+        ZStack {
+            fullscreenLayout
+
+            if playerManager.isBuffering && !playerManager.isPlaying && !playerManager.userPaused {
+                CustomSpinner(color: .white, lineWidth: 5, size: 50)
+                    .frame(width: 82, height: 82)
+                    .modifier(GlassEffect(cornerRadius: 42, isSelected: true, accentColor: nil))
+                    .allowsHitTesting(false)
+                    .transition(.opacity.animation(.easeInOut(duration: 0.3)))
+            }
+        }
+    }
+
+    /// Wrapper for split layout with buffering spinner positioned at video center
+    @ViewBuilder
+    private func splitLayoutWithBuffering(geo: GeometryProxy) -> some View {
+        let videoWidth = geo.size.width
+        let videoHeight = videoWidth * 9.0 / 16.0
+
+        ZStack {
+            splitLayout(geo: geo)
+
+            // Buffering spinner positioned at the center of the video area in portrait split mode
+            if playerManager.isBuffering && !playerManager.isPlaying && !playerManager.userPaused {
+                VStack {
+                    let topInset = max(geo.safeAreaInsets.top + 12, 60)
+                    Spacer()
+                        .frame(height: topInset + videoHeight / 2 - 41) // Center in video area
+
+                    CustomSpinner(color: .white, lineWidth: 5, size: 50)
+                        .frame(width: 82, height: 82)
+                        .modifier(GlassEffect(cornerRadius: 42, isSelected: true, accentColor: nil))
+                        .allowsHitTesting(false)
+                        .transition(.opacity.animation(.easeInOut(duration: 0.3)))
+
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    /// Live ESPN score badge — only shown when `ScoreViewModel.liveGame(for:)` finds a match.
+    /// In portrait bottom mode, always shown. In fullscreen/landscape, only shown when controls are visible.
+    @ViewBuilder
+    private func liveScoreOverlay(topInset: CGFloat, isPortraitBottom: Bool = false) -> some View {
+        let shouldShow = isPortraitBottom ? true : showControls
+
+        if shouldShow,
+           let svm = scoreViewModel,
+           let game = svm.liveGame(for: currentChannel ?? channel, currentEPGTitle: viewModel?.getCurrentProgram(for: currentChannel ?? channel)?.title) {
+            if isPortraitBottom {
+                // Bottom position for portrait split mode — always visible
+                VStack {
+                    LiveScoreBadge(game: game)
+                        .padding(.vertical, 12)
+                        .padding(.horizontal, 16)
+                }
+                .frame(maxWidth: .infinity)
+                .background(Color.black.opacity(0.3))
+                .allowsHitTesting(false)
+                .transition(.opacity)
+            } else {
+                // Top position for landscape/fullscreen — shown when controls visible
+                VStack {
+                    LiveScoreBadge(game: game)
+                        .padding(.top, topInset)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
+                .allowsHitTesting(false)
+                .transition(.opacity)
+            }
+        }
+    }
+
+    /// Portrait split layout: video at top in 16:9, info panel below.
+    @ViewBuilder
+    private func splitLayout(geo: GeometryProxy) -> some View {
+        let videoWidth = geo.size.width
+        let videoHeight = videoWidth * 9.0 / 16.0
+        let topInset = max(geo.safeAreaInsets.top + 12, 60) // Account for dynamic island with extra padding
+
+        VStack(spacing: 0) {
+            // Spacer to push the video below the dynamic island
+            Color.black
+                .frame(height: topInset)
+
+            // Video region — same controls overlay, but in inline mode (no bottom row of pills)
+            ZStack {
+                Color.black
+                UnifiedPlayerViewBridge()
+                    .applyIf(namespace != nil) { $0.matchedGeometryEffect(id: "videoPlayer", in: namespace!) }
+                    .frame(width: videoWidth, height: videoHeight)
+                    .clipped()
+
+                PlayerControlsView(
+                    playerManager: playerManager,
+                    channel: currentChannel ?? channel,
+                    viewModel: viewModel,
+                    isRecordingPlayback: isRecordingPlayback,
+                    isInlineMode: true,
+                    isFullscreenInPortrait: $isFullscreenInPortrait,
+                    showControls: $showControls,
+                    showSubtitlePanel: $showSubtitlePanel,
+                    showResolutionPanel: $showResolutionPanel,
+                    showAspectRatioPanel: $showAspectRatioPanel,
+                    showFullDescription: $showFullDescription,
+                    isScrubbing: $isScrubbing,
+                    draggingProgress: $draggingProgress,
+                    onDismiss: { dismissAnimate() },
+                    togglePlay: { togglePlay() },
+                    toggleControls: { toggleControls() },
+                    seekForward: { playerManager.seek(to: playerManager.currentTime + 15); resetTimer() },
+                    seekBackward: { playerManager.seek(to: playerManager.currentTime - 15); resetTimer() }
+                )
+            }
+            .frame(width: videoWidth, height: videoHeight)
+
+            // Live score badge at bottom of video in portrait split mode
+            liveScoreOverlay(topInset: 0, isPortraitBottom: true)
+
+            // Info panel below the video.
+            // For recording playback, infoChannel carries the real live channel so
+            // EPG schedule, channels, and recordings show meaningful content.
+            if let vm = viewModel {
+                PlayerInfoPanel(
+                    channel: infoChannel ?? currentChannel ?? channel,
+                    onPlayChannel: onPlayChannel,
+                    viewModel: vm,
+                    playerManager: playerManager,
+                    isRecordingPlayback: isRecordingPlayback,
+                    showSubtitlePanel: $showSubtitlePanel,
+                    showAudioPanel: $showAudioPanel
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                Color.black
+            }
+        }
+    }
+
+    // MARK: - Player swipe gesture
+
+    /// Drag gesture for swipe-down (mini-player), swipe-up (quick switcher), swipe-left/right (channel switch).
+    /// In portrait split mode, only swipe-down from video area is allowed to minimize.
+    private var playerSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 20)
+            .onChanged { val in
+                if showQuickSwitcher { return }
+                if val.startLocation.y < 60 { return }
+                // Don't interfere with system home gesture at bottom
+                let screenHeight = UIScreen.main.bounds.height
+                if val.startLocation.y > screenHeight - 50 { return }
+
+                // In portrait split mode, only process swipes from video area (not info panel)
+                let isLandscape = UIScreen.main.bounds.width > UIScreen.main.bounds.height
+                if isPortraitSplitMode && !isLandscape {
+                    let videoAreaHeight = UIScreen.main.bounds.width * 9.0 / 16.0 + max(60 + 12, 60)
+                    if val.startLocation.y > videoAreaHeight { return }
+                    // Only allow downward swipes in portrait split
+                    if val.translation.height <= 0 { return }
+                }
+
+                if val.translation.height > 0 && abs(val.translation.height) > abs(val.translation.width) {
+                    // Track the drag 1:1; the computed `dismissScale` derives from this.
+                    offset = CGSize(width: 0, height: val.translation.height)
+                }
+            }
+            .onEnded { val in
+                if showQuickSwitcher { return }
+                if val.startLocation.y < 60 { return }
+                // Don't interfere with system home gesture at bottom
+                let screenHeight = UIScreen.main.bounds.height
+                if val.startLocation.y > screenHeight - 50 { return }
+
+                // In portrait split mode, only process swipes from video area
+                let isLandscape = UIScreen.main.bounds.width > UIScreen.main.bounds.height
+                if isPortraitSplitMode && !isLandscape {
+                    let videoAreaHeight = UIScreen.main.bounds.width * 9.0 / 16.0 + max(60 + 12, 60)
+                    if val.startLocation.y > videoAreaHeight { return }
+                }
+
+                // YouTube-style commit: trigger miniplayer if the user passed
+                // the threshold OR flicked downward fast.
+                let velocityY = val.predictedEndTranslation.height - val.translation.height
+                let committed = (val.translation.height > 120 && abs(val.translation.height) > abs(val.translation.width))
+                              || (velocityY > 200 && val.translation.height > 40)
+
+                if committed {
+                    // Apple-style hand-off:
+                    //   1. Stage the miniplayer with a soft spring so it
+                    //      animates into the corner from below.
+                    //   2. Simultaneously dismiss the cover — its built-in
+                    //      slide-down animation carries the player off the
+                    //      bottom of the screen.
+                    // The two motions are concurrent and complementary —
+                    // exactly how Apple Music's Now Playing → MiniBar feels.
+                    withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
+                        viewModel?.miniPlayerChannel = channel
+                    }
+                    onDismiss?()
+                    offset = .zero
+                } else if val.translation.height < -100 && abs(val.translation.height) > abs(val.translation.width) {
+                    frozenRecentIDs = viewModel?.recentIDs ?? []
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                        showQuickSwitcher = true
+                        quickSwitcherOffset = 0
+                        showControls = true
+                        timer?.cancel()
+                    }
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) { offset = .zero }
+                } else if val.translation.width < -50 && abs(val.translation.width) > abs(val.translation.height) {
+                    switchChannel(offset: 1)
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) { offset = .zero }
+                } else if val.translation.width > 50 && abs(val.translation.width) > abs(val.translation.height) {
+                    switchChannel(offset: -1)
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) { offset = .zero }
+                } else {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) { offset = .zero }
+                }
+            }
+    }
+
+    /// Tracks portrait-split mode so the player swipe gesture can be disabled
+    /// (the info panel ScrollView needs the touches).
+    private var isPortraitSplitMode: Bool {
+        let bounds = UIScreen.main.bounds
+        let isLandscape = bounds.width > bounds.height
+        return !isLandscape && !isFullscreenInPortrait
+    }
+
     func updateMetadata() {
-        let prog = viewModel?.getCurrentProgram(for: channel)?.title
+        let activeChannel = currentChannel ?? channel
+        let prog = viewModel?.getCurrentProgram(for: activeChannel)?.title
         if let p = prog, !p.isEmpty {
-            playerManager.updateNowPlayingMetadata(title: p, subtitle: channel.name, imageURL: channel.icon)
+            playerManager.updateNowPlayingMetadata(title: p, subtitle: activeChannel.name, imageURL: activeChannel.icon)
         } else {
-            playerManager.updateNowPlayingMetadata(title: channel.name, subtitle: nil, imageURL: channel.icon)
+            playerManager.updateNowPlayingMetadata(title: activeChannel.name, subtitle: nil, imageURL: activeChannel.icon)
         }
     }
     
@@ -287,18 +589,32 @@ struct CustomVideoPlayerView: SwiftUI.View {
     func switchChannel(offset: Int) {
         guard let vm = viewModel else { return }
         let allChannels = vm.channels.filter { !vm.hiddenIDs.contains($0.id) }
-        guard let idx = allChannels.firstIndex(where: { $0.id == channel.id }) else { return }
+        let activeChannel = currentChannel ?? channel
+        guard let idx = allChannels.firstIndex(where: { $0.id == activeChannel.id }) else { return }
         var nextIdx = idx + offset
         if nextIdx < 0 { nextIdx = allChannels.count - 1 }
         if nextIdx >= allChannels.count { nextIdx = 0 }
-        if allChannels.indices.contains(nextIdx) { onPlayChannel?(allChannels[nextIdx]); resetTimer() }
+        if allChannels.indices.contains(nextIdx) {
+            currentChannel = allChannels[nextIdx]
+            onPlayChannel?(allChannels[nextIdx])
+            resetTimer()
+        }
     }
     
     func dismissAnimate() {
-        withAnimation(.easeInOut(duration: 0.35)) { offset = CGSize(width: 0, height: UIScreen.main.bounds.height) }
-        dismissalTask = Task {
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            if !Task.isCancelled { await MainActor.run { onDismiss?() } }
+        // Close the player completely
+        onDismiss?()
+    }
+
+    /// Forces the device back to portrait after the player is dismissed.
+    private func lockToPortrait() {
+        if #available(iOS 16.0, *) {
+            UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .forEach { $0.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) }
+        } else {
+            UIDevice.current.setValue(UIInterfaceOrientation.portrait.rawValue, forKey: "orientation")
+            UIViewController.attemptRotationToDeviceOrientation()
         }
     }
     
@@ -329,26 +645,31 @@ struct CustomVideoPlayerView: SwiftUI.View {
     
     func setupPlayer() {
         KSOptions.isAutoPlay = true
+        let activeChannel = currentChannel ?? channel
         Task {
-            
-            if let localURL = RecordingManager.shared.getActiveRecordingURL(for: channel) {
+
+            // Skip active-recording redirect when already in recording-playback mode
+            // (avoids an infinite loop where playing a completed .ts file would be
+            //  redirected back to the still-running live recorder for that channel).
+            if !isRecordingPlayback,
+               let localURL = RecordingManager.shared.getActiveRecordingURL(for: activeChannel) {
                 print("⏺️ [Player] Playing from active recording file: \(localURL.lastPathComponent)")
                 await MainActor.run {
                     self.currentStreamURL = localURL
-                    
+
                     playerManager.play(url: localURL)
-                    
-                    let prog = viewModel?.getCurrentProgram(for: channel)?.title
+
+                    let prog = viewModel?.getCurrentProgram(for: activeChannel)?.title
                     if let p = prog, !p.isEmpty {
-                        playerManager.updateNowPlayingMetadata(title: p, subtitle: channel.name, imageURL: channel.icon)
+                        playerManager.updateNowPlayingMetadata(title: p, subtitle: activeChannel.name, imageURL: activeChannel.icon)
                     } else {
-                        playerManager.updateNowPlayingMetadata(title: channel.name, subtitle: nil, imageURL: channel.icon)
+                        playerManager.updateNowPlayingMetadata(title: activeChannel.name, subtitle: nil, imageURL: activeChannel.icon)
                     }
                 }
                 return
             }
-            
-            let resolvedURLString = channel.streamURL
+
+            let resolvedURLString = activeChannel.streamURL
             guard let targetURL = URL(string: resolvedURLString) else { return }
             
             
@@ -390,13 +711,14 @@ struct CustomVideoPlayerView: SwiftUI.View {
                     
                     playerManager.play(url: targetURL)
                 }
-                
-                
-                let prog = viewModel?.getCurrentProgram(for: channel)?.title
+
+
+
+                let prog = viewModel?.getCurrentProgram(for: activeChannel)?.title
                 if let p = prog, !p.isEmpty {
-                    playerManager.updateNowPlayingMetadata(title: p, subtitle: channel.name, imageURL: channel.icon)
+                    playerManager.updateNowPlayingMetadata(title: p, subtitle: activeChannel.name, imageURL: activeChannel.icon)
                 } else {
-                    playerManager.updateNowPlayingMetadata(title: channel.name, subtitle: nil, imageURL: channel.icon)
+                    playerManager.updateNowPlayingMetadata(title: activeChannel.name, subtitle: nil, imageURL: activeChannel.icon)
                 }
             }
         }
@@ -410,9 +732,7 @@ struct QuickSwitcherView: View {
     let categories: [StreamCategory]
     var viewModel: ChannelViewModel?
     let onPlay: (StreamChannel) -> Void
-    
-    @State private var showCategoryList = false
-    
+
     var body: some View {
         VStack(spacing: 0) {
             Capsule()
@@ -420,12 +740,28 @@ struct QuickSwitcherView: View {
                 .frame(width: 40, height: 5)
                 .padding(.top, 10)
                 .padding(.bottom, 10)
-            
+
             HStack {
-                Button(action: { withAnimation { showCategoryList.toggle() } }) {
-                    HStack(spacing: 4) { 
+                Menu {
+                    Picker("Category", selection: $switcherCategory) {
+                        Section {
+                            Label("Recently Watched", systemImage: "clock")
+                                .tag(StreamCategory(id: -2, name: "Recently Watched"))
+                            Label("Favorites", systemImage: "star.fill")
+                                .tag(StreamCategory(id: -4, name: "Favorites"))
+                        }
+                        if !categories.isEmpty {
+                            Section {
+                                ForEach(categories.filter { !$0.isHidden }) { cat in
+                                    Text(cat.name).tag(cat)
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
                         Text(switcherCategory.name).font(.headline).fontWeight(.bold)
-                        Image(systemName: showCategoryList ? "chevron.up" : "chevron.down").font(.caption.bold()) 
+                        Image(systemName: "chevron.up.chevron.down").font(.caption.bold())
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
@@ -433,18 +769,21 @@ struct QuickSwitcherView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.white)
-                
+                .onChangeCompat(of: switcherCategory) { _ in
+                    ChannelViewModel.shared.triggerSelectionHaptic()
+                }
+
                 Spacer()
             }
             .padding(.horizontal)
             .padding(.bottom, 15)
-            
+
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 12) {
                     ForEach(channels) { c in
-                        Button(action: { 
+                        Button(action: {
                             ChannelViewModel.shared.triggerSelectionHaptic()
-                            onPlay(c) 
+                            onPlay(c)
                         }) {
                             VStack(alignment: .leading, spacing: 6) {
                                 CachedAsyncImage(urlString: c.icon ?? "", size: CGSize(width: 140, height: 80))
@@ -452,14 +791,14 @@ struct QuickSwitcherView: View {
                                     .background(Color.black.opacity(0.3))
                                     .cornerRadius(8)
                                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(c.id == currentChannelID ? Color.white : Color.clear, lineWidth: 2))
-                                
+
                                 Text(c.name)
                                     .font(.caption)
                                     .fontWeight(.medium)
                                     .foregroundColor(.white)
                                     .lineLimit(1)
                                     .frame(width: 140, alignment: .leading)
-                                
+
                                 VStack(alignment: .leading) {
                                     if let prog = viewModel?.getCurrentProgram(for: c) {
                                         Text(prog.title)
@@ -483,57 +822,7 @@ struct QuickSwitcherView: View {
             }
             .padding(.bottom, 40)
         }
-        .background(Material.ultraThinMaterial)
+        .modifier(GlassEffect(cornerRadius: 20, isSelected: false, accentColor: nil))
         .fixedSize(horizontal: false, vertical: true)
-        .overlay(alignment: .bottomLeading) {
-            if showCategoryList {
-                VStack(alignment: .leading, spacing: 0) {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 2) {
-                            categoryButton(id: -2, name: "Recently Watched")
-                            categoryButton(id: -4, name: "Favorites")
-                            categoryButton(id: -1, name: "All Channels")
-                            
-                            if !categories.isEmpty {
-                                Divider().background(Color.white.opacity(0.2)).padding(.vertical, 4)
-                                ForEach(categories.filter { !$0.isHidden }) { cat in
-                                    categoryButton(id: cat.id, name: cat.name, cat: cat)
-                                }
-                            }
-                        }
-                        .padding(8)
-                    }
-                }
-                .frame(width: 250, height: 300)
-                .background(Material.thickMaterial)
-                .cornerRadius(12)
-                .shadow(radius: 10)
-                .padding(.leading, 16)
-                .padding(.bottom, 130)
-                .transition(.scale.combined(with: .opacity).animation(.spring()))
-            }
-        }
-    }
-    
-    private func categoryButton(id: Int, name: String, cat: StreamCategory? = nil) -> some View {
-        Button(action: {
-            ChannelViewModel.shared.triggerSelectionHaptic()
-            if let c = cat { switcherCategory = c }
-            else { switcherCategory = StreamCategory(id: id, name: name) }
-            withAnimation { showCategoryList = false }
-        }) {
-            HStack {
-                Text(name)
-                    .font(.subheadline)
-                    .foregroundColor(switcherCategory.id == id ? .white : .white.opacity(0.7))
-                Spacer()
-                if switcherCategory.id == id { Image(systemName: "checkmark").font(.caption).foregroundColor(.yellow) }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(switcherCategory.id == id ? Color.white.opacity(0.1) : Color.clear)
-            .cornerRadius(8)
-        }
-        .buttonStyle(.plain)
     }
 }

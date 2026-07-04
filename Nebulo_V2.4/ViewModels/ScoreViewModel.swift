@@ -18,6 +18,16 @@ class ScoreViewModel: ObservableObject {
     @Published var sportTabOrder: [SportType] = []
     @Published var hiddenSportTabs: Set<SportType> = []
     @Published var renamedSportTabs: [String: String] = [:]
+    /// Favorited ESPN teams (keyed by `ESPNTeam.id`). Surfaced in the Favorites
+    /// hub and used to suggest games/streams across the app.
+    @Published var favoriteTeamIDs: Set<String> = []
+    /// User-chosen order for favorited teams in the Favorites hub.
+    @Published var favoriteTeamOrder: [String] = []
+    /// Favorited leagues. Keyed as `"<SportType.rawValue>"` for top-level
+    /// sports, or `"<SportType.rawValue>|<leagueLabel>"` for the soccer/cup
+    /// buckets where multiple leagues share one tab (Premier League, La Liga…).
+    @Published var favoriteLeagueKeys: Set<String> = []
+    @Published var favoriteLeagueOrder: [String] = []
     private var currentSearchText = ""
     
     static let noCacheSession: URLSession = {
@@ -66,6 +76,10 @@ class ScoreViewModel: ObservableObject {
         if let pinned = UserDefaults.standard.stringArray(forKey: "pinnedGameIDs") { self.pinnedGameIDs = Set(pinned) }
         if let hidden = UserDefaults.standard.stringArray(forKey: "hiddenScoreGameIDs") { self.hiddenScoreGameIDs = Set(hidden) }
         if let reminders = UserDefaults.standard.stringArray(forKey: "reminderGameIDs") { self.reminderGameIDs = Set(reminders) }
+        if let teams = UserDefaults.standard.stringArray(forKey: "favoriteTeamIDs") { self.favoriteTeamIDs = Set(teams) }
+        if let teamOrder = UserDefaults.standard.stringArray(forKey: "favoriteTeamOrder") { self.favoriteTeamOrder = teamOrder }
+        if let leagues = UserDefaults.standard.stringArray(forKey: "favoriteLeagueKeys") { self.favoriteLeagueKeys = Set(leagues) }
+        if let leagueOrder = UserDefaults.standard.stringArray(forKey: "favoriteLeagueOrder") { self.favoriteLeagueOrder = leagueOrder }
         
         if let savedOrder = UserDefaults.standard.stringArray(forKey: "sportTabOrder") {
             self.sportTabOrder = savedOrder.compactMap { SportType(rawValue: $0) }
@@ -83,6 +97,7 @@ class ScoreViewModel: ObservableObject {
         self.renamedSportTabs = UserDefaults.standard.object(forKey: "renamedSportTabs") as? [String: String] ?? [:]
         
         updatePinnedGames()
+        recomputeLiveGames()
         self.preloadImages()
     }
     
@@ -111,6 +126,10 @@ class ScoreViewModel: ObservableObject {
         UserDefaults.standard.set(sportTabOrder.map { $0.rawValue }, forKey: "sportTabOrder")
         UserDefaults.standard.set(Array(hiddenSportTabs).map { $0.rawValue }, forKey: "hiddenSportTabs")
         UserDefaults.standard.set(renamedSportTabs, forKey: "renamedSportTabs")
+        UserDefaults.standard.set(Array(favoriteTeamIDs), forKey: "favoriteTeamIDs")
+        UserDefaults.standard.set(favoriteTeamOrder, forKey: "favoriteTeamOrder")
+        UserDefaults.standard.set(Array(favoriteLeagueKeys), forKey: "favoriteLeagueKeys")
+        UserDefaults.standard.set(favoriteLeagueOrder, forKey: "favoriteLeagueOrder")
     }
     
     func moveSportTab(from source: IndexSet, to destination: Int) {
@@ -408,6 +427,108 @@ class ScoreViewModel: ObservableObject {
         return (allSections, allGames)
     }
     
+    /// Pre-computed snapshot of all currently-live games across every sport.
+    /// Refreshed by `recomputeLiveGames()` whenever `filteredGames` or
+    /// `filteredSectionsMap` mutate — never re-walked from `body`. Views
+    /// can read this directly with zero per-frame cost.
+    @Published private(set) var allLiveGames: [ESPNEvent] = []
+
+    /// Monotonically-increasing revision counter — bumped each time the live
+    /// games snapshot is refreshed. Used as a `.task(id:)` key in views that
+    /// want to react only when the live set actually changes (not on every
+    /// score tick or filter input).
+    @Published private(set) var allLiveGameIDsKey: Int = 0
+
+    /// Recompute `allLiveGames` from the current `filteredGames` /
+    /// `filteredSectionsMap`. Call after either of those publishes.
+    private func recomputeLiveGames() {
+        var pool: [ESPNEvent] = []
+        for games in filteredGames.values { pool.append(contentsOf: games) }
+        for sections in filteredSectionsMap.values {
+            for section in sections { pool.append(contentsOf: section.games) }
+        }
+        var seen = Set<String>()
+        var result: [ESPNEvent] = []
+        for game in pool where game.status.type.state == "in" {
+            if seen.insert(game.id).inserted {
+                result.append(game)
+            }
+        }
+        let sorted = result.sorted { $0.gameDate > $1.gameDate }
+        // Only publish when the set actually changed — avoids spurious
+        // re-renders when scores tick on the same set of games.
+        let newIDs = sorted.map { $0.id }
+        let oldIDs = self.allLiveGames.map { $0.id }
+        if newIDs != oldIDs {
+            self.allLiveGames = sorted
+            self.allLiveGameIDsKey &+= 1
+        } else if !newIDs.isEmpty {
+            // Same id list — refresh the array so detail/score changes flow
+            // through to subscribers, but don't bump the key (no tasks fire).
+            self.allLiveGames = sorted
+        }
+    }
+
+    /// Best-guess sport classification for an arbitrary live game, used by
+    /// the Live Now shelf for tap handling (it needs a SportType to call
+    /// `runSmartSearch`). Walks the master maps and returns the first sport
+    /// whose game list contains the event id.
+    func sportType(for game: ESPNEvent) -> SportType {
+        for (sport, games) in masterGames where games.contains(where: { $0.id == game.id }) {
+            return sport
+        }
+        for (sport, sections) in masterSectionsMap {
+            for section in sections where section.games.contains(where: { $0.id == game.id }) {
+                return sport
+            }
+        }
+        return .nfl // safe fallback — runSmartSearch only uses this for sport-specific lookups
+    }
+
+    /// Look up a currently-live ESPN game that matches a given channel.
+    /// Match priority: broadcast-name match → both team names appear in EPG title → shortName in EPG title.
+    func liveGame(for channel: StreamChannel, currentEPGTitle: String?) -> ESPNEvent? {
+        // Collect every event we know about (master + soccer sections)
+        var pool: [ESPNEvent] = []
+        for games in masterGames.values { pool.append(contentsOf: games) }
+        for sections in masterSectionsMap.values {
+            for section in sections { pool.append(contentsOf: section.games) }
+        }
+        // Only live ones
+        let live = pool.filter { $0.status.type.state == "in" }
+        if live.isEmpty { return nil }
+
+        let channelLower = channel.name.lowercased()
+        let epgLower = (currentEPGTitle ?? "").lowercased()
+
+        // 1) Broadcast name overlaps the channel name
+        if let match = live.first(where: { ev in
+            guard let bn = ev.broadcastName?.lowercased(), !bn.isEmpty else { return false }
+            return channelLower.contains(bn) || bn.contains(channelLower)
+        }) { return match }
+
+        // 2) Both team display names appear in the EPG title
+        if !epgLower.isEmpty {
+            if let match = live.first(where: { ev in
+                let home = (ev.homeCompetitor?.team?.shortDisplayName ?? ev.homeCompetitor?.team?.displayName ?? "").lowercased()
+                let away = (ev.awayCompetitor?.team?.shortDisplayName ?? ev.awayCompetitor?.team?.displayName ?? "").lowercased()
+                guard !home.isEmpty && !away.isEmpty else { return false }
+                return epgLower.contains(home) && epgLower.contains(away)
+            }) { return match }
+        }
+
+        // 3) shortName (e.g. "MAN VS LIV") appears in EPG title
+        if !epgLower.isEmpty {
+            if let match = live.first(where: { ev in
+                let parts = ev.shortName.lowercased().components(separatedBy: CharacterSet(charactersIn: " @-/")).filter { !$0.isEmpty && $0 != "vs" && $0 != "v" }
+                guard parts.count >= 2 else { return false }
+                return parts.allSatisfy { epgLower.contains($0) }
+            }) { return match }
+        }
+
+        return nil
+    }
+
     func applyFilter(text: String) {
         self.currentSearchText = text
         if text.isEmpty {
@@ -452,6 +573,190 @@ class ScoreViewModel: ObservableObject {
                 if !filteredSections.isEmpty { newFilteredMap[sport] = filteredSections }
             }
             self.filteredSectionsMap = newFilteredMap
+        }
+        // Filtered maps changed → refresh the live games snapshot once.
+        recomputeLiveGames()
+    }
+
+    // MARK: - Favorite teams & leagues
+
+    /// Stable key for a league favorite. Soccer/cup buckets reuse the same
+    /// SportType for many leagues, so we disambiguate with `|<leagueLabel>`.
+    static func leagueKey(sport: SportType, leagueLabel: String?) -> String {
+        if let label = leagueLabel, !label.isEmpty { return "\(sport.rawValue)|\(label)" }
+        return sport.rawValue
+    }
+
+    /// Decomposes a league key back into its parts.
+    static func decodeLeagueKey(_ key: String) -> (sport: SportType, leagueLabel: String?) {
+        if let sep = key.firstIndex(of: "|") {
+            let sportRaw = String(key[..<sep])
+            let label = String(key[key.index(after: sep)...])
+            return (SportType(rawValue: sportRaw) ?? .nfl, label)
+        }
+        return (SportType(rawValue: key) ?? .nfl, nil)
+    }
+
+    func isFavoriteTeam(_ team: ESPNTeam) -> Bool { favoriteTeamIDs.contains(team.id) }
+
+    func toggleFavoriteTeam(_ team: ESPNTeam) {
+        if favoriteTeamIDs.contains(team.id) {
+            favoriteTeamIDs.remove(team.id)
+            favoriteTeamOrder.removeAll { $0 == team.id }
+        } else {
+            favoriteTeamIDs.insert(team.id)
+            if !favoriteTeamOrder.contains(team.id) { favoriteTeamOrder.append(team.id) }
+        }
+        saveToCache()
+    }
+
+    func isFavoriteLeague(sport: SportType, leagueLabel: String?) -> Bool {
+        favoriteLeagueKeys.contains(Self.leagueKey(sport: sport, leagueLabel: leagueLabel))
+    }
+
+    func toggleFavoriteLeague(sport: SportType, leagueLabel: String?) {
+        let key = Self.leagueKey(sport: sport, leagueLabel: leagueLabel)
+        if favoriteLeagueKeys.contains(key) {
+            favoriteLeagueKeys.remove(key)
+            favoriteLeagueOrder.removeAll { $0 == key }
+        } else {
+            favoriteLeagueKeys.insert(key)
+            if !favoriteLeagueOrder.contains(key) { favoriteLeagueOrder.append(key) }
+        }
+        saveToCache()
+    }
+
+    func moveFavoriteTeams(from source: IndexSet, to destination: Int) {
+        favoriteTeamOrder.move(fromOffsets: source, toOffset: destination)
+        saveToCache()
+    }
+
+    func moveFavoriteLeagues(from source: IndexSet, to destination: Int) {
+        favoriteLeagueOrder.move(fromOffsets: source, toOffset: destination)
+        saveToCache()
+    }
+
+    /// Walks the master game pool and returns every unique ESPNTeam — used by
+    /// the "Add team to favorites" picker so the user can browse the entire
+    /// roster the API has surfaced this session.
+    func allKnownTeams() -> [(team: ESPNTeam, sport: SportType, leagueLabel: String?)] {
+        var seen = Set<String>()
+        var out: [(ESPNTeam, SportType, String?)] = []
+        for (sport, games) in masterGames {
+            for game in games {
+                for competitor in [game.homeCompetitor, game.awayCompetitor] {
+                    if let team = competitor?.team, seen.insert(team.id).inserted {
+                        out.append((team, sport, game.leagueLabel))
+                    }
+                }
+            }
+        }
+        for (sport, sections) in masterSectionsMap {
+            for section in sections {
+                for game in section.games {
+                    for competitor in [game.homeCompetitor, game.awayCompetitor] {
+                        if let team = competitor?.team, seen.insert(team.id).inserted {
+                            out.append((team, sport, section.league))
+                        }
+                    }
+                }
+            }
+        }
+        return out.sorted { ($0.0.displayName ?? "") < ($1.0.displayName ?? "") }
+    }
+
+    /// All league keys the user could favorite — the cartesian product of
+    /// (sport, leagueLabel) we've actually seen this session.
+    func allKnownLeagues() -> [(sport: SportType, leagueLabel: String?, displayName: String)] {
+        var seen = Set<String>()
+        var out: [(SportType, String?, String)] = []
+        for (sport, sections) in masterSectionsMap {
+            for section in sections {
+                let key = Self.leagueKey(sport: sport, leagueLabel: section.league)
+                if seen.insert(key).inserted {
+                    out.append((sport, section.league, section.league))
+                }
+            }
+        }
+        for (sport, games) in masterGames {
+            guard !games.isEmpty else { continue }
+            let key = Self.leagueKey(sport: sport, leagueLabel: nil)
+            if seen.insert(key).inserted {
+                out.append((sport, nil, sport.rawValue))
+            }
+        }
+        return out.sorted { $0.2 < $1.2 }
+    }
+
+    /// Resolves favorited team IDs to live ESPNTeam structs (using whatever
+    /// pool we've seen this session). Preserves the user's chosen order;
+    /// teams not yet seen this session are returned without a sport context.
+    func resolvedFavoriteTeams() -> [(team: ESPNTeam, sport: SportType?, leagueLabel: String?)] {
+        let known = Dictionary(uniqueKeysWithValues: allKnownTeams().map { ($0.team.id, $0) })
+        let ordered = favoriteTeamOrder.filter { favoriteTeamIDs.contains($0) }
+            + favoriteTeamIDs.subtracting(favoriteTeamOrder).sorted()
+        return ordered.compactMap { id in
+            if let hit = known[id] { return (hit.team, hit.sport, hit.leagueLabel) }
+            // Unknown team — synthesize a stub so it still renders. Sport/league
+            // will resolve next time the scoreboard refresh surfaces it.
+            return (ESPNTeam(id: id, abbreviation: nil, displayName: nil, shortDisplayName: nil, logo: nil, color: nil), nil, nil)
+        }
+    }
+
+    /// Resolves favorited league keys to (sport, label) pairs in user order.
+    func resolvedFavoriteLeagues() -> [(sport: SportType, leagueLabel: String?, displayName: String)] {
+        let ordered = favoriteLeagueOrder.filter { favoriteLeagueKeys.contains($0) }
+            + favoriteLeagueKeys.subtracting(favoriteLeagueOrder).sorted()
+        return ordered.map { key in
+            let parts = Self.decodeLeagueKey(key)
+            let name = parts.leagueLabel ?? parts.sport.rawValue
+            return (parts.sport, parts.leagueLabel, name)
+        }
+    }
+
+    /// Returns the next live game for a given team, if any.
+    func liveOrNextGame(forTeamID teamID: String) -> ESPNEvent? {
+        var pool: [ESPNEvent] = []
+        for games in masterGames.values { pool.append(contentsOf: games) }
+        for sections in masterSectionsMap.values {
+            for section in sections { pool.append(contentsOf: section.games) }
+        }
+        let matches = pool.filter { ev in
+            ev.homeCompetitor?.team?.id == teamID || ev.awayCompetitor?.team?.id == teamID
+        }
+        if let live = matches.first(where: { $0.status.type.state == "in" }) { return live }
+        let upcoming = matches.filter { $0.status.type.state == "pre" }.sorted { $0.gameDate < $1.gameDate }
+        return upcoming.first ?? matches.first
+    }
+
+    /// Every known game for a team, ordered live → upcoming → past. Used by
+    /// the Team detail sheet to surface a roster of fixtures the user can dig
+    /// into from the Favorites hub.
+    func gamesForTeam(_ teamID: String) -> [ESPNEvent] {
+        var pool: [ESPNEvent] = []
+        for games in masterGames.values { pool.append(contentsOf: games) }
+        for sections in masterSectionsMap.values {
+            for section in sections { pool.append(contentsOf: section.games) }
+        }
+        var seen = Set<String>()
+        let matches = pool
+            .filter { ev in
+                let homeID = ev.homeCompetitor?.team?.id
+                let awayID = ev.awayCompetitor?.team?.id
+                guard homeID == teamID || awayID == teamID else { return false }
+                return seen.insert(ev.id).inserted
+            }
+        return matches.sorted { a, b in
+            // Live first
+            if a.status.type.state == "in" && b.status.type.state != "in" { return true }
+            if a.status.type.state != "in" && b.status.type.state == "in" { return false }
+            // Then upcoming chronologically, then past chronologically reversed
+            let aPre = a.status.type.state == "pre"
+            let bPre = b.status.type.state == "pre"
+            if aPre && bPre { return a.gameDate < b.gameDate }
+            if aPre && !bPre { return true }
+            if !aPre && bPre { return false }
+            return a.gameDate > b.gameDate
         }
     }
 }
