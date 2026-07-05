@@ -211,10 +211,6 @@ struct MainViewModifiers: ViewModifier {
                 // gear below, and each section's Back pill via StandardLayout.
                 view.toolbar(.hidden, for: .navigationBar)
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    // Full-width search pill right above the home indicator.
-                    // Opening the cover with disablesAnimations means the
-                    // cover snaps in instantly so the keyboard and search UI
-                    // appear to rise together as one gesture.
                     Button(action: {
                         viewModel.triggerSelectionHaptic()
                         withAnimation(.easeOut(duration: 0.22)) { showSearch = true }
@@ -231,10 +227,11 @@ struct MainViewModifiers: ViewModifier {
                         .padding(.horizontal, 16)
                         .padding(.vertical, 13)
                         .modifier(GlassEffect(cornerRadius: 100, isSelected: false, accentColor: nil))
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 4)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 4)
                 }
             }
             .fullScreenCover(item: $selectedRecording) { recording in
@@ -440,6 +437,10 @@ struct StandardLayout: SwiftUI.View {
 
     /// Live games shelf content for the home page — cached snapshot.
     @State private var cachedHomeLiveGames: [ESPNEvent] = []
+
+    /// Live games from favorited teams/leagues — shown prominently at the
+    /// top of the home screen so the user's games are one tap away.
+    @State private var cachedFavLiveGames: [ESPNEvent] = []
 
     /// Count of today's games that haven't started yet — drives the
     /// "M starting today" subtitle in the adaptive home header.
@@ -781,9 +782,35 @@ struct StandardLayout: SwiftUI.View {
                                 selected: $selectedHomeGroup
                             )
 
-                            // 3. Featured Carousel — uses cached snapshot. Updated by the
-                            //    `.task` modifiers below whenever the chip selection or
-                            //    underlying featured list changes.
+                            // 3a. Your Games — live games from favorited teams/leagues,
+                            //     right at the top where the user can tap into them
+                            //     instantly. Only shown on the "For You" tab.
+                            if selectedHomeGroup == nil && !cachedFavLiveGames.isEmpty {
+                                VStack(alignment: .leading, spacing: 14) {
+                                    HomeSectionHeader(
+                                        title: "Your Games",
+                                        icon: "star.fill",
+                                        iconColor: .yellow,
+                                        showsChevron: true
+                                    ) {
+                                        viewModel.triggerSelectionHaptic()
+                                        viewModel.lastSelectedHomeID = -3
+                                        withAnimation { selectedCategory = StreamCategory(id: -3, name: "Sports") }
+                                    }
+
+                                    LiveGamesPreviewList(
+                                        games: cachedFavLiveGames,
+                                        scoreViewModel: scoreViewModel,
+                                        viewModel: viewModel,
+                                        accentColor: accentColor
+                                    )
+                                }
+                            }
+
+                            // 3b. Featured Carousel — uses cached snapshot. Updated by the
+                            //     `.task` modifiers below whenever the chip selection or
+                            //     underlying featured list changes. When a favorite team is
+                            //     live, the channel broadcasting their game leads the carousel.
                             if !cachedDisplayedFeatured.isEmpty {
                                 FeaturedCarousel(
                                     channels: cachedDisplayedFeatured,
@@ -958,6 +985,9 @@ struct StandardLayout: SwiftUI.View {
                         if cachedHomeLiveGames.isEmpty {
                             cachedHomeLiveGames = scoreViewModel.allLiveGames
                         }
+                        if cachedFavLiveGames.isEmpty {
+                            cachedFavLiveGames = scoreViewModel.favoriteLiveGames()
+                        }
                         startingTodayCount = computeStartingToday()
                         favHeader = computeFavoriteHeader()
 
@@ -985,10 +1015,8 @@ struct StandardLayout: SwiftUI.View {
                         cachedRecent = viewModel.recentIDs.compactMap { idToChannel[$0] }
                     }
                     .task(id: scoreViewModel.allLiveGameIDsKey) {
-                        // Snapshot live games once per refresh cycle. The
-                        // `allLiveGameIDsKey` only bumps when the live set
-                        // actually changes — not on every score tick.
                         cachedHomeLiveGames = scoreViewModel.allLiveGames
+                        cachedFavLiveGames = scoreViewModel.favoriteLiveGames()
                         startingTodayCount = computeStartingToday()
                         favHeader = computeFavoriteHeader()
                     }
@@ -1003,6 +1031,10 @@ struct StandardLayout: SwiftUI.View {
                     }
                     .task(id: scoreViewModel.favoriteTeamIDs) {
                         favHeader = computeFavoriteHeader()
+                        cachedFavLiveGames = scoreViewModel.favoriteLiveGames()
+                    }
+                    .task(id: scoreViewModel.favoriteLeagueKeys) {
+                        cachedFavLiveGames = scoreViewModel.favoriteLiveGames()
                     }
                     // Read the scroll offset directly instead of routing it
                     // through a GeometryReader probe + preference key. The
@@ -1160,7 +1192,9 @@ struct StandardLayout: SwiftUI.View {
     private var featuredCacheKey: String {
         let g = selectedHomeGroup?.rawValue ?? "for-you"
         let ids = viewModel.featuredChannels.map { String($0.id) }.joined(separator: ",")
-        return "\(g)|\(ids)"
+        let live = scoreViewModel.allLiveGameIDsKey
+        let favCount = scoreViewModel.favoriteTeamIDs.count + scoreViewModel.favoriteLeagueKeys.count
+        return "\(g)|\(ids)|\(live)|\(favCount)"
     }
 
     /// Cache key for `cachedRecent`. Triggers a refresh when the user's
@@ -1177,21 +1211,36 @@ struct StandardLayout: SwiftUI.View {
     /// • Specific group → channels from that group, preferring ones with a
     ///   currently-live program (better hero cards) and limiting to 6.
     func computeDisplayedFeatured() -> [StreamChannel] {
-        guard let group = selectedHomeGroup else { return viewModel.featuredChannels }
-        let catLookup: [Int: StreamCategory] = Dictionary(uniqueKeysWithValues: viewModel.categories.map { ($0.id, $0) })
-        var inGroup: [StreamChannel] = []
-        inGroup.reserveCapacity(64)
-        for channel in viewModel.channels {
-            if viewModel.hiddenIDs.contains(channel.id) { continue }
-            guard let cat = catLookup[channel.categoryID] else { continue }
-            guard HomeCategoryGroup.classify(cat) == group else { continue }
-            inGroup.append(channel)
-            if inGroup.count > 60 { break } // cap pool — we only need 6 for the carousel
+        if let group = selectedHomeGroup {
+            let catLookup: [Int: StreamCategory] = Dictionary(uniqueKeysWithValues: viewModel.categories.map { ($0.id, $0) })
+            var inGroup: [StreamChannel] = []
+            inGroup.reserveCapacity(64)
+            for channel in viewModel.channels {
+                if viewModel.hiddenIDs.contains(channel.id) { continue }
+                guard let cat = catLookup[channel.categoryID] else { continue }
+                guard HomeCategoryGroup.classify(cat) == group else { continue }
+                inGroup.append(channel)
+                if inGroup.count > 60 { break }
+            }
+            let withLive = inGroup.filter { viewModel.getCurrentProgram(for: $0) != nil }
+            let pool = withLive.isEmpty ? inGroup : withLive
+            return Array(pool.prefix(6))
         }
-        // Prefer channels with a live program — better hero cards.
-        let withLive = inGroup.filter { viewModel.getCurrentProgram(for: $0) != nil }
-        let pool = withLive.isEmpty ? inGroup : withLive
-        return Array(pool.prefix(6))
+
+        var result: [StreamChannel] = []
+        var usedIDs = Set<Int>()
+
+        for game in scoreViewModel.favoriteLiveGames() {
+            if let ch = viewModel.resolveChannel(forGame: game), usedIDs.insert(ch.id).inserted {
+                result.append(ch)
+            }
+        }
+
+        for ch in viewModel.featuredChannels where usedIDs.insert(ch.id).inserted {
+            result.append(ch)
+        }
+
+        return result
     }
 
     /// Category shelves to render below Quick Access for the current chip.

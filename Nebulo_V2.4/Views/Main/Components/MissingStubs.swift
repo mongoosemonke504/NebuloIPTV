@@ -667,9 +667,6 @@ struct SearchView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 13)
             .modifier(SearchBarGlass(cornerRadius: 100))
-            // Tapping anywhere on the pill (icon, padding — not just the
-            // text field itself) focuses the field and raises the keyboard.
-            .onTapGesture { fieldFocused = true }
 
             if !viewModel.searchText.isEmpty {
                 Button {
@@ -689,6 +686,8 @@ struct SearchView: View {
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: viewModel.searchText.isEmpty)
         .padding(.horizontal, 16)
         .padding(.top, 6)
+        .contentShape(Rectangle())
+        .onTapGesture { fieldFocused = true }
     }
 }
 

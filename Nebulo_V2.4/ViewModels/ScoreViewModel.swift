@@ -490,6 +490,39 @@ class ScoreViewModel: ObservableObject {
         }
     }
 
+    func favoriteLiveGames() -> [ESPNEvent] {
+        guard !favoriteTeamIDs.isEmpty || !favoriteLeagueKeys.isEmpty else { return [] }
+        var result: [ESPNEvent] = []
+        var seen = Set<String>()
+        for (sport, games) in masterGames {
+            let leagueIsFav = isFavoriteLeague(sport: sport, leagueLabel: nil)
+            for game in games where game.status.type.state == "in" {
+                guard seen.insert(game.id).inserted else { continue }
+                if leagueIsFav { result.append(game); continue }
+                for comp in [game.homeCompetitor, game.awayCompetitor] {
+                    if let team = comp?.team, isFavoriteTeam(team, sport: sport) {
+                        result.append(game); break
+                    }
+                }
+            }
+        }
+        for (sport, sections) in masterSectionsMap {
+            for section in sections {
+                let leagueIsFav = isFavoriteLeague(sport: sport, leagueLabel: section.league)
+                for game in section.games where game.status.type.state == "in" {
+                    guard seen.insert(game.id).inserted else { continue }
+                    if leagueIsFav { result.append(game); continue }
+                    for comp in [game.homeCompetitor, game.awayCompetitor] {
+                        if let team = comp?.team, isFavoriteTeam(team, sport: sport) {
+                            result.append(game); break
+                        }
+                    }
+                }
+            }
+        }
+        return result.sorted { $0.gameDate > $1.gameDate }
+    }
+
     /// Best-guess sport classification for an arbitrary live game, used by
     /// the Live Now shelf for tap handling (it needs a SportType to call
     /// `runSmartSearch`). Walks the master maps and returns the first sport

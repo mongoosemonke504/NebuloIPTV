@@ -1041,8 +1041,36 @@ class ChannelViewModel: ObservableObject {
         return bestScore >= 1300 ? bestChannel : nil
     }
 
+    func resolveChannel(forGame game: ESPNEvent) -> StreamChannel? {
+        if let cached = preResolvedCache[game.id] { return cached }
+        let targetNetwork = (game.broadcastName ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+        let home = (game.homeCompetitor?.team?.shortDisplayName ?? game.homeCompetitor?.team?.displayName ?? "").lowercased()
+        let away = (game.awayCompetitor?.team?.shortDisplayName ?? game.awayCompetitor?.team?.displayName ?? "").lowercased()
+        let hiddenCatIDs = Set(categories.filter { $0.isHidden }.map { $0.id })
+        var bestScore = 0
+        var bestChan: StreamChannel? = nil
+        for channel in channels {
+            if hiddenIDs.contains(channel.id) || hiddenCatIDs.contains(channel.categoryID) { continue }
+            var score = 0
+            if !targetNetwork.isEmpty && channel.name.localizedCaseInsensitiveContains(targetNetwork) { score += 1000 }
+            if let epgID = channel.epgID, let schedule = epgData[epgID],
+               let program = schedule.first(where: { currentTime >= $0.start && currentTime <= $0.stop }) {
+                let title = program.title.lowercased()
+                if !home.isEmpty && title.contains(home) { score += 500 }
+                if !away.isEmpty && title.contains(away) { score += 500 }
+            }
+            if !home.isEmpty && channel.name.lowercased().contains(home) { score += 200 }
+            if !away.isEmpty && channel.name.lowercased().contains(away) { score += 200 }
+            score += channel.qualityScore
+            if score > bestScore { bestScore = score; bestChan = channel }
+        }
+        guard bestScore >= 500, let winner = bestChan else { return nil }
+        preResolvedCache[game.id] = winner
+        return winner
+    }
+
     func runSmartSearch(gameID: String? = nil, home: String, away: String, sport: SportType, network: String? = nil) {
-        
+
         if let gid = gameID, let cached = preResolvedCache[gid] {
             self.isSearchingGame = false
             withAnimation(.easeInOut(duration: 0.4)) { self.channelToAutoPlay = cached }
