@@ -141,6 +141,14 @@ class RecordingManager: NSObject, ObservableObject {
                     // immediately playable (via VLC) while the remux runs.
                     self.recordings[idx].status = .completed
                     self.recordings[idx].localFileName = filename
+                    // Capture the actual recorded length. A recording stopped
+                    // early runs far shorter than its scheduled window, so the
+                    // wall-clock elapsed since start is the real seekable length
+                    // (clamped so it can never exceed the scheduled end). The
+                    // exact value is refined from the MP4 once the remux runs.
+                    let wall = Date().timeIntervalSince(recording.startTime)
+                    let scheduled = recording.endTime.timeIntervalSince(recording.startTime)
+                    self.recordings[idx].recordedDuration = max(1, min(wall, scheduled))
                     self.saveRecordings()
                     self.activeRecorders.removeValue(forKey: recording.id)
 
@@ -302,13 +310,24 @@ class RecordingManager: NSObject, ObservableObject {
             guard let self else { return }
             switch session.status {
             case .completed:
-                DispatchQueue.main.async {
-                    if let idx = self.recordings.firstIndex(where: { $0.id == recordingID }) {
-                        self.recordings[idx].localFileName = mp4Filename
-                        self.saveRecordings()
+                // Probe the remuxed MP4's real duration — reliable now that the
+                // container has a moov atom — and store it as the seekable
+                // truth, replacing the wall-clock estimate. This is what stops
+                // the scrubber from running past the end of the recording.
+                Task { [weak self] in
+                    guard let self else { return }
+                    let probed = (try? await AVURLAsset(url: mp4URL).load(.duration))?.seconds
+                    await MainActor.run {
+                        if let idx = self.recordings.firstIndex(where: { $0.id == recordingID }) {
+                            self.recordings[idx].localFileName = mp4Filename
+                            if let d = probed, d.isFinite, d > 0 {
+                                self.recordings[idx].recordedDuration = d
+                            }
+                            self.saveRecordings()
+                        }
+                        try? FileManager.default.removeItem(at: tsURL)
+                        print("✅ [RecordingManager] Remux complete: \(mp4Filename)")
                     }
-                    try? FileManager.default.removeItem(at: tsURL)
-                    print("✅ [RecordingManager] Remux complete: \(mp4Filename)")
                 }
             case .failed:
                 print("⚠️ [RecordingManager] Remux failed (\(session.error?.localizedDescription ?? "?")). Keeping .ts file.")

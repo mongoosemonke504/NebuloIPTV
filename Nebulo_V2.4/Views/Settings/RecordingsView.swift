@@ -1093,7 +1093,10 @@ struct RecordingPlayerView: View {
         // target — the manual ticker continues from there.
         .task {
             try? await Task.sleep(nanoseconds: 800_000_000) // 0.8s — after play() fires
-            let knownDuration = recording.duration
+            // currentRecording (not the captured struct) so we pick up the
+            // actual recorded duration even if it was finalized just before
+            // playback started.
+            let knownDuration = currentRecording.duration
             guard knownDuration > 0 else { return }
             await MainActor.run {
                 let engine = NebuloPlayerEngine.shared

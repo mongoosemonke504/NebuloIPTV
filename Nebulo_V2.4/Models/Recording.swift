@@ -18,10 +18,19 @@ struct Recording: Identifiable, Codable, Hashable {
     var localFileName: String?
     var category: RecordingCategory = .other
 
+    /// Actual recorded length in seconds, captured when the recording finishes
+    /// (and refined from the remuxed MP4's real duration). Nil for legacy or
+    /// still-in-progress recordings. A recording stopped early captures far
+    /// less than its scheduled window, so using `endTime − startTime` there
+    /// overstated the duration and let the scrubber seek past the end of the
+    /// file — which hung the player. This value is the seekable truth.
+    var recordedDuration: TimeInterval? = nil
+
     // MARK: - Computed
 
     var duration: TimeInterval {
-        endTime.timeIntervalSince(startTime)
+        if let recorded = recordedDuration, recorded > 0 { return recorded }
+        return endTime.timeIntervalSince(startTime)
     }
 
     var displayName: String {
