@@ -117,15 +117,17 @@ struct SportsHubView: View {
                                 }
                             }
                             .id(sportsTab)
-                            // Opaque backdrop ONLY while a tab slide is in
-                            // flight, so the incoming tab cleanly covers the
-                            // outgoing one instead of the two sets of crests
-                            // ghosting through each other. Reverts to clear at
-                            // rest so the nebula still shows; the fill matches
-                            // the dark backdrop so the hand-off is invisible.
-                            // Paired with a pure `.move` (no opacity) — an
-                            // opacity fade would re-introduce the see-through.
-                            .background(isSliding ? Color(red: 0.05, green: 0.055, blue: 0.08) : Color.clear)
+                            // Opaque backdrop so a tab slide cleanly covers the
+                            // outgoing tab instead of the two sets of crests
+                            // ghosting through each other. It must be ALWAYS on
+                            // (not just while sliding): the outgoing tab is a
+                            // stale snapshot during removal and won't re-render
+                            // with a fresh flag, so gating on `isSliding` left
+                            // whichever tab renders on top able to show through.
+                            // The fill matches the dark backdrop so the games
+                            // look unchanged at rest. Paired with a pure `.move`
+                            // (no opacity) — a fade would re-introduce see-through.
+                            .background(Color(red: 0.05, green: 0.055, blue: 0.08))
                             .transition(.asymmetric(
                                 insertion: .move(edge: slideFromTrailing ? .trailing : .leading),
                                 removal: .move(edge: slideFromTrailing ? .leading : .trailing)
