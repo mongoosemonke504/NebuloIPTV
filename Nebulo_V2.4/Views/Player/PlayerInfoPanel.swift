@@ -90,7 +90,9 @@ struct PlayerInfoPanel: View {
     /// the rest of the app's. The offset is in the scroll view's own content
     /// coordinates, so it's immune to the frame moving as the header shrinks.
     private func updateCollapse(scrolled: CGFloat) {
-        guard headerFullHeight > 0 else { return }
+        // Frozen during a collapse-preserving tab swipe (see selectTab) so the
+        // incoming tab's initial offset-0 callback can't reset the collapse.
+        guard Date() >= suppressCollapseUntil, headerFullHeight > 0 else { return }
         let distance = collapseDistance
         // Pure continuous mapping — no pixel quantization, no end snap
         // zones. Both were workarounds for noise in the old probe pipeline
@@ -136,18 +138,52 @@ struct PlayerInfoPanel: View {
     /// transition can strand the incoming view offscreen (blank panel).
     @State private var isSliding = false
 
+    /// Per-tab scroll positions, so a tab swipe can carry the collapsed header
+    /// across to the incoming tab by scrolling it to the matching offset.
+    @State private var channelsScroll = ScrollPosition()
+    @State private var scheduleScroll = ScrollPosition()
+    @State private var recordingsScroll = ScrollPosition()
+
+    /// While `Date() < this`, scroll-driven collapse updates are ignored. Set
+    /// briefly during a collapse-preserving tab swipe so the incoming tab's
+    /// initial `offset 0` layout callback can't flash the header back open
+    /// before we've scrolled it to the collapsed offset.
+    @State private var suppressCollapseUntil = Date.distantPast
+
     /// Central tab switch: derives the slide direction from tab order and
-    /// swaps with a flat easeOut — no spring, no bounce. Also re-expands the
-    /// collapsed header, since the incoming tab's list starts at its top.
+    /// swaps with a flat easeOut — no spring, no bounce. If the header is
+    /// collapsed, it STAYS collapsed: tracking is frozen briefly and the
+    /// incoming tab is scrolled to the matching offset so its list still opens
+    /// at the top under the compact header instead of the header springing
+    /// back open.
     private func selectTab(_ newTab: InfoTab) {
         guard newTab != selectedTab, !isSliding else { return }
         slideFromTrailing = newTab.rawValue > selectedTab.rawValue
         isSliding = true
         ChannelViewModel.shared.triggerSelectionHaptic()
+
+        let frozenCollapse = panelCollapse
+        let keepCollapsed = frozenCollapse > 0.5
+        if keepCollapsed {
+            suppressCollapseUntil = Date().addingTimeInterval(0.4)
+        }
+
         withAnimation(.easeOut(duration: 0.25)) {
             selectedTab = newTab
-            panelCollapse = 0
+            if !keepCollapsed { panelCollapse = 0 }
         }
+
+        if keepCollapsed {
+            let target = collapseDistance * frozenCollapse
+            DispatchQueue.main.async {
+                switch newTab {
+                case .channels:   channelsScroll.scrollTo(y: target)
+                case .schedule:   scheduleScroll.scrollTo(y: target)
+                case .recordings: recordingsScroll.scrollTo(y: target)
+                }
+            }
+        }
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             isSliding = false
         }
@@ -397,6 +433,7 @@ struct PlayerInfoPanel: View {
                     }
                 }
             }
+            .scrollPosition($channelsScroll)
             .onScrollGeometryChange(for: CGFloat.self) { geo in
                 geo.contentOffset.y + geo.contentInsets.top
             } action: { _, scrolled in
@@ -514,6 +551,7 @@ struct PlayerInfoPanel: View {
             }
             }
         }
+        .scrollPosition($scheduleScroll)
         .onScrollGeometryChange(for: CGFloat.self) { geo in
             geo.contentOffset.y + geo.contentInsets.top
         } action: { _, scrolled in
@@ -545,6 +583,7 @@ struct PlayerInfoPanel: View {
             }
             }
         }
+        .scrollPosition($recordingsScroll)
         .onScrollGeometryChange(for: CGFloat.self) { geo in
             geo.contentOffset.y + geo.contentInsets.top
         } action: { _, scrolled in
