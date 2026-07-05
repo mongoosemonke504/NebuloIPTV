@@ -117,9 +117,18 @@ struct SportsHubView: View {
                                 }
                             }
                             .id(sportsTab)
+                            // Opaque backdrop ONLY while a tab slide is in
+                            // flight, so the incoming tab cleanly covers the
+                            // outgoing one instead of the two sets of crests
+                            // ghosting through each other. Reverts to clear at
+                            // rest so the nebula still shows; the fill matches
+                            // the dark backdrop so the hand-off is invisible.
+                            // Paired with a pure `.move` (no opacity) — an
+                            // opacity fade would re-introduce the see-through.
+                            .background(isSliding ? Color(red: 0.05, green: 0.055, blue: 0.08) : Color.clear)
                             .transition(.asymmetric(
-                                insertion: .move(edge: slideFromTrailing ? .trailing : .leading).combined(with: .opacity),
-                                removal: .move(edge: slideFromTrailing ? .leading : .trailing).combined(with: .opacity)
+                                insertion: .move(edge: slideFromTrailing ? .trailing : .leading),
+                                removal: .move(edge: slideFromTrailing ? .leading : .trailing)
                             ))
                         }
                         .padding(.top, 10)
