@@ -44,6 +44,11 @@ struct SearchView: View {
     @State private var scope: Scope = .all
     @FocusState private var fieldFocused: Bool
 
+    /// The empty-query "browse" content (live games, recents, categories) builds
+    /// a lot of image views. Deferring it a moment lets the field + keyboard
+    /// present instantly instead of the overlay freezing while it all builds.
+    @State private var browseReady = false
+
     /// Manual keyboard tracking. This overlay is presented inside MainView's
     /// `.ignoresSafeArea()` ZStack, which strips both the safe-area insets AND
     /// SwiftUI's automatic keyboard avoidance — so the view measures the
@@ -116,10 +121,13 @@ struct SearchView: View {
                 ScrollView(showsIndicators: false) {
                     Group {
                         if query.isEmpty {
-                            VStack(alignment: .leading, spacing: 26) {
-                                liveGamesSection
-                                recentChannelsSection
-                                browseGrid
+                            if browseReady {
+                                VStack(alignment: .leading, spacing: 26) {
+                                    liveGamesSection
+                                    recentChannelsSection
+                                    browseGrid
+                                }
+                                .transition(.opacity)
                             }
                         } else if viewModel.isSearching {
                             searchingSkeleton
@@ -144,12 +152,14 @@ struct SearchView: View {
         .onAppear {
             // Focus set during the blurFade insertion can be dropped by UIKit
             // before the field joins the responder chain, so re-assert across
-            // several ticks — one of them lands once the field is ready and the
+            // a couple of ticks — one lands once the field is ready and the
             // keyboard rises with the overlay instead of on a second tap.
-            for delay in [0.0, 0.08, 0.2, 0.35, 0.55] {
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                    fieldFocused = true
-                }
+            fieldFocused = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { fieldFocused = true }
+            // Build the (image-heavy) browse content only after the overlay and
+            // keyboard have presented, so opening search never freezes.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                withAnimation(.easeOut(duration: 0.2)) { browseReady = true }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
@@ -252,7 +262,7 @@ struct SearchView: View {
                     .padding(.horizontal, 20)
 
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 14) {
+                        LazyHStack(spacing: 14) {
                             ForEach(games) { game in
                                 LiveGameCard(game: game, accentColor: accentColor)
                                     .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -282,26 +292,26 @@ struct SearchView: View {
         }
         if !recents.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Jump Back In")
+                Text("Recently Watched")
                     .font(.title3.weight(.bold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 20)
 
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 14) {
+                    LazyHStack(spacing: 14) {
                         ForEach(recents) { channel in
                             Button {
                                 viewModel.triggerSelectionHaptic()
                                 fieldFocused = false
                                 playAction(channel)
                             } label: {
-                                VStack(spacing: 6) {
-                                    channelIcon(channel, size: 62, cornerRadius: 16)
+                                VStack(spacing: 8) {
+                                    recentTile(channel)
                                     Text(channel.name)
-                                        .font(.caption2)
-                                        .foregroundStyle(.white.opacity(0.8))
+                                        .font(.caption2.weight(.medium))
+                                        .foregroundStyle(.white.opacity(0.85))
                                         .lineLimit(1)
-                                        .frame(width: 70)
+                                        .frame(width: 84)
                                 }
                             }
                             .buttonStyle(.plain)
@@ -311,6 +321,36 @@ struct SearchView: View {
                 }
             }
         }
+    }
+
+    /// A single recently-watched channel tile: the logo centred on a soft
+    /// rounded card with a hairline border and a gentle top-lit gradient, so
+    /// the crest reads cleanly instead of floating on a flat grey square.
+    private func recentTile(_ channel: StreamChannel) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.12), Color.white.opacity(0.04)],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                )
+            if let icon = channel.icon, !icon.isEmpty {
+                CachedAsyncImage(urlString: icon, size: CGSize(width: 84, height: 84))
+                    .padding(15)
+            } else {
+                Image(systemName: "tv")
+                    .font(.system(size: 24, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+        }
+        .frame(width: 84, height: 84)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.white.opacity(0.14), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.25), radius: 6, x: 0, y: 3)
     }
 
     // MARK: - Browse (empty query)
