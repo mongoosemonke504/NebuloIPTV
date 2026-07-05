@@ -28,6 +28,11 @@ class ScoreViewModel: ObservableObject {
     /// buckets where multiple leagues share one tab (Premier League, La Liga…).
     @Published var favoriteLeagueKeys: Set<String> = []
     @Published var favoriteLeagueOrder: [String] = []
+    /// Full team catalog from the ESPN team-list endpoints — every team in
+    /// every covered league (clubs, national soccer sides, the F1 grid),
+    /// independent of what's on today's scoreboards. Loaded from disk
+    /// instantly at launch, refreshed in the background at most once a week.
+    @Published private(set) var teamCatalog: [TeamCatalogService.Entry] = []
     private var currentSearchText = ""
     
     static let noCacheSession: URLSession = {
@@ -45,7 +50,27 @@ class ScoreViewModel: ObservableObject {
     
     init() {
         loadCachedData()
+        loadTeamCatalog()
         Task { await fetchScores() }
+    }
+
+    private func loadTeamCatalog() {
+        let cached = TeamCatalogService.loadCached()
+        if let cached {
+            teamCatalog = cached.entries
+            migrateLegacyTeamKeys()
+        }
+        let isFresh = cached.map {
+            !$0.entries.isEmpty && Date().timeIntervalSince($0.fetchedAt) < TeamCatalogService.refreshInterval
+        } ?? false
+        guard !isFresh else { return }
+        let previous = cached?.entries ?? []
+        Task { [weak self] in
+            let entries = await TeamCatalogService.fetch(previous: previous)
+            guard let self, !entries.isEmpty else { return }
+            self.teamCatalog = entries
+            self.migrateLegacyTeamKeys()
+        }
     }
     
     private func loadCachedData() {
@@ -274,56 +299,20 @@ class ScoreViewModel: ObservableObject {
         let newTask = Task {
             do {
                 await withTaskGroup(of: (SportType, [ESPNEvent]?, [SoccerGameSection]?).self) { group in
-                    group.addTask {
-                        let leagues = [
-                            ("eng.1", "Premier League"), ("esp.1", "La Liga"), ("ger.1", "Bundesliga"),
-                            ("ita.1", "Serie A"), ("fra.1", "Ligue 1"), ("usa.1", "MLS"),
-                            ("eng.2", "EFL Championship"), ("mex.1", "Liga MX"), ("ned.1", "Eredivisie"),
-                            ("por.1", "Primeira Liga"), ("sco.1", "Scottish Premiership"), ("bra.1", "Brasileirão"), ("arg.1", "Argentine Primera")
-                        ]
-                        do {
-                            let (sections, games) = try await self.fetchSoccerInternal(leagues: leagues)
-                            return (.soccerLeagues, games, sections)
-                        } catch { return (.soccerLeagues, nil, nil) }
+                    // The soccer buckets all read from the shared competition
+                    // catalog (SportType.soccerCompetitionGroups) — the same
+                    // list that drives the team catalog and the pickers.
+                    for (bucket, competitions) in SportType.soccerCompetitionGroups {
+                        group.addTask {
+                            do {
+                                let (sections, games) = try await self.fetchSoccerInternal(leagues: competitions)
+                                return (bucket, games, sections)
+                            } catch { return (bucket, nil, nil) }
+                        }
                     }
-                    
-                    group.addTask {
-                        let leagues = [
-                            ("eng.fa", "FA Cup"), ("eng.league_cup", "Carabao Cup"), ("esp.copa_del_rey", "Copa del Rey"),
-                            ("ger.dfb_pokal", "DFB-Pokal"), ("ita.coppa_italia", "Coppa Italia"), ("fra.coupe_de_france", "Coupe de France"),
-                            ("usa.open", "US Open Cup")
-                        ]
-                        do {
-                            let (sections, games) = try await self.fetchSoccerInternal(leagues: leagues)
-                            return (.domesticCups, games, sections)
-                        } catch { return (.domesticCups, nil, nil) }
-                    }
-                    
-                    group.addTask {
-                        let leagues = [
-                            ("uefa.champions", "Champions League"), ("uefa.europa", "Europa League"), ("uefa.europa.conf", "Conference League"),
-                            ("conmebol.libertadores", "Libertadores"), ("concacaf.champions", "Concacaf Champions"), ("afc.champions", "AFC Champions")
-                        ]
-                        do {
-                            let (sections, games) = try await self.fetchSoccerInternal(leagues: leagues)
-                            return (.continental, games, sections)
-                        } catch { return (.continental, nil, nil) }
-                    }
-                    
-                    group.addTask {
-                        let leagues = [
-                            ("fifa.world", "World Cup"), ("uefa.euro", "Euro"), ("conmebol.america", "Copa América"),
-                            ("concacaf.gold", "Gold Cup"), ("uefa.nations", "Nations League"), ("fifa.friendly", "Friendlies"),
-                            ("fifa.cwc", "Club World Cup")
-                        ]
-                        do {
-                            let (sections, games) = try await self.fetchSoccerInternal(leagues: leagues)
-                            return (.international, games, sections)
-                        } catch { return (.international, nil, nil) }
-                    }
-                    
+
                     for sport in SportType.allCases {
-                        if sport == .pinned || sport == .soccerLeagues || sport == .domesticCups || sport == .continental || sport == .international { continue }
+                        if sport == .pinned || sport.isSoccer { continue }
                         group.addTask {
                             guard let url = URL(string: sport.endpoint) else { return (sport, nil, nil) }
                             do {
@@ -353,6 +342,7 @@ class ScoreViewModel: ObservableObject {
                     self.lastFetchTime = Date()
                     self.applyFilter(text: self.currentSearchText)
                     self.preloadImages()
+                    self.migrateLegacyTeamKeys()
                     self.isLoading = false
                 }
             }
@@ -379,12 +369,13 @@ class ScoreViewModel: ObservableObject {
         return events
     }
     
-    nonisolated private func fetchSoccerInternal(leagues: [(String, String)]) async throws -> ([SoccerGameSection], [ESPNEvent]) {
+    nonisolated private func fetchSoccerInternal(leagues: [SoccerCompetition]) async throws -> ([SoccerGameSection], [ESPNEvent]) {
         var allSections: [SoccerGameSection] = []
         var allGames: [ESPNEvent] = []
-        
+
         await withTaskGroup(of: (String, [ESPNEvent]?).self) { group in
-            for (code, name) in leagues {
+            for comp in leagues {
+                let code = comp.code, name = comp.name
                 group.addTask {
                     let urlStr = "https://site.api.espn.com/apis/site/v2/sports/soccer/\(code)/scoreboard"
                     guard let url = URL(string: urlStr) else { return (name, nil) }
@@ -420,8 +411,8 @@ class ScoreViewModel: ObservableObject {
             }
         }
         allSections.sort { a, b in
-            let idxA = leagues.firstIndex { $0.1 == a.league } ?? 999
-            let idxB = leagues.firstIndex { $0.1 == b.league } ?? 999
+            let idxA = leagues.firstIndex { $0.name == a.league } ?? 999
+            let idxB = leagues.firstIndex { $0.name == b.league } ?? 999
             return idxA < idxB
         }
         return (allSections, allGames)
@@ -597,17 +588,71 @@ class ScoreViewModel: ObservableObject {
         return (SportType(rawValue: key) ?? .nfl, nil)
     }
 
-    func isFavoriteTeam(_ team: ESPNTeam) -> Bool { favoriteTeamIDs.contains(team.id) }
+    /// Composite favorite key — "<sport>|<teamID>". ESPN team ids are only
+    /// unique WITHIN a sport (NFL team 1 and NBA team 1 are different
+    /// franchises), so bare ids can't key favorites now that the full
+    /// catalog is browsable. The four soccer buckets normalize to one
+    /// "Soccer" namespace since they share a single club-id pool. Legacy
+    /// bare-id keys from pre-catalog builds are still honored everywhere and
+    /// migrated by `migrateLegacyTeamKeys()`.
+    static func teamKey(sport: SportType?, teamID: String) -> String {
+        guard let sport else { return teamID }
+        let raw = sport.isSoccer ? "Soccer" : sport.rawValue
+        return raw + "|" + teamID
+    }
 
-    func toggleFavoriteTeam(_ team: ESPNTeam) {
-        if favoriteTeamIDs.contains(team.id) {
+    static func decodeTeamKey(_ key: String) -> (sport: SportType?, teamID: String) {
+        guard let sep = key.firstIndex(of: "|") else { return (nil, key) }
+        let raw = String(key[..<sep])
+        let id = String(key[key.index(after: sep)...])
+        // Any soccer bucket stands in for the whole soccer pool (see
+        // eventPool's compatibility rule).
+        if raw == "Soccer" { return (.soccerLeagues, id) }
+        return (SportType(rawValue: raw), id)
+    }
+
+    func isFavoriteTeam(_ team: ESPNTeam, sport: SportType?) -> Bool {
+        favoriteTeamIDs.contains(Self.teamKey(sport: sport, teamID: team.id))
+            || favoriteTeamIDs.contains(team.id)
+    }
+
+    func toggleFavoriteTeam(_ team: ESPNTeam, sport: SportType?) {
+        let key = Self.teamKey(sport: sport, teamID: team.id)
+        if favoriteTeamIDs.contains(key) {
+            favoriteTeamIDs.remove(key)
+            favoriteTeamOrder.removeAll { $0 == key }
+        } else if key != team.id, favoriteTeamIDs.contains(team.id) {
+            // Legacy bare-id favorite — this toggle is an unfavorite.
             favoriteTeamIDs.remove(team.id)
             favoriteTeamOrder.removeAll { $0 == team.id }
         } else {
-            favoriteTeamIDs.insert(team.id)
-            if !favoriteTeamOrder.contains(team.id) { favoriteTeamOrder.append(team.id) }
+            favoriteTeamIDs.insert(key)
+            if !favoriteTeamOrder.contains(key) { favoriteTeamOrder.append(key) }
         }
         saveToCache()
+    }
+
+    /// Upgrades legacy bare-id favorites (pre-catalog builds) to composite
+    /// keys whenever the known-team pool can resolve them. Runs after the
+    /// catalog loads and after each scoreboard refresh; exits instantly once
+    /// nothing is left to migrate.
+    private func migrateLegacyTeamKeys() {
+        let legacy = favoriteTeamIDs.filter { !$0.contains("|") }
+        guard !legacy.isEmpty else { return }
+        var sportByBareID: [String: SportType] = [:]
+        for hit in allKnownTeams() where sportByBareID[hit.team.id] == nil {
+            sportByBareID[hit.team.id] = hit.sport
+        }
+        var changed = false
+        for old in legacy {
+            guard let sport = sportByBareID[old] else { continue }
+            let new = Self.teamKey(sport: sport, teamID: old)
+            favoriteTeamIDs.remove(old)
+            favoriteTeamIDs.insert(new)
+            favoriteTeamOrder = favoriteTeamOrder.map { $0 == old ? new : $0 }
+            changed = true
+        }
+        if changed { saveToCache() }
     }
 
     func isFavoriteLeague(sport: SportType, leagueLabel: String?) -> Bool {
@@ -636,18 +681,27 @@ class ScoreViewModel: ObservableObject {
         saveToCache()
     }
 
-    /// Walks the master game pool and returns every unique ESPNTeam — used by
-    /// the "Add team to favorites" picker so the user can browse the entire
-    /// roster the API has surfaced this session.
+    /// Every team the user can browse and favorite: the persistent catalog
+    /// (each league's full team list, national soccer sides, the F1 grid)
+    /// plus anything on today's scoreboards the catalog doesn't know yet
+    /// (e.g. MMA fighters, which have no team-list endpoint).
     func allKnownTeams() -> [(team: ESPNTeam, sport: SportType, leagueLabel: String?)] {
         var seen = Set<String>()
-        var out: [(ESPNTeam, SportType, String?)] = []
+        var out: [(team: ESPNTeam, sport: SportType, leagueLabel: String?)] = []
+        func add(_ team: ESPNTeam, _ sport: SportType, _ label: String?) {
+            let sportKey = sport.isSoccer ? "Soccer" : sport.rawValue
+            if seen.insert(sportKey + "#" + team.id).inserted {
+                out.append((team, sport, label))
+            }
+        }
+        for entry in teamCatalog {
+            guard let sport = entry.sport else { continue }
+            add(entry.team, sport, entry.leagueLabel)
+        }
         for (sport, games) in masterGames {
             for game in games {
                 for competitor in [game.homeCompetitor, game.awayCompetitor] {
-                    if let team = competitor?.team, seen.insert(team.id).inserted {
-                        out.append((team, sport, game.leagueLabel))
-                    }
+                    if let team = competitor?.team { add(team, sport, game.leagueLabel) }
                 }
             }
         }
@@ -655,21 +709,44 @@ class ScoreViewModel: ObservableObject {
             for section in sections {
                 for game in section.games {
                     for competitor in [game.homeCompetitor, game.awayCompetitor] {
-                        if let team = competitor?.team, seen.insert(team.id).inserted {
-                            out.append((team, sport, section.league))
-                        }
+                        if let team = competitor?.team { add(team, sport, section.league) }
                     }
                 }
             }
         }
-        return out.sorted { ($0.0.displayName ?? "") < ($1.0.displayName ?? "") }
+        return out.sorted { ($0.team.displayName ?? "") < ($1.team.displayName ?? "") }
     }
 
-    /// All league keys the user could favorite — the cartesian product of
-    /// (sport, leagueLabel) we've actually seen this session.
+    /// The user's Sports-hub tab order with any newly-added sports appended
+    /// (and Pinned dropped) — the canonical ordering for pickers.
+    var orderedSports: [SportType] {
+        let saved = sportTabOrder.filter { $0 != .pinned }
+        return saved + SportType.allCases.filter { $0 != .pinned && !saved.contains($0) }
+    }
+
+    /// Every league the user can favorite — the full configured catalog
+    /// (all soccer competitions plus every standalone sport), then anything
+    /// seen on today's scoreboards that isn't covered above. Returned in
+    /// display order: soccer competitions grouped leagues → cups →
+    /// continental → international, then the standalone sports in the same
+    /// order as the Sports-hub tabs.
     func allKnownLeagues() -> [(sport: SportType, leagueLabel: String?, displayName: String)] {
         var seen = Set<String>()
         var out: [(SportType, String?, String)] = []
+        for (bucket, competitions) in SportType.soccerCompetitionGroups {
+            for comp in competitions {
+                let key = Self.leagueKey(sport: bucket, leagueLabel: comp.name)
+                if seen.insert(key).inserted {
+                    out.append((bucket, comp.name, comp.name))
+                }
+            }
+        }
+        for sport in orderedSports where !sport.endpoint.isEmpty {
+            let key = Self.leagueKey(sport: sport, leagueLabel: nil)
+            if seen.insert(key).inserted {
+                out.append((sport, nil, sport.rawValue))
+            }
+        }
         for (sport, sections) in masterSectionsMap {
             for section in sections {
                 let key = Self.leagueKey(sport: sport, leagueLabel: section.league)
@@ -678,28 +755,31 @@ class ScoreViewModel: ObservableObject {
                 }
             }
         }
-        for (sport, games) in masterGames {
-            guard !games.isEmpty else { continue }
-            let key = Self.leagueKey(sport: sport, leagueLabel: nil)
-            if seen.insert(key).inserted {
-                out.append((sport, nil, sport.rawValue))
-            }
-        }
-        return out.sorted { $0.2 < $1.2 }
+        return out
     }
 
-    /// Resolves favorited team IDs to live ESPNTeam structs (using whatever
-    /// pool we've seen this session). Preserves the user's chosen order;
-    /// teams not yet seen this session are returned without a sport context.
+    /// Resolves favorited team keys to live ESPNTeam structs. Preserves the
+    /// user's chosen order and handles both composite ("NFL|22") and legacy
+    /// bare-id keys. With the catalog loaded this always resolves to a real
+    /// name and logo; the stub path only remains for a first launch with no
+    /// network, and heals on the next catalog or scoreboard refresh.
     func resolvedFavoriteTeams() -> [(team: ESPNTeam, sport: SportType?, leagueLabel: String?)] {
-        let known = Dictionary(uniqueKeysWithValues: allKnownTeams().map { ($0.team.id, $0) })
+        let known = allKnownTeams()
+        var byKey: [String: (team: ESPNTeam, sport: SportType, leagueLabel: String?)] = [:]
+        var byBareID: [String: (team: ESPNTeam, sport: SportType, leagueLabel: String?)] = [:]
+        for hit in known {
+            let key = Self.teamKey(sport: hit.sport, teamID: hit.team.id)
+            if byKey[key] == nil { byKey[key] = hit }
+            if byBareID[hit.team.id] == nil { byBareID[hit.team.id] = hit }
+        }
         let ordered = favoriteTeamOrder.filter { favoriteTeamIDs.contains($0) }
             + favoriteTeamIDs.subtracting(favoriteTeamOrder).sorted()
-        return ordered.compactMap { id in
-            if let hit = known[id] { return (hit.team, hit.sport, hit.leagueLabel) }
-            // Unknown team — synthesize a stub so it still renders. Sport/league
-            // will resolve next time the scoreboard refresh surfaces it.
-            return (ESPNTeam(id: id, abbreviation: nil, displayName: nil, shortDisplayName: nil, logo: nil, color: nil), nil, nil)
+        return ordered.compactMap { key in
+            let parts = Self.decodeTeamKey(key)
+            if let hit = byKey[key] ?? byBareID[parts.teamID] {
+                return (hit.team, hit.sport, hit.leagueLabel)
+            }
+            return (ESPNTeam(id: parts.teamID, abbreviation: nil, displayName: nil, shortDisplayName: nil, logo: nil, color: nil), parts.sport, nil)
         }
     }
 
@@ -714,36 +794,70 @@ class ScoreViewModel: ObservableObject {
         }
     }
 
-    /// Returns the next live game for a given team, if any.
-    func liveOrNextGame(forTeamID teamID: String) -> ESPNEvent? {
+    /// True when any competitor in the event is the given team — or, for
+    /// athlete-based sports like F1, the given driver. Scans every
+    /// competitor (not just home/away) so multi-entrant events match.
+    /// Scoreboard athletes carry NO id, so drivers are matched by the
+    /// display name resolved from the team catalog (identical strings —
+    /// both feeds use "Kimi Antonelli"-style names).
+    nonisolated private static func eventInvolves(_ ev: ESPNEvent, participantID: String, athleteName: String? = nil) -> Bool {
+        for comp in ev.allCompetitions {
+            for c in comp.competitors ?? [] {
+                if c.team?.id == participantID || c.athlete?.id == participantID { return true }
+                if let name = athleteName, let a = c.athlete,
+                   a.displayName == name || a.fullName == name {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    /// Display name for athlete-based favorites — needed because scoreboard
+    /// competitors don't include athlete ids (see `eventInvolves`).
+    private func athleteName(sport: SportType?, id: String) -> String? {
+        guard sport == .f1 else { return nil }
+        return teamCatalog.first(where: { $0.sportRaw == SportType.f1.rawValue && $0.team.id == id })?.team.displayName
+    }
+
+    /// Every cached event in score buckets compatible with the favorite's
+    /// sport (nil = everything). All four soccer tabs count as one sport —
+    /// a favorited club's cup and continental fixtures must surface
+    /// alongside its league games.
+    private func eventPool(for sport: SportType?) -> [ESPNEvent] {
+        func compatible(_ bucket: SportType) -> Bool {
+            guard let sport else { return true }
+            return bucket == sport || (bucket.isSoccer && sport.isSoccer)
+        }
         var pool: [ESPNEvent] = []
-        for games in masterGames.values { pool.append(contentsOf: games) }
-        for sections in masterSectionsMap.values {
+        for (bucket, games) in masterGames where compatible(bucket) { pool.append(contentsOf: games) }
+        for (bucket, sections) in masterSectionsMap where compatible(bucket) {
             for section in sections { pool.append(contentsOf: section.games) }
         }
-        let matches = pool.filter { ev in
-            ev.homeCompetitor?.team?.id == teamID || ev.awayCompetitor?.team?.id == teamID
-        }
+        return pool
+    }
+
+    /// Returns the live (or else next) game for a favorited team or driver.
+    /// Accepts either a composite favorite key ("NFL|22") or a bare team id.
+    func liveOrNextGame(forTeamID key: String) -> ESPNEvent? {
+        let (sport, id) = Self.decodeTeamKey(key)
+        let name = athleteName(sport: sport, id: id)
+        let matches = eventPool(for: sport).filter { Self.eventInvolves($0, participantID: id, athleteName: name) }
         if let live = matches.first(where: { $0.status.type.state == "in" }) { return live }
         let upcoming = matches.filter { $0.status.type.state == "pre" }.sorted { $0.gameDate < $1.gameDate }
         return upcoming.first ?? matches.first
     }
 
-    /// Every known game for a team, ordered live → upcoming → past. Used by
-    /// the Team detail sheet to surface a roster of fixtures the user can dig
-    /// into from the Favorites hub.
-    func gamesForTeam(_ teamID: String) -> [ESPNEvent] {
-        var pool: [ESPNEvent] = []
-        for games in masterGames.values { pool.append(contentsOf: games) }
-        for sections in masterSectionsMap.values {
-            for section in sections { pool.append(contentsOf: section.games) }
-        }
+    /// Every known game for a team or driver, ordered live → upcoming →
+    /// past. Accepts either a composite favorite key or a bare team id.
+    /// Used by the Team detail sheet in the Favorites hub.
+    func gamesForTeam(_ key: String) -> [ESPNEvent] {
+        let (sport, id) = Self.decodeTeamKey(key)
+        let name = athleteName(sport: sport, id: id)
         var seen = Set<String>()
-        let matches = pool
+        let matches = eventPool(for: sport)
             .filter { ev in
-                let homeID = ev.homeCompetitor?.team?.id
-                let awayID = ev.awayCompetitor?.team?.id
-                guard homeID == teamID || awayID == teamID else { return false }
+                guard Self.eventInvolves(ev, participantID: id, athleteName: name) else { return false }
                 return seen.insert(ev.id).inserted
             }
         return matches.sorted { a, b in

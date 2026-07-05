@@ -42,10 +42,110 @@ struct PlayerInfoPanel: View {
     @State private var showFullDescription = false
     @State private var showRecordingSheet = false
 
+    /// 0 at rest, 1 once the active tab's list has been scrolled. Tracked
+    /// 1:1 with the scroll offset (same mechanism as the section headers):
+    /// the big program header + description + action pills compress into a
+    /// one-line "what's playing" row so more of the channel list is visible.
+    @State private var panelCollapse: CGFloat = 0
+
+    /// Natural (uncollapsed) height of the full header, measured at runtime
+    /// since the description block varies per program. Drives the reserve
+    /// interpolation; nil-height (not yet measured) renders naturally.
+    @State private var headerFullHeight: CGFloat = 0
+
+    /// Height of the compact one-line header the full block collapses into.
+    private let headerCompactHeight: CGFloat = 44
+
+    private var headerReserve: CGFloat? {
+        guard headerFullHeight > 0 else { return nil }
+        return headerCompactHeight + (headerFullHeight - headerCompactHeight) * (1 - panelCollapse)
+    }
+
+    /// Scroll distance over which the header fully compresses — EXACTLY the
+    /// height it gives up. That 1:1 ratio is what makes everything move at
+    /// finger speed: 1pt of scroll shrinks the header by 1pt, so the header
+    /// edge, tab bar and (via the compensation spacer) the list all track
+    /// the finger precisely. A shorter distance made the top of the panel
+    /// visibly outrun the finger.
+    private var collapseDistance: CGFloat {
+        max(1, headerFullHeight - headerCompactHeight)
+    }
+
+    /// Top spacer inserted into each tab's scroll content, exactly matching
+    /// the height the header has given up. This anchors the scroll: without
+    /// it, the shrinking header pulled the whole list up IN ADDITION to the
+    /// finger's own scroll, so rows visibly outran the finger. With it, the
+    /// row you touch stays under your finger for the entire collapse; the
+    /// spacer then scrolls away like any other content.
+    private var collapseCompensation: CGFloat {
+        guard headerFullHeight > 0 else { return 0 }
+        return max(0, (headerFullHeight - headerCompactHeight) * panelCollapse)
+    }
+
+    /// Converts the scrolled distance into collapse progress. Fed by
+    /// `onScrollGeometryChange`, which reports the offset SYNCHRONOUSLY with
+    /// every scroll frame (120Hz on ProMotion). The old GeometryReader →
+    /// preference pipeline delivered readings a frame late through the
+    /// preference system, capping the collapse's effective frame rate below
+    /// the rest of the app's. The offset is in the scroll view's own content
+    /// coordinates, so it's immune to the frame moving as the header shrinks.
+    private func updateCollapse(scrolled: CGFloat) {
+        guard headerFullHeight > 0 else { return }
+        let distance = collapseDistance
+        // Pure continuous mapping — no pixel quantization, no end snap
+        // zones. Both were workarounds for noise in the old probe pipeline
+        // (rounded layout readbacks oscillated sub-pixel; residual fractions
+        // at rest clipped the pills). The synchronous offset is exact — 0 at
+        // rest, ≥ distance once scrolled past — so any discretization here
+        // only ADDS visible steps: the snap zones popped the header ~1.5pt
+        // at the start and end of every slow scroll, and quantizing the
+        // spacer while the list pans at fractional offsets wobbled the row
+        // under the finger by half a device pixel.
+        let shrink = min(max(scrolled, 0), distance)
+        let p = shrink / distance
+        if p != panelCollapse {
+            panelCollapse = p
+        }
+    }
+
     /// Which category is currently being browsed in the Channels tab.
     /// `nil` means "default" (Favorites + same category as current channel).
     /// Use special sentinel ids for built-in groups: -4 favorites.
     @State private var browsingCategoryID: Int? = nil
+
+    /// Which side the incoming tab content enters from — `true` when moving
+    /// to a tab further right. Set BEFORE the animated change.
+    @State private var slideFromTrailing = true
+
+    /// Gates tab changes while a slide is in flight — interrupting a `.move`
+    /// transition can strand the incoming view offscreen (blank panel).
+    @State private var isSliding = false
+
+    /// Central tab switch: derives the slide direction from tab order and
+    /// swaps with a flat easeOut — no spring, no bounce. Also re-expands the
+    /// collapsed header, since the incoming tab's list starts at its top.
+    private func selectTab(_ newTab: InfoTab) {
+        guard newTab != selectedTab, !isSliding else { return }
+        slideFromTrailing = newTab.rawValue > selectedTab.rawValue
+        isSliding = true
+        ChannelViewModel.shared.triggerSelectionHaptic()
+        withAnimation(.easeOut(duration: 0.25)) {
+            selectedTab = newTab
+            panelCollapse = 0
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            isSliding = false
+        }
+    }
+
+    /// Steps to the previous/next tab. Driven by the horizontal swipe.
+    private func advanceTab(_ delta: Int) {
+        let all = InfoTab.allCases
+        guard let idx = all.firstIndex(of: selectedTab) else { return }
+        let next = idx + delta
+        guard all.indices.contains(next) else { return }
+        selectTab(all[next])
+    }
 
     private var currentProgram: EPGProgram? { viewModel.getCurrentProgram(for: channel) }
 
@@ -91,17 +191,54 @@ struct PlayerInfoPanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // ── Fixed header ──
-            VStack(alignment: .leading, spacing: 12) {
-                programHeader
-                if let prog = currentProgram, let desc = prog.description, !desc.isEmpty {
-                    descriptionView(desc: desc)
+            // ── Collapsing header ──
+            // Scrolling any tab's list compresses the full header (program
+            // info + description + action pills) into a compact one-line
+            // "what's playing" row, freeing the space for more channels.
+            // Same continuous, finger-tracked collapse as the section
+            // headers: reserve height interpolates full → compact while the
+            // two layers crossfade. The tab bar below stays pinned.
+            ZStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 12) {
+                    programHeader
+                    if let prog = currentProgram, let desc = prog.description, !desc.isEmpty {
+                        descriptionView(desc: desc)
+                    }
+                    actionPills
                 }
-                actionPills
+                .padding(.horizontal, 18)
+                .padding(.top, 14)
+                .padding(.bottom, 10)
+                // Keep the ideal height even as the outer frame shrinks —
+                // the clip crops it instead of the text reflowing, and the
+                // GeometryReader measurement stays stable (no feedback loop).
+                .fixedSize(horizontal: false, vertical: true)
+                // The full header stays FULLY VISIBLE while the shrinking
+                // window crops it bottom-up (pills, then description, then
+                // title — swallowed under the video at finger speed, like an
+                // iOS large title). Fading it early left a tall empty black
+                // band that slowly pumped during slow scrolls and read as
+                // jitter. It only fades in the last stretch, right before
+                // the compact line takes over.
+                .opacity(min(1.0, max(0.0, (0.92 - Double(panelCollapse)) / 0.2)))
+                .allowsHitTesting(panelCollapse < 0.7)
+                .background(
+                    GeometryReader { g in
+                        Color.clear
+                            .onAppear { headerFullHeight = g.size.height }
+                            .onChangeCompat(of: g.size.height) { headerFullHeight = $0 }
+                    }
+                )
+
+                // ...and the compact line takes over only in the final ~8%
+                // (the last few points of scroll), so the swap is a crisp
+                // handoff with no stretch where the band sits empty.
+                compactHeader
+                    .opacity(max(0.0, (Double(panelCollapse) - 0.92) / 0.08))
+                    .allowsHitTesting(false)
             }
-            .padding(.horizontal, 18)
-            .padding(.top, 14)
-            .padding(.bottom, 10)
+            .frame(height: headerReserve, alignment: .top)
+            .clipped()
 
             // ── Tab bar ──
             tabBar
@@ -111,17 +248,48 @@ struct PlayerInfoPanel: View {
             Divider()
                 .background(Color.white.opacity(0.1))
 
-            // ── Tab content — native PageTabView handles swipe without conflicting
-            // with the inner scroll views ──
-            TabView(selection: $selectedTab) {
-                channelsTab.tag(InfoTab.channels)
-                scheduleTab.tag(InfoTab.schedule)
-                recordingsTab.tag(InfoTab.recordings)
+            // ── Tab content ──
+            // NOT a paged TabView: the pager is UIPageViewController-backed,
+            // so the compensation spacer inside its pages committed a frame
+            // later than the header's height change outside it — a one-pixel
+            // up/down oscillation every frame during slow scrolls (the
+            // "jitter"). A plain switch keeps the header, spacer and list in
+            // ONE layout transaction. Swiping between tabs still works via
+            // the horizontal drag below, with a directional slide like the
+            // Sports/Favorites sections.
+            ZStack(alignment: .top) {
+                Group {
+                    switch selectedTab {
+                    case .channels:   channelsTab
+                    case .schedule:   scheduleTab
+                    case .recordings: recordingsTab
+                    }
+                }
+                .id(selectedTab)
+                .transition(.asymmetric(
+                    insertion: .move(edge: slideFromTrailing ? .trailing : .leading).combined(with: .opacity),
+                    removal: .move(edge: slideFromTrailing ? .leading : .trailing).combined(with: .opacity)
+                ))
             }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            .onChange(of: selectedTab) { _ in
-                ChannelViewModel.shared.triggerSelectionHaptic()
-            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .clipped()
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 25)
+                    .onChanged { value in
+                        // Horizontal drags open the tap-suppression window so
+                        // the row under the finger doesn't fire on release.
+                        if abs(value.translation.width) > abs(value.translation.height) * 1.5 {
+                            SwipeTapGuard.suppress()
+                        }
+                    }
+                    .onEnded { value in
+                        let dx = value.translation.width
+                        let dy = value.translation.height
+                        guard value.startLocation.x > 44,
+                              abs(dx) > 60, abs(dx) > abs(dy) * 1.5 else { return }
+                        advanceTab(dx < 0 ? 1 : -1)
+                    }
+            )
         }
         .background(Color.black)
         .sheet(isPresented: $showRecordingSheet) {
@@ -137,10 +305,9 @@ struct PlayerInfoPanel: View {
         HStack(spacing: 0) {
             ForEach(InfoTab.allCases, id: \.rawValue) { tab in
                 Button(action: {
-                    ChannelViewModel.shared.triggerSelectionHaptic()
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                        selectedTab = tab
-                    }
+                    // selectTab derives the slide direction from tab order
+                    // so tapping slides the same way a swipe does.
+                    selectTab(tab)
                 }) {
                     VStack(spacing: 5) {
                         HStack(spacing: 5) {
@@ -172,40 +339,51 @@ struct PlayerInfoPanel: View {
                 .padding(.bottom, 4)
 
             ScrollView(showsIndicators: false) {
-                let chans = browsingChannels
-                if chans.isEmpty {
-                    emptyState(icon: "tv.slash", message: "No channels in this category")
-                } else if browsingCategoryID == nil {
-                    // Default view: split into Favorites + category
-                    let favs   = chans.filter { viewModel.favoriteIDs.contains($0.id) }
-                    let others = chans.filter { !viewModel.favoriteIDs.contains($0.id) }
-                    VStack(spacing: 0) {
-                        if !favs.isEmpty {
-                            sectionHeader("Favorites")
-                            ForEach(favs) { ch in
+                // Single wrapper so the compensation spacer scrolls with the
+                // rest of the content.
+                VStack(spacing: 0) {
+                    Color.clear.frame(height: collapseCompensation)
+                    let chans = browsingChannels
+                    if chans.isEmpty {
+                        emptyState(icon: "tv.slash", message: "No channels in this category")
+                    } else if browsingCategoryID == nil {
+                        // Default view: split into Favorites + category
+                        let favs   = chans.filter { viewModel.favoriteIDs.contains($0.id) }
+                        let others = chans.filter { !viewModel.favoriteIDs.contains($0.id) }
+                        VStack(spacing: 0) {
+                            if !favs.isEmpty {
+                                sectionHeader("Favorites")
+                                ForEach(favs) { ch in
+                                    PanelChannelRow(channel: ch, viewModel: viewModel) { onPlayChannel?(ch) }
+                                }
+                            }
+                            if !others.isEmpty {
+                                sectionHeader(browsingTitle)
+                                ForEach(others) { ch in
+                                    PanelChannelRow(channel: ch, viewModel: viewModel) { onPlayChannel?(ch) }
+                                }
+                            }
+                        }
+                        .padding(.top, 4)
+                        Spacer(minLength: 32)
+                    } else {
+                        // Single category view
+                        VStack(spacing: 0) {
+                            sectionHeader("\(browsingTitle) · \(chans.count)")
+                            ForEach(chans) { ch in
                                 PanelChannelRow(channel: ch, viewModel: viewModel) { onPlayChannel?(ch) }
                             }
                         }
-                        if !others.isEmpty {
-                            sectionHeader(browsingTitle)
-                            ForEach(others) { ch in
-                                PanelChannelRow(channel: ch, viewModel: viewModel) { onPlayChannel?(ch) }
-                            }
-                        }
+                        .padding(.top, 4)
+                        Spacer(minLength: 32)
                     }
-                    .padding(.top, 4)
-                    Spacer(minLength: 32)
-                } else {
-                    // Single category view
-                    VStack(spacing: 0) {
-                        sectionHeader("\(browsingTitle) · \(chans.count)")
-                        ForEach(chans) { ch in
-                            PanelChannelRow(channel: ch, viewModel: viewModel) { onPlayChannel?(ch) }
-                        }
-                    }
-                    .padding(.top, 4)
-                    Spacer(minLength: 32)
                 }
+            }
+            .onScrollGeometryChange(for: CGFloat.self) { geo in
+                geo.contentOffset.y + geo.contentInsets.top
+            } action: { _, scrolled in
+                guard selectedTab == .channels else { return }
+                updateCollapse(scrolled: scrolled)
             }
         }
     }
@@ -273,6 +451,8 @@ struct PlayerInfoPanel: View {
 
     private var scheduleTab: some View {
         ScrollView(showsIndicators: false) {
+            VStack(spacing: 0) {
+            Color.clear.frame(height: collapseCompensation)
             if todaySchedule.isEmpty {
                 emptyState(icon: "calendar.badge.exclamationmark", message: "No schedule available for today")
             } else {
@@ -308,6 +488,13 @@ struct PlayerInfoPanel: View {
                 .padding(.top, 4)
                 Spacer(minLength: 32)
             }
+            }
+        }
+        .onScrollGeometryChange(for: CGFloat.self) { geo in
+            geo.contentOffset.y + geo.contentInsets.top
+        } action: { _, scrolled in
+            guard selectedTab == .schedule else { return }
+            updateCollapse(scrolled: scrolled)
         }
     }
 
@@ -315,6 +502,8 @@ struct PlayerInfoPanel: View {
 
     private var recordingsTab: some View {
         ScrollView(showsIndicators: false) {
+            VStack(spacing: 0) {
+            Color.clear.frame(height: collapseCompensation)
             let sorted = recordingManager.recordings.sorted { $0.createdAt > $1.createdAt }
             if sorted.isEmpty {
                 emptyState(icon: "record.circle", message: "No recordings yet")
@@ -330,6 +519,13 @@ struct PlayerInfoPanel: View {
                 .padding(.top, 4)
                 Spacer(minLength: 32)
             }
+            }
+        }
+        .onScrollGeometryChange(for: CGFloat.self) { geo in
+            geo.contentOffset.y + geo.contentInsets.top
+        } action: { _, scrolled in
+            guard selectedTab == .recordings else { return }
+            updateCollapse(scrolled: scrolled)
         }
     }
 
@@ -368,6 +564,32 @@ struct PlayerInfoPanel: View {
     }
 
     // MARK: - Header
+
+    /// One-line header shown while the list is scrolled — just the relevant
+    /// info: small logo, program title, channel · time.
+    private var compactHeader: some View {
+        HStack(spacing: 10) {
+            ChannelLogoBox(urlString: channel.icon ?? "",
+                           boxSize: 30,
+                           cornerRadius: 8,
+                           padding: 4)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(currentProgram?.title ?? channel.name)
+                    .font(.footnote.weight(.bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                Text(headerSubtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.6))
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 18)
+        .frame(height: headerCompactHeight)
+    }
 
     private var programHeader: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -534,7 +756,13 @@ private struct PanelChannelRow: View {
     private var currentProg: EPGProgram? { viewModel.getCurrentProgram(for: channel) }
 
     var body: some View {
-        Button(action: { ChannelViewModel.shared.triggerSelectionHaptic(); onPlay() }) {
+        Button(action: {
+            // A tab swipe that starts on this row still fires the action on
+            // release — no-op while the swipe suppression window is open.
+            guard SwipeTapGuard.tapsAllowed else { return }
+            ChannelViewModel.shared.triggerSelectionHaptic()
+            onPlay()
+        }) {
             HStack(spacing: 14) {
                 ChannelLogoBox(urlString: channel.icon ?? "",
                                boxSize: 52,
@@ -620,7 +848,10 @@ private struct ScheduleRow: View {
 
             // Record button — hidden for past programs
             if !isPast, let record = onRecord {
-                Button(action: record) {
+                Button(action: {
+                    guard SwipeTapGuard.tapsAllowed else { return }
+                    record()
+                }) {
                     Image(systemName: isScheduled ? "bell.fill" : "bell")
                         .font(.system(size: 15))
                         .foregroundStyle(isScheduled ? .red : Color.white.opacity(0.45))
@@ -680,6 +911,7 @@ private struct RecordingRow: View {
 
             // Delete button
             Button(action: {
+                guard SwipeTapGuard.tapsAllowed else { return }
                 ChannelViewModel.shared.triggerSelectionHaptic()
                 recordingManager.deleteRecording(recording)
             }) {

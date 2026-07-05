@@ -33,10 +33,12 @@ extension View {
     /// Defers iOS edge system gestures (Control Center, Notification Center) so taps on
     /// buttons positioned at screen edges aren't intercepted by the OS. Used for the
     /// fullscreen player so the close (top-left) and multiview (top-right) buttons work.
+    /// Top edge ONLY: deferring the bottom edge made the home-indicator swipe require
+    /// two swipes to leave the app (first swipe just revealed the indicator).
     @ViewBuilder
     func defersSystemGesturesIfAvailable() -> some View {
         if #available(iOS 16.0, *) {
-            self.defersSystemGestures(on: .all)
+            self.defersSystemGestures(on: .top)
         } else {
             self
         }

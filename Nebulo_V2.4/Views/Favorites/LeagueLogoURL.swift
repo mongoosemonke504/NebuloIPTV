@@ -9,23 +9,26 @@ import Foundation
 enum LeagueLogoURL {
     /// Mapping of league label / sport raw value → ESPN logo URL. The keys are
     /// the same strings produced by `ScoreViewModel.allKnownLeagues()`.
+    /// Every URL below was taken verbatim from the `leagues[].logos[].href`
+    /// field of the corresponding ESPN scoreboard response (2026-07) — the
+    /// previous hand-guessed ids returned 404s, which rendered blank tiles.
     private static let map: [String: String] = [
         // Top-level US sports leagues
-        "NFL": "https://a.espncdn.com/i/leaguelogos/sports/500/nfl.png",
-        "NBA": "https://a.espncdn.com/i/leaguelogos/sports/500/nba.png",
-        "WNBA": "https://a.espncdn.com/i/leaguelogos/sports/500/wnba.png",
-        "MLB": "https://a.espncdn.com/i/leaguelogos/sports/500/mlb.png",
-        "NHL": "https://a.espncdn.com/i/leaguelogos/sports/500/nhl.png",
-        "NCAAF": "https://a.espncdn.com/i/leaguelogos/sports/500/ncaa.png",
-        "NCAAB": "https://a.espncdn.com/i/leaguelogos/sports/500/ncaa.png",
-        "NCAA Hockey": "https://a.espncdn.com/i/leaguelogos/sports/500/ncaa.png",
-        "NCAA Softball": "https://a.espncdn.com/i/leaguelogos/sports/500/ncaa.png",
-        "NCAA M-Lacrosse": "https://a.espncdn.com/i/leaguelogos/sports/500/ncaa.png",
-        "NCAA W-Lacrosse": "https://a.espncdn.com/i/leaguelogos/sports/500/ncaa.png",
-        "NCAA M-Volleyball": "https://a.espncdn.com/i/leaguelogos/sports/500/ncaa.png",
-        "NCAA W-Volleyball": "https://a.espncdn.com/i/leaguelogos/sports/500/ncaa.png",
-        "Formula 1": "https://a.espncdn.com/i/leaguelogos/racing/500/f1.png",
-        "MMA": "https://a.espncdn.com/i/leaguelogos/mma/500/ufc.png",
+        "NFL": "https://a.espncdn.com/i/teamlogos/leagues/500/nfl.png",
+        "NBA": "https://a.espncdn.com/i/teamlogos/leagues/500/nba.png",
+        "WNBA": "https://a.espncdn.com/i/teamlogos/leagues/500/wnba.png",
+        "MLB": "https://a.espncdn.com/i/teamlogos/leagues/500/mlb.png",
+        "NHL": "https://a.espncdn.com/i/teamlogos/leagues/500/nhl.png",
+        "NCAAF": "https://a.espncdn.com/redesign/assets/img/icons/ESPN-icon-football-college.png",
+        "NCAAB": "https://a.espncdn.com/redesign/assets/img/icons/ESPN-icon-basketball.png",
+        "NCAA Hockey": "https://a.espncdn.com/redesign/assets/img/icons/ESPN-icon-hockey.png",
+        "NCAA Softball": "https://a.espncdn.com/i/espn/misc_logos/500/ncaa_womens_softball.png",
+        "NCAA M-Lacrosse": "https://a.espncdn.com/redesign/assets/img/icons/ESPN-icon-lacrosse.png",
+        "NCAA W-Lacrosse": "https://a.espncdn.com/redesign/assets/img/icons/ESPN-icon-lacrosse.png",
+        "NCAA M-Volleyball": "https://a.espncdn.com/combiner/i?img=/redesign/assets/img/icons/sports-volleyball-solid.png",
+        "NCAA W-Volleyball": "https://a.espncdn.com/combiner/i?img=/redesign/assets/img/icons/sports-volleyball-solid.png",
+        "Formula 1": "https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500/f1.png",
+        "MMA": "https://a.espncdn.com/i/teamlogos/leagues/500/ufc.png",
 
         // Domestic soccer leagues
         "Premier League": "https://a.espncdn.com/i/leaguelogos/soccer/500/23.png",
@@ -35,12 +38,12 @@ enum LeagueLogoURL {
         "Ligue 1": "https://a.espncdn.com/i/leaguelogos/soccer/500/9.png",
         "MLS": "https://a.espncdn.com/i/leaguelogos/soccer/500/19.png",
         "EFL Championship": "https://a.espncdn.com/i/leaguelogos/soccer/500/24.png",
-        "Liga MX": "https://a.espncdn.com/i/leaguelogos/soccer/500/11.png",
-        "Eredivisie": "https://a.espncdn.com/i/leaguelogos/soccer/500/14.png",
-        "Primeira Liga": "https://a.espncdn.com/i/leaguelogos/soccer/500/13.png",
+        "Liga MX": "https://a.espncdn.com/i/leaguelogos/soccer/500/22.png",
+        "Eredivisie": "https://a.espncdn.com/i/leaguelogos/soccer/500/11.png",
+        "Primeira Liga": "https://a.espncdn.com/i/leaguelogos/soccer/500/14.png",
         "Scottish Premiership": "https://a.espncdn.com/i/leaguelogos/soccer/500/45.png",
-        "Brasileirão": "https://a.espncdn.com/i/leaguelogos/soccer/500/35.png",
-        "Argentine Primera": "https://a.espncdn.com/i/leaguelogos/soccer/500/16.png",
+        "Brasileirão": "https://a.espncdn.com/i/leaguelogos/soccer/500/85.png",
+        "Argentine Primera": "https://a.espncdn.com/i/leaguelogos/soccer/500/1.png",
 
         // Domestic cups
         "FA Cup": "https://a.espncdn.com/i/leaguelogos/soccer/500/40.png",
@@ -49,30 +52,30 @@ enum LeagueLogoURL {
         "DFB-Pokal": "https://a.espncdn.com/i/leaguelogos/soccer/500/2061.png",
         "Coppa Italia": "https://a.espncdn.com/i/leaguelogos/soccer/500/2192.png",
         "Coupe de France": "https://a.espncdn.com/i/leaguelogos/soccer/500/182.png",
-        "US Open Cup": "https://a.espncdn.com/i/leaguelogos/soccer/500/183.png",
+        "US Open Cup": "https://a.espncdn.com/i/leaguelogos/soccer/500/69.png",
 
         // Continental
         "Champions League": "https://a.espncdn.com/i/leaguelogos/soccer/500/2.png",
         "Europa League": "https://a.espncdn.com/i/leaguelogos/soccer/500/2310.png",
-        "Conference League": "https://a.espncdn.com/i/leaguelogos/soccer/500/2916.png",
-        "Libertadores": "https://a.espncdn.com/i/leaguelogos/soccer/500/2900.png",
-        "Concacaf Champions": "https://a.espncdn.com/i/leaguelogos/soccer/500/2904.png",
-        "AFC Champions": "https://a.espncdn.com/i/leaguelogos/soccer/500/2903.png",
+        "Conference League": "https://a.espncdn.com/i/leaguelogos/soccer/500/20296.png",
+        "Libertadores": "https://a.espncdn.com/i/leaguelogos/soccer/500/58.png",
+        "Concacaf Champions": "https://a.espncdn.com/i/leaguelogos/soccer/500/2298.png",
+        "AFC Champions": "https://a.espncdn.com/i/leaguelogos/soccer/500/2200.png",
 
         // International
-        "World Cup": "https://a.espncdn.com/i/leaguelogos/soccer/500/164.png",
-        "Euro": "https://a.espncdn.com/i/leaguelogos/soccer/500/2189.png",
-        "Copa América": "https://a.espncdn.com/i/leaguelogos/soccer/500/2105.png",
-        "Gold Cup": "https://a.espncdn.com/i/leaguelogos/soccer/500/2151.png",
-        "Nations League": "https://a.espncdn.com/i/leaguelogos/soccer/500/2522.png",
-        "Friendlies": "https://a.espncdn.com/i/leaguelogos/soccer/500/4400.png",
-        "Club World Cup": "https://a.espncdn.com/i/leaguelogos/soccer/500/2114.png",
+        "World Cup": "https://a.espncdn.com/i/leaguelogos/soccer/500/4.png",
+        "Euro": "https://a.espncdn.com/i/leaguelogos/soccer/500/74.png",
+        "Copa América": "https://a.espncdn.com/i/leaguelogos/soccer/500/83.png",
+        "Gold Cup": "https://a.espncdn.com/i/leaguelogos/soccer/500/59.png",
+        "Nations League": "https://a.espncdn.com/i/leaguelogos/soccer/500/2395.png",
+        "Friendlies": "https://a.espncdn.com/i/leaguelogos/soccer/500/53.png",
+        "Club World Cup": "https://a.espncdn.com/i/leaguelogos/soccer/500/1932.png",
 
         // Bucket labels (when a league favorite is keyed by just the SportType)
-        "Soccer Leagues": "https://a.espncdn.com/i/leaguelogos/sports/500/soccer.png",
-        "Domestic Soccer Cups": "https://a.espncdn.com/i/leaguelogos/sports/500/soccer.png",
-        "Continental Soccer": "https://a.espncdn.com/i/leaguelogos/sports/500/soccer.png",
-        "International Soccer": "https://a.espncdn.com/i/leaguelogos/sports/500/soccer.png"
+        "Soccer Leagues": "https://a.espncdn.com/redesign/assets/img/icons/ESPN-icon-soccer.png",
+        "Domestic Soccer Cups": "https://a.espncdn.com/redesign/assets/img/icons/ESPN-icon-soccer.png",
+        "Continental Soccer": "https://a.espncdn.com/redesign/assets/img/icons/ESPN-icon-soccer.png",
+        "International Soccer": "https://a.espncdn.com/redesign/assets/img/icons/ESPN-icon-soccer.png"
     ]
 
     /// Returns the best ESPN CDN logo URL for a league, preferring the

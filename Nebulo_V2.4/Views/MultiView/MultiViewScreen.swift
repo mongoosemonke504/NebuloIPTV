@@ -107,10 +107,29 @@ struct MultiViewScreen: View {
     /// outside the GeometryReader (toolbar, overlay) can react to rotation.
     @State private var isLandscapeOrient: Bool = false
 
-    /// Auto-hide chrome only applies in landscape equal mode. Portrait equal
-    /// mode and focus mode both keep the always-visible system toolbar.
+    /// Auto-hide chrome only applies in landscape equal mode (full-bleed
+    /// video). Every other state keeps the always-visible chrome row —
+    /// the same Back pill + settings gear as the rest of the app.
     private var chromeAutoHideActive: Bool {
         layoutMode == .equal && isLandscapeOrient
+    }
+
+    /// The standard Back pill used across the app (identical to MainView's
+    /// section chrome), shared by the pinned row and the auto-hide overlay.
+    private var chromeBackButton: some View {
+        Button(action: handleDismiss) {
+            HStack(spacing: 4) {
+                Image(systemName: "chevron.left")
+                    .font(.body.weight(.semibold))
+                Text("Back")
+                    .font(.body)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14)
+            .frame(height: 44)
+            .modifier(GlassEffect(cornerRadius: 22, isSelected: false, accentColor: nil))
+        }
+        .buttonStyle(.plain)
     }
 
     /// Slot indices that currently hold a channel, in slot-order.
@@ -221,50 +240,33 @@ struct MultiViewScreen: View {
                 })
             }
             .statusBar(hidden: false)
-            .navigationTitle("")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(.hidden, for: .navigationBar)
-            // Landscape + equal = full-bleed video; hide the system toolbar
-            // so the auto-hide custom glass chrome owns the top edge. Every
-            // other state (focus mode in either orientation, equal mode in
-            // portrait) keeps the always-visible system toolbar.
-            .toolbar(chromeAutoHideActive ? .hidden : .visible, for: .navigationBar)
-            .toolbar {
+            // No system toolbar anywhere in multi-view. On iOS 26 the
+            // toolbar wraps its items in its OWN glass, so the settings
+            // gear rendered with a double treatment that didn't match the
+            // rest of the app. Instead this draws the exact chrome row
+            // every other screen uses: Back pill + SettingsGearButton in a
+            // top safeAreaInset.
+            .toolbar(.hidden, for: .navigationBar)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                // Landscape + equal = full-bleed video; the auto-hiding
+                // overlay chrome below owns the top edge in that state.
                 if !chromeAutoHideActive {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button(action: handleDismiss) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "chevron.left")
-                                Text("Back")
-                            }
-                            .foregroundStyle(.white)
+                    HStack {
+                        chromeBackButton
+                        Spacer()
+                        SettingsGearButton {
+                            viewModel.triggerSelectionHaptic()
+                            onOpenSettings()
                         }
                     }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        SettingsGearButton(action: onOpenSettings)
-                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 4)
                 }
             }
             .overlay(alignment: .top) {
                 if chromeAutoHideActive {
                     HStack(spacing: 10) {
-                        // Fixed 44pt height capsule pill — same dimensions as
-                        // the + / layout-chooser buttons in the multi-view
-                        // header and the system toolbar items in focus mode.
-                        Button(action: {
-                            handleDismiss()
-                        }) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "chevron.left")
-                                Text("Back")
-                            }
-                            .font(.body)
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 16)
-                            .frame(height: 44)
-                            .modifier(GlassEffect(cornerRadius: 22, isSelected: false, accentColor: nil))
-                        }
-                        .buttonStyle(.plain)
+                        chromeBackButton
 
                         Spacer()
 
@@ -283,19 +285,11 @@ struct MultiViewScreen: View {
                         }
                         .buttonStyle(.plain)
 
-                        // Perfect 44x44 circle to match the + / layout-chooser
-                        // glass buttons in the multi-view header.
-                        Button(action: {
+                        // The one settings gear used everywhere in the app.
+                        SettingsGearButton {
+                            viewModel.triggerSelectionHaptic()
                             onOpenSettings()
-                        }) {
-                            Image(systemName: "gearshape.fill")
-                                .symbolRenderingMode(.hierarchical)
-                                .font(.system(size: 17, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 44, height: 44)
-                                .modifier(GlassEffect(cornerRadius: 22, isSelected: false, accentColor: nil))
                         }
-                        .buttonStyle(.plain)
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
@@ -1418,10 +1412,14 @@ struct LiveScoresStrip: View {
                         .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(.white)
                     Spacer()
+                    // Icon-only — the blue "See all" text read as clutter
+                    // against the neutral chrome everywhere else.
                     Button(action: { showAllScoresSheet = true }) {
-                        Text("See all")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(Color.blue)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 30, height: 30)
+                            .background(Circle().fill(Color.white.opacity(0.18)))
                     }
                     .buttonStyle(.plain)
                 }

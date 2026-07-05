@@ -44,10 +44,92 @@ enum SportType: String, CaseIterable, Identifiable, Sendable {
         case .wLacrosse: return "https://site.api.espn.com/apis/site/v2/sports/lacrosse/womens-college-lacrosse/scoreboard"
         case .mVolleyball: return "https://site.api.espn.com/apis/site/v2/sports/volleyball/mens-college-volleyball/scoreboard"
         case .wVolleyball: return "https://site.api.espn.com/apis/site/v2/sports/volleyball/womens-college-volleyball/scoreboard"
-        case .soccerLeagues, .domesticCups, .continental, .international: return "" 
+        case .soccerLeagues, .domesticCups, .continental, .international: return ""
         case .f1: return "https://site.api.espn.com/apis/site/v2/sports/racing/f1/scoreboard"
         case .mma: return "https://site.api.espn.com/apis/site/v2/sports/mma/ufc/scoreboard"
         }
+    }
+
+    /// True for the four aggregate soccer tabs. They share one team-id pool
+    /// (the same club plays in its league, a domestic cup, and a continental
+    /// competition), so favorites and matching treat them as one sport.
+    nonisolated var isSoccer: Bool {
+        self == .soccerLeagues || self == .domesticCups || self == .continental || self == .international
+    }
+
+    /// The `<sport>/<league>` path segment of this sport's ESPN site API
+    /// (e.g. "football/nfl"), derived from the scoreboard endpoint so any
+    /// sport added with an endpoint automatically gets team-list support.
+    /// Nil for aggregate tabs (Pinned, the soccer buckets).
+    nonisolated var apiPath: String? {
+        guard let start = endpoint.range(of: "/sports/"),
+              let end = endpoint.range(of: "/scoreboard") else { return nil }
+        return String(endpoint[start.upperBound..<end.lowerBound])
+    }
+}
+
+/// A single soccer competition ESPN exposes: the API league code plus the
+/// human-readable name shown throughout the app.
+nonisolated struct SoccerCompetition: Hashable, Sendable {
+    let code: String
+    let name: String
+}
+
+extension SportType {
+    /// Single source of truth for every soccer competition the app covers.
+    /// The scoreboard fetch, the team catalog, and the favorites pickers all
+    /// read from this list — add a competition here and every feature picks
+    /// it up automatically. Group order matters: when a team appears in
+    /// several competitions (a club in its league AND a domestic cup, a
+    /// national side in the World Cup AND friendlies), the catalog labels it
+    /// with the first competition that lists it.
+    nonisolated static let soccerCompetitionGroups: [(sport: SportType, competitions: [SoccerCompetition])] = [
+        (.soccerLeagues, [
+            SoccerCompetition(code: "eng.1", name: "Premier League"),
+            SoccerCompetition(code: "esp.1", name: "La Liga"),
+            SoccerCompetition(code: "ger.1", name: "Bundesliga"),
+            SoccerCompetition(code: "ita.1", name: "Serie A"),
+            SoccerCompetition(code: "fra.1", name: "Ligue 1"),
+            SoccerCompetition(code: "usa.1", name: "MLS"),
+            SoccerCompetition(code: "eng.2", name: "EFL Championship"),
+            SoccerCompetition(code: "mex.1", name: "Liga MX"),
+            SoccerCompetition(code: "ned.1", name: "Eredivisie"),
+            SoccerCompetition(code: "por.1", name: "Primeira Liga"),
+            SoccerCompetition(code: "sco.1", name: "Scottish Premiership"),
+            SoccerCompetition(code: "bra.1", name: "Brasileirão"),
+            SoccerCompetition(code: "arg.1", name: "Argentine Primera")
+        ]),
+        (.domesticCups, [
+            SoccerCompetition(code: "eng.fa", name: "FA Cup"),
+            SoccerCompetition(code: "eng.league_cup", name: "Carabao Cup"),
+            SoccerCompetition(code: "esp.copa_del_rey", name: "Copa del Rey"),
+            SoccerCompetition(code: "ger.dfb_pokal", name: "DFB-Pokal"),
+            SoccerCompetition(code: "ita.coppa_italia", name: "Coppa Italia"),
+            SoccerCompetition(code: "fra.coupe_de_france", name: "Coupe de France"),
+            SoccerCompetition(code: "usa.open", name: "US Open Cup")
+        ]),
+        (.continental, [
+            SoccerCompetition(code: "uefa.champions", name: "Champions League"),
+            SoccerCompetition(code: "uefa.europa", name: "Europa League"),
+            SoccerCompetition(code: "uefa.europa.conf", name: "Conference League"),
+            SoccerCompetition(code: "conmebol.libertadores", name: "Libertadores"),
+            SoccerCompetition(code: "concacaf.champions", name: "Concacaf Champions"),
+            SoccerCompetition(code: "afc.champions", name: "AFC Champions")
+        ]),
+        (.international, [
+            SoccerCompetition(code: "fifa.world", name: "World Cup"),
+            SoccerCompetition(code: "uefa.euro", name: "Euro"),
+            SoccerCompetition(code: "conmebol.america", name: "Copa América"),
+            SoccerCompetition(code: "concacaf.gold", name: "Gold Cup"),
+            SoccerCompetition(code: "uefa.nations", name: "Nations League"),
+            SoccerCompetition(code: "fifa.friendly", name: "Friendlies"),
+            SoccerCompetition(code: "fifa.cwc", name: "Club World Cup")
+        ])
+    ]
+
+    /// The competitions bundled under one soccer tab (empty for non-soccer).
+    nonisolated static func competitions(for sport: SportType) -> [SoccerCompetition] {
+        soccerCompetitionGroups.first(where: { $0.sport == sport })?.competitions ?? []
     }
 }
 

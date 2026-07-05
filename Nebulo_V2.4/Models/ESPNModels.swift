@@ -11,15 +11,19 @@ struct ESPNEvent: Codable, Identifiable, Hashable, Sendable {
     let competitions: [ESPNCompetition]
     let date: String
     let groupings: [ESPNGrouping]?
+    /// Tournament round / season phase, e.g. "group-stage", "round-of-16",
+    /// "final" — or the season name for regular league play. Drives the
+    /// bracket and round labels in the league detail sheet.
+    let season: ESPNEventSeason?
     var leagueLabel: String? = nil
-    
-    
+
+
     private let _dateParsed: Date?
-    
+
     enum CodingKeys: String, CodingKey {
-        case id, shortName, status, competitions, date, groupings, leagueLabel
+        case id, shortName, status, competitions, date, groupings, season, leagueLabel
     }
-    
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try container.decode(String.self, forKey: .id)
@@ -28,6 +32,7 @@ struct ESPNEvent: Codable, Identifiable, Hashable, Sendable {
         self.competitions = try container.decode([ESPNCompetition].self, forKey: .competitions)
         self.date = try container.decode(String.self, forKey: .date)
         self.groupings = try container.decodeIfPresent([ESPNGrouping].self, forKey: .groupings)
+        self.season = try? container.decodeIfPresent(ESPNEventSeason.self, forKey: .season)
         self.leagueLabel = try container.decodeIfPresent(String.self, forKey: .leagueLabel)
 
         self._dateParsed = ESPNEvent.parseDate(self.date)
@@ -75,6 +80,7 @@ struct ESPNEvent: Codable, Identifiable, Hashable, Sendable {
         try container.encode(competitions, forKey: .competitions)
         try container.encode(date, forKey: .date)
         try container.encode(groupings, forKey: .groupings)
+        try container.encodeIfPresent(season, forKey: .season)
         try container.encode(leagueLabel, forKey: .leagueLabel)
     }
     
@@ -104,6 +110,7 @@ struct ESPNEvent: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
+nonisolated struct ESPNEventSeason: Codable, Hashable, Sendable { let slug: String? }
 struct ESPNGrouping: Codable, Hashable, Sendable { let competitions: [ESPNCompetition] }
 struct ESPNStatus: Codable, Hashable, Sendable { let type: ESPNStatusType }
 struct ESPNStatusType: Codable, Hashable, Sendable { let detail: String; let state: String }
@@ -125,10 +132,11 @@ struct ESPNCompetitor: Codable, Identifiable, Hashable, Sendable {
     
     var id: String { _id ?? team?.id ?? athlete?.displayName ?? UUID().uuidString }
 }
-struct ESPNTeam: Codable, Hashable, Sendable { let id: String; let abbreviation: String?; let displayName: String?; let shortDisplayName: String?; let logo: String?; let color: String? }
+nonisolated struct ESPNTeam: Codable, Hashable, Sendable { let id: String; let abbreviation: String?; let displayName: String?; let shortDisplayName: String?; let logo: String?; let color: String? }
 struct ESPNLeader: Codable, Hashable, Sendable { let name: String?; let displayName: String?; let leaders: [ESPNLeaderEntry]? }
 struct ESPNLeaderEntry: Codable, Hashable, Sendable { let displayValue: String?; let athlete: ESPNAthlete? }
-struct ESPNAthlete: Codable, Hashable, Sendable { 
+struct ESPNAthlete: Codable, Hashable, Sendable {
+    let id: String?
     let displayName: String?
     let headshot: String?
     let flag: ESPNFlag?

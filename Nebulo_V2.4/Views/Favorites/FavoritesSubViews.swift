@@ -53,6 +53,10 @@ struct AddFavoriteSheet: View {
 
     @State private var tab: Tab = .teams
     @State private var search = ""
+    /// Leagues the user has opened in the Teams tab. Collapsed by default so
+    /// the full catalog reads as a compact league index; searching expands
+    /// every matching section automatically.
+    @State private var expandedLeagues: Set<String> = []
 
     enum Tab: String, CaseIterable, Identifiable {
         case teams = "Teams", leagues = "Leagues"
@@ -78,6 +82,55 @@ struct AddFavoriteSheet: View {
         return all.filter { $0.displayName.lowercased().contains(lower) || $0.sport.rawValue.lowercased().contains(lower) }
     }
 
+    /// Display rank for each league section: soccer competitions first in
+    /// catalog order (leagues → cups → continental → international), then
+    /// the standalone sports in the user's Sports-hub tab order. Unranked
+    /// labels (future additions) sort alphabetically at the end.
+    private var leagueRank: [String: Int] {
+        var rank: [String: Int] = [:]
+        var i = 0
+        for (_, competitions) in SportType.soccerCompetitionGroups {
+            for comp in competitions where rank[comp.name] == nil {
+                rank[comp.name] = i; i += 1
+            }
+        }
+        for sport in scoreViewModel.orderedSports where !sport.isSoccer && rank[sport.rawValue] == nil {
+            rank[sport.rawValue] = i; i += 1
+        }
+        return rank
+    }
+
+    /// Teams grouped into per-league sections so the full catalog stays
+    /// browsable. Grouping also keeps ForEach ids unique — ESPN team ids
+    /// repeat across sports, but never within one league.
+    private var groupedTeamHits: [(label: String, sport: SportType, leagueLabel: String?, teams: [(team: ESPNTeam, sport: SportType, leagueLabel: String?)])] {
+        let rank = leagueRank
+        return Dictionary(grouping: teamHits) { $0.leagueLabel ?? $0.sport.rawValue }
+            .map { (label: $0.key, sport: $0.value.first?.sport ?? .nfl, leagueLabel: $0.value.first?.leagueLabel, teams: $0.value) }
+            .sorted {
+                let ra = rank[$0.label] ?? Int.max
+                let rb = rank[$1.label] ?? Int.max
+                return ra == rb ? $0.label < $1.label : ra < rb
+            }
+    }
+
+    /// Leagues grouped into sections: each soccer bucket keeps its own
+    /// section (in catalog order), every standalone sport lands in "Sports".
+    private var groupedLeagueHits: [(label: String, leagues: [(sport: SportType, leagueLabel: String?, displayName: String)])] {
+        var sections: [(label: String, leagues: [(sport: SportType, leagueLabel: String?, displayName: String)])] = []
+        var index: [String: Int] = [:]
+        for hit in leagueHits {
+            let label = hit.sport.isSoccer ? hit.sport.rawValue : "Sports"
+            if let i = index[label] {
+                sections[i].leagues.append(hit)
+            } else {
+                index[label] = sections.count
+                sections.append((label, [hit]))
+            }
+        }
+        return sections
+    }
+
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
@@ -92,38 +145,84 @@ struct AddFavoriteSheet: View {
                     if tab == .teams {
                         if teamHits.isEmpty {
                             Text(scoreViewModel.allKnownTeams().isEmpty
-                                 ? "Teams will appear once the live scoreboard loads."
+                                 ? "Loading the team catalog…"
                                  : "No teams match your search.")
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .center)
                                 .padding(.vertical, 24)
                                 .listRowBackground(Color.clear)
                         } else {
-                            ForEach(teamHits, id: \.team.id) { hit in
-                                AddFavoriteTeamRow(
-                                    team: hit.team,
-                                    leagueLabel: hit.leagueLabel,
-                                    isFavorite: scoreViewModel.isFavoriteTeam(hit.team),
-                                    onToggle: { scoreViewModel.toggleFavoriteTeam(hit.team) }
-                                )
+                            ForEach(groupedTeamHits, id: \.label) { group in
+                                let isExpanded = !search.isEmpty || expandedLeagues.contains(group.label)
+                                Section {
+                                    if isExpanded {
+                                        ForEach(group.teams, id: \.team.id) { hit in
+                                            AddFavoriteTeamRow(
+                                                team: hit.team,
+                                                leagueLabel: hit.leagueLabel,
+                                                isFavorite: scoreViewModel.isFavoriteTeam(hit.team, sport: hit.sport),
+                                                onToggle: { scoreViewModel.toggleFavoriteTeam(hit.team, sport: hit.sport) }
+                                            )
+                                        }
+                                    }
+                                } header: {
+                                    // The header IS the disclosure control:
+                                    // tap to expand/collapse the league.
+                                    Button {
+                                        withAnimation(.easeOut(duration: 0.2)) {
+                                            if expandedLeagues.contains(group.label) {
+                                                expandedLeagues.remove(group.label)
+                                            } else {
+                                                expandedLeagues.insert(group.label)
+                                            }
+                                        }
+                                    } label: {
+                                        HStack(spacing: 8) {
+                                            if let logo = LeagueLogoURL.url(sport: group.sport, leagueLabel: group.leagueLabel) {
+                                                CachedAsyncImage(urlString: logo, size: CGSize(width: 20, height: 20))
+                                            }
+                                            Text(group.label)
+                                            Text("\(group.teams.count)")
+                                                .font(.system(size: 11, weight: .bold))
+                                                .foregroundStyle(.secondary)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(Capsule().fill(Color.primary.opacity(0.08)))
+                                            Spacer()
+                                            if search.isEmpty {
+                                                Image(systemName: "chevron.right")
+                                                    .font(.system(size: 11, weight: .bold))
+                                                    .foregroundStyle(.secondary)
+                                                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                                            }
+                                        }
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .disabled(!search.isEmpty)
+                                }
                             }
                         }
                     } else {
                         if leagueHits.isEmpty {
-                            Text("Leagues will appear once the live scoreboard loads.")
+                            Text("No leagues match your search.")
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .center)
                                 .padding(.vertical, 24)
                                 .listRowBackground(Color.clear)
                         } else {
-                            ForEach(leagueHits, id: \.displayName) { hit in
-                                AddFavoriteLeagueRow(
-                                    sport: hit.sport,
-                                    leagueLabel: hit.leagueLabel,
-                                    displayName: hit.displayName,
-                                    isFavorite: scoreViewModel.isFavoriteLeague(sport: hit.sport, leagueLabel: hit.leagueLabel),
-                                    onToggle: { scoreViewModel.toggleFavoriteLeague(sport: hit.sport, leagueLabel: hit.leagueLabel) }
-                                )
+                            ForEach(groupedLeagueHits, id: \.label) { group in
+                                Section(group.label) {
+                                    ForEach(group.leagues, id: \.displayName) { hit in
+                                        AddFavoriteLeagueRow(
+                                            sport: hit.sport,
+                                            leagueLabel: hit.leagueLabel,
+                                            displayName: hit.displayName,
+                                            isFavorite: scoreViewModel.isFavoriteLeague(sport: hit.sport, leagueLabel: hit.leagueLabel),
+                                            onToggle: { scoreViewModel.toggleFavoriteLeague(sport: hit.sport, leagueLabel: hit.leagueLabel) }
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -232,9 +331,12 @@ struct FavoritesAllTeamsView: View {
 
                 if !teams.isEmpty {
                     Section("Teams") {
-                        ForEach(teams, id: \.team.id) { item in
+                        // Positional ids: team ids alone can repeat across
+                        // sports, and move/delete already work off indices.
+                        ForEach(Array(teams.enumerated()), id: \.offset) { _, item in
                             FavoriteTeamCompactRow(
                                 team: item.team,
+                                sport: item.sport,
                                 leagueLabel: item.leagueLabel,
                                 scoreViewModel: scoreViewModel
                             )
@@ -243,7 +345,7 @@ struct FavoritesAllTeamsView: View {
                             scoreViewModel.moveFavoriteTeams(from: source, to: destination)
                         }
                         .onDelete { idx in
-                            for i in idx { scoreViewModel.toggleFavoriteTeam(teams[i].team) }
+                            for i in idx { scoreViewModel.toggleFavoriteTeam(teams[i].team, sport: teams[i].sport) }
                         }
                     }
                 }
@@ -309,6 +411,7 @@ struct FavoritesAllTeamsView: View {
 struct TeamNextGamesSheet: View {
     let team: ESPNTeam
     let leagueLabel: String?
+    var sport: SportType? = nil
     @ObservedObject var viewModel: ChannelViewModel
     @ObservedObject var scoreViewModel: ScoreViewModel
     @Environment(\.dismiss) private var dismiss
@@ -317,7 +420,9 @@ struct TeamNextGamesSheet: View {
         let f = DateFormatter(); f.dateStyle = .medium; f.timeStyle = .short; return f
     }()
 
-    private var games: [ESPNEvent] { scoreViewModel.gamesForTeam(team.id) }
+    private var games: [ESPNEvent] {
+        scoreViewModel.gamesForTeam(ScoreViewModel.teamKey(sport: sport, teamID: team.id))
+    }
 
     var body: some View {
         NavigationView {
@@ -420,108 +525,137 @@ struct LeagueGamesSheet: View {
     @ObservedObject var scoreViewModel: ScoreViewModel
     @Environment(\.dismiss) private var dismiss
 
+    /// Wide-window schedule (recent results + upcoming fixtures) fetched on
+    /// appear; the session pool covers the gap while it loads or if it fails.
+    @State private var schedule: [ESPNEvent] = []
+    @State private var standings: [LeagueDetailService.StandingsGroup] = []
+    @State private var isLoadingDetail = true
+    @State private var mode: DetailMode = .matches
+
+    enum DetailMode: String, CaseIterable, Identifiable {
+        case matches, standings, bracket
+        var id: String { rawValue }
+    }
+
     private static let dateFmt: DateFormatter = {
         let f = DateFormatter(); f.dateStyle = .medium; f.timeStyle = .short; return f
     }()
 
-    /// Games for THIS league only. When a specific leagueLabel is set (e.g.
-    /// "Bundesliga"), pull exclusively from that league's section in
-    /// `filteredSectionsMap` — pulling from `filteredGames[sport]` would dump
-    /// in every soccer game across every league.
-    private var games: [ESPNEvent] {
+    // MARK: Data
+
+    /// Today's games from the session pool — instant content while the wide
+    /// window loads, and the fallback if that fetch fails.
+    private var sessionGames: [ESPNEvent] {
         let pool: [ESPNEvent]
         if let label = leagueLabel {
             pool = (scoreViewModel.filteredSectionsMap[sport] ?? [])
                 .filter { $0.league == label }
                 .flatMap { $0.games }
         } else {
-            // No specific league — use the flat sport-wide list (e.g. NFL).
             pool = scoreViewModel.filteredGames[sport] ?? []
         }
         var seen = Set<String>()
-        let unique = pool.filter { seen.insert($0.id).inserted }
-        return unique.sorted { a, b in
-            let ra = stateRank(a.status.type.state)
-            let rb = stateRank(b.status.type.state)
-            if ra != rb { return ra < rb }
-            return a.gameDate < b.gameDate
-        }
+        return pool.filter { seen.insert($0.id).inserted }
     }
 
-    private func stateRank(_ state: String) -> Int {
-        switch state {
-        case "in":   return 0  // live first
-        case "pre":  return 1  // upcoming next
-        case "post": return 2  // final last
-        default:     return 3
-        }
-    }
+    private var games: [ESPNEvent] { schedule.isEmpty ? sessionGames : schedule }
 
     private var liveGames: [ESPNEvent] { games.filter { $0.status.type.state == "in" } }
+    private var upcomingGames: [ESPNEvent] {
+        games.filter { $0.status.type.state == "pre" }.sorted { $0.gameDate < $1.gameDate }
+    }
+    private var finishedGames: [ESPNEvent] {
+        games.filter { $0.status.type.state == "post" }.sorted { $0.gameDate > $1.gameDate }
+    }
+
+    // MARK: Tournament structure
+
+    /// True for slugs that name a knockout phase ("round-of-16",
+    /// "semifinals", "final", "3rd-place-match", playoff rounds…) as opposed
+    /// to group/regular-season play.
+    private func isKnockoutSlug(_ slug: String?) -> Bool {
+        guard let s = slug?.lowercased() else { return false }
+        if s.contains("group") || s.contains("regular") { return false }
+        return s.contains("round-of") || s.contains("quarterfinal") || s.contains("semifinal")
+            || s.contains("final") || s.contains("place") || s.contains("playoff") || s.contains("knockout")
+    }
+
+    private var knockoutGames: [ESPNEvent] { games.filter { isKnockoutSlug($0.season?.slug) } }
+
+    /// Distinct knockout rounds ordered by earliest kickoff — the Round of
+    /// 16 lands before the Quarterfinals with no hardcoded round list to
+    /// maintain when ESPN adds new formats.
+    private var knockoutRounds: [(name: String, games: [ESPNEvent])] {
+        var buckets: [String: [ESPNEvent]] = [:]
+        for game in knockoutGames {
+            guard let slug = game.season?.slug else { continue }
+            buckets[slug, default: []].append(game)
+        }
+        return buckets
+            .sorted { a, b in
+                let da = a.value.map(\.gameDate).min() ?? .distantFuture
+                let db = b.value.map(\.gameDate).min() ?? .distantFuture
+                return da < db
+            }
+            .map { (roundName($0.key), $0.value.sorted { $0.gameDate < $1.gameDate }) }
+    }
+
+    /// True when the schedule carries tournament phases (groups/knockouts).
+    private var isTournament: Bool {
+        !knockoutGames.isEmpty || games.contains { ($0.season?.slug ?? "").lowercased().contains("group") }
+    }
+
+    /// "round-of-16" → "Round of 16", "3rd-place-match" → "3rd Place Match".
+    private func roundName(_ slug: String) -> String {
+        slug.split(separator: "-")
+            .map { $0 == "of" ? "of" : $0.capitalized }
+            .joined(separator: " ")
+    }
+
+    /// Round caption for a match row — only tournament phases, never the
+    /// season name of regular league play.
+    private func roundLabel(for game: ESPNEvent) -> String? {
+        guard isTournament, let slug = game.season?.slug else { return nil }
+        let s = slug.lowercased()
+        guard s.contains("group") || isKnockoutSlug(s) else { return nil }
+        return roundName(slug)
+    }
+
+    private var availableModes: [DetailMode] {
+        var modes: [DetailMode] = [.matches]
+        if !standings.isEmpty { modes.append(.standings) }
+        if !knockoutGames.isEmpty { modes.append(.bracket) }
+        return modes
+    }
+
+    private func title(for mode: DetailMode) -> String {
+        switch mode {
+        case .matches:   return "Matches"
+        case .standings: return standings.count > 1 ? "Groups" : "Table"
+        case .bracket:   return "Bracket"
+        }
+    }
 
     var body: some View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 16) {
-                    // Hero: league logo + name + sport
-                    VStack(spacing: 10) {
-                        FavoriteSquareLogo(
-                            logo: LeagueLogoURL.url(sport: sport, leagueLabel: leagueLabel),
-                            abbreviation: abbreviationFor(displayName),
-                            color: nil
-                        )
-                        .frame(width: 76, height: 76)
-                        Text(displayName)
-                            .font(.system(size: 22, weight: .bold))
-                            .multilineTextAlignment(.center)
-                        Text(sport.rawValue)
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(.secondary)
-                        if !liveGames.isEmpty {
-                            HStack(spacing: 6) {
-                                Circle().fill(Color.red).frame(width: 6, height: 6)
-                                Text("\(liveGames.count) live now")
-                                    .font(.system(size: 12, weight: .bold))
-                                    .foregroundStyle(.red)
-                            }
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 8)
+                    hero
 
-                    if games.isEmpty {
-                        VStack(spacing: 12) {
-                            Image(systemName: "calendar.badge.exclamationmark")
-                                .font(.system(size: 32))
-                                .foregroundStyle(.secondary)
-                            Text("No games on the schedule")
-                                .font(.headline)
-                            Text("ESPN hasn't surfaced any matches for this league in the current window. Check back closer to game time.")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal, 24)
-                        }
-                        .padding(.vertical, 36)
-                    } else {
-                        VStack(spacing: 10) {
-                            ForEach(games) { game in
-                                Button(action: { playFromGame(game) }) {
-                                    TeamGameRow(game: game, dateFormatter: Self.dateFmt)
-                                }
-                                .buttonStyle(.plain)
-                                .contextMenu {
-                                    Button {
-                                        viewModel.toggleGameRecording(game: game, sport: sport)
-                                    } label: {
-                                        let isScheduled = viewModel.scheduledRecording(for: game) != nil
-                                        Label(isScheduled ? "Cancel Recording" : "Record",
-                                              systemImage: isScheduled ? "stop.circle" : "record.circle")
-                                    }
-                                }
+                    if availableModes.count > 1 {
+                        Picker("", selection: $mode) {
+                            ForEach(availableModes) { m in
+                                Text(title(for: m)).tag(m)
                             }
                         }
+                        .pickerStyle(.segmented)
                         .padding(.horizontal, 16)
+                    }
+
+                    switch mode {
+                    case .matches:   matchesContent
+                    case .standings: standingsContent
+                    case .bracket:   bracketContent
                     }
 
                     Color.clear.frame(height: 24)
@@ -534,6 +668,134 @@ struct LeagueGamesSheet: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .task {
+                async let sched = LeagueDetailService.fetchSchedule(sport: sport, leagueLabel: leagueLabel)
+                async let stand = LeagueDetailService.fetchStandings(sport: sport, leagueLabel: leagueLabel)
+                let (s, st) = await (sched, stand)
+                schedule = s
+                standings = st
+                isLoadingDetail = false
+            }
+        }
+    }
+
+    // MARK: Hero
+
+    private var hero: some View {
+        VStack(spacing: 10) {
+            FavoriteSquareLogo(
+                logo: LeagueLogoURL.url(sport: sport, leagueLabel: leagueLabel),
+                abbreviation: abbreviationFor(displayName),
+                color: nil
+            )
+            .frame(width: 76, height: 76)
+            Text(displayName)
+                .font(.system(size: 22, weight: .bold))
+                .multilineTextAlignment(.center)
+            Text(sport.rawValue)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+            if !liveGames.isEmpty {
+                HStack(spacing: 6) {
+                    Circle().fill(Color.red).frame(width: 6, height: 6)
+                    Text("\(liveGames.count) live now")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.red)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 8)
+    }
+
+    // MARK: Matches (live → upcoming fixtures → recent results)
+
+    @ViewBuilder private var matchesContent: some View {
+        if games.isEmpty {
+            if isLoadingDetail {
+                ProgressView()
+                    .padding(.vertical, 48)
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: "calendar.badge.exclamationmark")
+                        .font(.system(size: 32))
+                        .foregroundStyle(.secondary)
+                    Text("No games on the schedule")
+                        .font(.headline)
+                    Text("ESPN hasn't surfaced any matches for this league in the current window. Check back closer to game time.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                }
+                .padding(.vertical, 36)
+            }
+        } else {
+            VStack(spacing: 20) {
+                if !liveGames.isEmpty { matchSection("Live Now", liveGames) }
+                if !upcomingGames.isEmpty { matchSection("Upcoming", upcomingGames) }
+                if !finishedGames.isEmpty { matchSection("Results", finishedGames) }
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+
+    @ViewBuilder private func matchSection(_ sectionTitle: String, _ sectionGames: [ESPNEvent]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(sectionTitle.uppercased())
+                .font(.system(size: 12, weight: .black))
+                .kerning(0.8)
+                .foregroundStyle(.secondary)
+            ForEach(sectionGames) { game in
+                Button(action: { playFromGame(game) }) {
+                    TeamGameRow(game: game, dateFormatter: Self.dateFmt, roundLabel: roundLabel(for: game))
+                }
+                .buttonStyle(.plain)
+                .contextMenu {
+                    Button {
+                        viewModel.toggleGameRecording(game: game, sport: sport)
+                    } label: {
+                        let isScheduled = viewModel.scheduledRecording(for: game) != nil
+                        Label(isScheduled ? "Cancel Recording" : "Record",
+                              systemImage: isScheduled ? "stop.circle" : "record.circle")
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: Standings (league table, or tournament group tables)
+
+    @ViewBuilder private var standingsContent: some View {
+        VStack(spacing: 16) {
+            ForEach(standings) { group in
+                StandingsTableCard(group: group, showName: standings.count > 1)
+            }
+        }
+        .padding(.horizontal, 16)
+    }
+
+    // MARK: Bracket (knockout rounds as horizontally scrolling columns)
+
+    @ViewBuilder private var bracketContent: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .center, spacing: 14) {
+                ForEach(knockoutRounds, id: \.name) { round in
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(round.name.uppercased())
+                            .font(.system(size: 11, weight: .black))
+                            .kerning(0.8)
+                            .foregroundStyle(.secondary)
+                        ForEach(round.games) { game in
+                            Button(action: { playFromGame(game) }) {
+                                BracketMatchCard(game: game)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
         }
     }
 
@@ -564,6 +826,9 @@ struct LeagueGamesSheet: View {
 struct TeamGameRow: View {
     let game: ESPNEvent
     let dateFormatter: DateFormatter
+    /// Tournament phase caption ("Group Stage", "Round of 16") — nil for
+    /// regular league play.
+    var roundLabel: String? = nil
 
     private var stateLabel: String {
         switch game.status.type.state {
@@ -585,6 +850,15 @@ struct TeamGameRow: View {
         VStack(spacing: 8) {
             HStack {
                 stateBadge
+                if let round = roundLabel {
+                    Text(round)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Color.primary.opacity(0.08), in: Capsule())
+                        .lineLimit(1)
+                }
                 Spacer()
                 if game.status.type.state == "in" {
                     Text(game.status.type.detail.uppercased())
@@ -668,8 +942,166 @@ struct TeamGameRow: View {
     }
 }
 
+// MARK: - Standings table
+
+/// One standings table — the whole league, or a single tournament group.
+struct StandingsTableCard: View {
+    let group: LeagueDetailService.StandingsGroup
+    let showName: Bool
+
+    /// Stat columns, dropping any the API didn't provide for this league
+    /// (e.g. draws/points aren't a thing for US sports).
+    private var columns: [(header: String, value: (LeagueDetailService.StandingRow) -> String)] {
+        let all: [(String, (LeagueDetailService.StandingRow) -> String)] = [
+            ("P",   { $0.played }),
+            ("W",   { $0.wins }),
+            ("D",   { $0.draws }),
+            ("L",   { $0.losses }),
+            ("GD",  { $0.goalDiff }),
+            ("PTS", { $0.points })
+        ]
+        return all.filter { col in group.rows.contains { col.1($0) != "–" } }
+    }
+
+    private func columnWidth(_ header: String) -> CGFloat {
+        switch header {
+        case "GD":  return 34
+        case "PTS": return 30
+        default:    return 22
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if showName {
+                Text(group.name)
+                    .font(.system(size: 14, weight: .bold))
+                    .padding(.horizontal, 12)
+                    .padding(.top, 12)
+            }
+
+            HStack(spacing: 6) {
+                Text("#").frame(width: 18, alignment: .leading)
+                Text("Team").frame(maxWidth: .infinity, alignment: .leading)
+                ForEach(columns, id: \.header) { col in
+                    Text(col.header).frame(width: columnWidth(col.header), alignment: .trailing)
+                }
+            }
+            .font(.system(size: 10, weight: .black))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+
+            ForEach(Array(group.rows.enumerated()), id: \.offset) { idx, row in
+                HStack(spacing: 6) {
+                    Text(row.rank)
+                        .frame(width: 18, alignment: .leading)
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        if let logo = row.team.logo, !logo.isEmpty {
+                            CachedAsyncImage(urlString: logo, size: CGSize(width: 18, height: 18))
+                        }
+                        Text(row.team.shortDisplayName ?? row.team.displayName ?? row.team.abbreviation ?? "—")
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    ForEach(columns, id: \.header) { col in
+                        Text(col.value(row))
+                            .fontWeight(col.header == "PTS" ? .bold : .medium)
+                            .frame(width: columnWidth(col.header), alignment: .trailing)
+                    }
+                }
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(alignment: .leading) {
+                    // Qualification zone marker (advance / relegation colors
+                    // as published by ESPN).
+                    if let hex = row.noteColor,
+                       let c = Color(hex: hex.hasPrefix("#") ? hex : "#\(hex)") {
+                        Rectangle().fill(c).frame(width: 3)
+                    }
+                }
+                if idx < group.rows.count - 1 {
+                    Divider().padding(.leading, 12)
+                }
+            }
+        }
+        .padding(.bottom, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(.secondarySystemBackground))
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+// MARK: - Bracket match card
+
+/// Compact matchup card used in the knockout bracket columns.
+struct BracketMatchCard: View {
+    let game: ESPNEvent
+
+    private static let fmt: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "MMM d · h:mm a"; return f
+    }()
+
+    private var footer: String {
+        switch game.status.type.state {
+        case "in":   return game.status.type.detail
+        case "post": return "Final"
+        default:     return Self.fmt.string(from: game.gameDate)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            teamLine(game.awayCompetitor)
+            teamLine(game.homeCompetitor)
+            HStack(spacing: 4) {
+                if game.status.type.state == "in" {
+                    Circle().fill(Color.red).frame(width: 5, height: 5)
+                }
+                Text(footer)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(game.status.type.state == "in" ? Color.red : Color.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(10)
+        .frame(width: 168, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(.secondarySystemBackground))
+        )
+    }
+
+    @ViewBuilder private func teamLine(_ c: ESPNCompetitor?) -> some View {
+        let finished = game.status.type.state == "post"
+        let won = c?.winner == true
+        HStack(spacing: 7) {
+            if let logo = c?.team?.logo, !logo.isEmpty {
+                CachedAsyncImage(urlString: logo, size: CGSize(width: 18, height: 18))
+            } else {
+                Circle().fill(Color.secondary.opacity(0.2)).frame(width: 18, height: 18)
+            }
+            Text(c?.team?.shortDisplayName ?? c?.team?.abbreviation ?? "TBD")
+                .font(.system(size: 12, weight: won ? .bold : .semibold))
+                .foregroundStyle(!finished || won ? Color.primary : Color.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            if let score = c?.score, !score.isEmpty, game.status.type.state != "pre" {
+                Text(score)
+                    .font(.system(size: 13, weight: won ? .black : .semibold).monospacedDigit())
+                    .foregroundStyle(!finished || won ? Color.primary : Color.secondary)
+            }
+        }
+    }
+}
+
 struct FavoriteTeamCompactRow: View {
     let team: ESPNTeam
+    var sport: SportType? = nil
     let leagueLabel: String?
     @ObservedObject var scoreViewModel: ScoreViewModel
 
@@ -685,7 +1117,8 @@ struct FavoriteTeamCompactRow: View {
                 }
             }
             Spacer()
-            if let live = scoreViewModel.liveOrNextGame(forTeamID: team.id), live.status.type.state == "in" {
+            if let live = scoreViewModel.liveOrNextGame(forTeamID: ScoreViewModel.teamKey(sport: sport, teamID: team.id)),
+               live.status.type.state == "in" {
                 HStack(spacing: 4) {
                     Circle().fill(Color.red).frame(width: 6, height: 6)
                     Text("Live").font(.system(size: 11, weight: .bold)).foregroundStyle(.red)

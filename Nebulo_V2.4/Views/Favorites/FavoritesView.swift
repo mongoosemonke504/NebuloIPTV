@@ -58,7 +58,8 @@ struct FavoritesView: View {
     struct TeamDetailSelection: Identifiable {
         let team: ESPNTeam
         let leagueLabel: String?
-        var id: String { team.id }
+        var sport: SportType? = nil
+        var id: String { ScoreViewModel.teamKey(sport: sport, teamID: team.id) }
     }
 
     /// Drives `.sheet(item:)` on league taps. Carries the sport + league
@@ -237,6 +238,7 @@ struct FavoritesView: View {
             TeamNextGamesSheet(
                 team: selection.team,
                 leagueLabel: selection.leagueLabel,
+                sport: selection.sport,
                 viewModel: viewModel,
                 scoreViewModel: scoreViewModel
             )
@@ -384,7 +386,7 @@ struct FavoritesView: View {
             FavoritesSectionHeader(
                 title: "Channels",
                 count: favoriteChannels.count,
-                trailingTitle: favoriteChannels.count > 1 ? "Reorder" : nil,
+                trailingIcon: favoriteChannels.count > 1 ? "arrow.up.arrow.down" : nil,
                 accentColor: accentColor,
                 onTrailingTap: { showReorderChannels = true }
             )
@@ -425,11 +427,10 @@ struct FavoritesView: View {
             FavoritesSectionHeader(
                 title: "Teams & Leagues",
                 count: favoriteTeams.count + favoriteLeagues.count,
-                // Always render a "+" / "See All" button so the user can keep
-                // adding teams after the first favorite. The empty-state tile
-                // disappears once the list is non-empty, but the section
-                // header itself always exposes a way to add more.
-                trailingTitle: (favoriteTeams.count + favoriteLeagues.count) > 3 ? "See All" : nil,
+                // Chevron opens the full Teams & Leagues editor (see-all /
+                // reorder / delete); "+" adds more. Both render as the same
+                // neutral circular buttons — no accent-colored text.
+                trailingIcon: (favoriteTeams.count + favoriteLeagues.count) > 3 ? "chevron.right" : nil,
                 accentColor: accentColor,
                 onTrailingTap: { showSeeAllTeams = true },
                 onAddTap: { showAddSheet = true }
@@ -441,27 +442,28 @@ struct FavoritesView: View {
                     FavoritesEmptyTile(
                         icon: "sportscourt.fill",
                         title: "Add a team or league",
-                        subtitle: "Pick from any team the live scoreboard knows about."
+                        subtitle: "Every club, national side, and F1 driver — pick your favorites."
                     )
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 20)
             } else {
                 VStack(spacing: 10) {
-                    ForEach(Array(favoriteTeams.prefix(3).enumerated()), id: \.element.team.id) { _, item in
+                    // Positional ids — team ids alone can repeat across sports.
+                    ForEach(Array(favoriteTeams.prefix(3).enumerated()), id: \.offset) { _, item in
                         FavoriteTeamRow(
                             team: item.team,
                             sport: item.sport,
                             leagueLabel: item.leagueLabel,
                             scoreViewModel: scoreViewModel,
                             onTap: {
-                                detailTeam = TeamDetailSelection(team: item.team, leagueLabel: item.leagueLabel)
+                                detailTeam = TeamDetailSelection(team: item.team, leagueLabel: item.leagueLabel, sport: item.sport)
                             },
                             onWatch: { game in
                                 playFromGame(game, sport: item.sport)
                             },
                             onRemove: {
-                                scoreViewModel.toggleFavoriteTeam(item.team)
+                                scoreViewModel.toggleFavoriteTeam(item.team, sport: item.sport)
                             }
                         )
                     }
@@ -528,7 +530,7 @@ struct FavoritesView: View {
             FavoritesSectionHeader(
                 title: "Reminders",
                 count: reminderGames.count,
-                trailingTitle: nil,
+                trailingIcon: nil,
                 accentColor: accentColor,
                 onTrailingTap: nil
             )
@@ -650,7 +652,10 @@ struct FavoritesFilterPills: View {
 struct FavoritesSectionHeader: View {
     let title: String
     let count: Int
-    let trailingTitle: String?
+    /// SF Symbol for the trailing action, rendered as the same neutral
+    /// circular button as "+" — the old accent-colored text labels ("See
+    /// All", "Reorder") read as clutter next to it.
+    let trailingIcon: String?
     let accentColor: Color
     let onTrailingTap: (() -> Void)?
     /// Optional "+" tap target rendered on the trailing side. The Teams &
@@ -672,11 +677,13 @@ struct FavoritesSectionHeader: View {
                     .background(Capsule().fill(Color.white.opacity(0.15)))
             }
             Spacer()
-            if let label = trailingTitle, let action = onTrailingTap {
+            if let icon = trailingIcon, let action = onTrailingTap {
                 Button(action: action) {
-                    Text(label)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(accentColor)
+                    Image(systemName: icon)
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 30, height: 30)
+                        .background(Circle().fill(Color.white.opacity(0.18)))
                 }
                 .buttonStyle(.plain)
             }
@@ -781,7 +788,9 @@ struct FavoriteTeamRow: View {
     let onWatch: (ESPNEvent) -> Void
     let onRemove: () -> Void
 
-    private var liveGame: ESPNEvent? { scoreViewModel.liveOrNextGame(forTeamID: team.id) }
+    private var liveGame: ESPNEvent? {
+        scoreViewModel.liveOrNextGame(forTeamID: ScoreViewModel.teamKey(sport: sport, teamID: team.id))
+    }
 
     var body: some View {
         Button(action: { guard SwipeTapGuard.tapsAllowed else { return }; onTap() }) {

@@ -156,6 +156,23 @@ struct ScrollOffsetProbe: View {
     }
 }
 
+/// Probe that reports a view's global (screen) minY. Pair one on a scroll
+/// view's content and one on the scroll view itself, then subtract, to get
+/// the true scrolled distance — works where named coordinate spaces don't
+/// resolve (e.g. through UIPageViewController-backed pagers) and is immune
+/// to the scroll view's own frame moving during a header collapse.
+struct GlobalOffsetProbe: View {
+    let id: String
+    var body: some View {
+        GeometryReader { g in
+            Color.clear.preference(
+                key: SectionScrollOffsetsKey.self,
+                value: [id: g.frame(in: .global).minY]
+            )
+        }
+    }
+}
+
 struct GlassEffect: ViewModifier {
     let cornerRadius: CGFloat
     let isSelected: Bool
