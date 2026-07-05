@@ -725,6 +725,13 @@ struct StandardLayout: SwiftUI.View {
                 .allowsHitTesting(isDetailInteractive)
             } else {
                 ScrollView(showsIndicators: false) {
+                    // Batch every liquid-glass element on the home screen into a
+                    // single coordinated render pass. Each `.glassEffect` card
+                    // otherwise samples and blurs the backdrop independently
+                    // every scroll frame — the home screen's unique cost vs the
+                    // solid-fill Favorites/Sports screens. spacing 0 keeps the
+                    // separate cards from merging into one another.
+                    GlassEffectContainer(spacing: 0) {
                         VStack(alignment: .leading, spacing: 30) {
 
                             // 1. Adaptive live header — large "N live" with a
@@ -928,6 +935,7 @@ struct StandardLayout: SwiftUI.View {
                                 .presentationDetents([.medium])
                                 .presentationDragIndicator(.visible)
                         }
+                    }
                     }
                     .onAppear {
                         // Populate every cache synchronously so the first
