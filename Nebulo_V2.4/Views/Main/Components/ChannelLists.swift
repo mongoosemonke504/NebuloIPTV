@@ -103,16 +103,25 @@ struct HorizontalPreviewList: View {
                     }) {
                         VStack(alignment: .leading, spacing: 8) {
                             ZStack {
-                                // Blurred backdrop — opacity scales with glow setting
-                                CachedAsyncImage(urlString: c.icon ?? "", size: CGSize(width: 200, height: 112))
-                                    .blur(radius: 20)
-                                    .opacity(0.08 + 0.92 * glowStrength)
-                                    .clipped()
-                                // Accent colour glow circle driven by glow setting
-                                Circle()
-                                    .fill(accentColor.opacity(min(1.0, 0.85 * glowStrength)))
-                                    .frame(width: 100, height: 100)
-                                    .blur(radius: 30)
+                                // Blurred backdrop + accent glow, rasterised once
+                                // via drawingGroup so the two blurs don't
+                                // re-composite on the GPU every scroll frame —
+                                // the same optimisation the featured hero card
+                                // uses. Isolated to the blur layers so the sharp
+                                // logo on top and the glass below stay live.
+                                ZStack {
+                                    CachedAsyncImage(urlString: c.icon ?? "", size: CGSize(width: 200, height: 112))
+                                        .blur(radius: 20)
+                                        .opacity(0.08 + 0.92 * glowStrength)
+                                        .clipped()
+                                    Circle()
+                                        .fill(accentColor.opacity(min(1.0, 0.85 * glowStrength)))
+                                        .frame(width: 100, height: 100)
+                                        .blur(radius: 30)
+                                }
+                                .frame(width: 200, height: 112)
+                                .drawingGroup()
+
                                 CachedAsyncImage(urlString: c.icon ?? "", size: nil)
                                     .padding(16)
                             }
