@@ -654,10 +654,13 @@ struct AllLiveSportsView: View {
     @ObservedObject var viewModel: ChannelViewModel
     let accentColor: Color
 
-    /// Featured live game — first in the live list (already sorted by recency).
-    /// Returns nil when nothing is live so the featured card is hidden.
+    /// Featured live game — a favorite team's live game wins; otherwise the
+    /// first game in the live list (already sorted by recency). Returns nil
+    /// when nothing is live so the featured card is hidden.
     private var featuredGame: ESPNEvent? {
-        scoreViewModel.allLiveGames.first
+        let favGames = scoreViewModel.favoriteLiveGames()
+        if let fav = favGames.first { return fav }
+        return scoreViewModel.allLiveGames.first
     }
 
     /// Games grouped by sport, preserving the order in which sports first

@@ -353,7 +353,7 @@ extension MainView {
                     withAnimation { showSearch = false }
                 }
             )
-            .transition(.blurFade)
+            .transition(.opacity)
             .zIndex(90)
         }
 
@@ -437,10 +437,6 @@ struct StandardLayout: SwiftUI.View {
 
     /// Live games shelf content for the home page — cached snapshot.
     @State private var cachedHomeLiveGames: [ESPNEvent] = []
-
-    /// Live games from favorited teams/leagues — shown prominently at the
-    /// top of the home screen so the user's games are one tap away.
-    @State private var cachedFavLiveGames: [ESPNEvent] = []
 
     /// Count of today's games that haven't started yet — drives the
     /// "M starting today" subtitle in the adaptive home header.
@@ -782,32 +778,7 @@ struct StandardLayout: SwiftUI.View {
                                 selected: $selectedHomeGroup
                             )
 
-                            // 3a. Your Games — live games from favorited teams/leagues,
-                            //     right at the top where the user can tap into them
-                            //     instantly. Only shown on the "For You" tab.
-                            if selectedHomeGroup == nil && !cachedFavLiveGames.isEmpty {
-                                VStack(alignment: .leading, spacing: 14) {
-                                    HomeSectionHeader(
-                                        title: "Your Games",
-                                        icon: "star.fill",
-                                        iconColor: .yellow,
-                                        showsChevron: true
-                                    ) {
-                                        viewModel.triggerSelectionHaptic()
-                                        viewModel.lastSelectedHomeID = -3
-                                        withAnimation { selectedCategory = StreamCategory(id: -3, name: "Sports") }
-                                    }
-
-                                    LiveGamesPreviewList(
-                                        games: cachedFavLiveGames,
-                                        scoreViewModel: scoreViewModel,
-                                        viewModel: viewModel,
-                                        accentColor: accentColor
-                                    )
-                                }
-                            }
-
-                            // 3b. Featured Carousel — uses cached snapshot. Updated by the
+                            // 3. Featured Carousel — uses cached snapshot. Updated by the
                             //     `.task` modifiers below whenever the chip selection or
                             //     underlying featured list changes. When a favorite team is
                             //     live, the channel broadcasting their game leads the carousel.
@@ -985,9 +956,6 @@ struct StandardLayout: SwiftUI.View {
                         if cachedHomeLiveGames.isEmpty {
                             cachedHomeLiveGames = scoreViewModel.allLiveGames
                         }
-                        if cachedFavLiveGames.isEmpty {
-                            cachedFavLiveGames = scoreViewModel.favoriteLiveGames()
-                        }
                         startingTodayCount = computeStartingToday()
                         favHeader = computeFavoriteHeader()
 
@@ -1016,7 +984,6 @@ struct StandardLayout: SwiftUI.View {
                     }
                     .task(id: scoreViewModel.allLiveGameIDsKey) {
                         cachedHomeLiveGames = scoreViewModel.allLiveGames
-                        cachedFavLiveGames = scoreViewModel.favoriteLiveGames()
                         startingTodayCount = computeStartingToday()
                         favHeader = computeFavoriteHeader()
                     }
@@ -1031,10 +998,6 @@ struct StandardLayout: SwiftUI.View {
                     }
                     .task(id: scoreViewModel.favoriteTeamIDs) {
                         favHeader = computeFavoriteHeader()
-                        cachedFavLiveGames = scoreViewModel.favoriteLiveGames()
-                    }
-                    .task(id: scoreViewModel.favoriteLeagueKeys) {
-                        cachedFavLiveGames = scoreViewModel.favoriteLiveGames()
                     }
                     // Read the scroll offset directly instead of routing it
                     // through a GeometryReader probe + preference key. The
@@ -1178,12 +1141,13 @@ struct StandardLayout: SwiftUI.View {
         }
     }
 
-    /// Chip row contents — every non-empty home category group except
-    /// Sports. Sports is reachable via the Quick Access panel and the
-    /// Live Now shelf below, so duplicating it as a chip just clutters
-    /// the row.
     var chipGroups: [HomeCategoryGroup] {
-        cachedGrouped.compactMap { $0.0 == .sports ? nil : $0.0 }
+        var groups = cachedGrouped.compactMap { $0.0 == .international ? nil : $0.0 }
+        if let idx = groups.firstIndex(of: .sports) {
+            groups.remove(at: idx)
+            groups.insert(.sports, at: 0)
+        }
+        return groups
     }
 
     /// Cache key for `cachedDisplayedFeatured`. Hashes only the inputs that
