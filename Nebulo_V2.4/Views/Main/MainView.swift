@@ -743,6 +743,16 @@ struct StandardLayout: SwiftUI.View {
                                         .font(.subheadline)
                                         .foregroundStyle(.secondary)
                                 }
+                                // Fade ONLY the title text, not the whole header.
+                                // The settings gear is a liquid-glass button, and
+                                // animating opacity on glass forces an expensive
+                                // offscreen re-render every scroll frame — the one
+                                // thing that made the home header crossfade jitter
+                                // where the text-only hub headers stay smooth. The
+                                // gear still scrolls away with the header; it just
+                                // isn't alpha-blended, so the crossfade is now as
+                                // cheap as the other screens'.
+                                .scrollProgressOpacity(homeHeaderProgress) { 1 - Double($0) }
                                 Spacer()
                                 SettingsGearButton {
                                     viewModel.triggerSelectionHaptic()
@@ -751,7 +761,6 @@ struct StandardLayout: SwiftUI.View {
                             }
                             .padding(.horizontal)
                             .padding(.top, 8)
-                            .scrollProgressOpacity(homeHeaderProgress) { 1 - Double($0) }
                             // Zero-height probe riding on the header row —
                             // reports scroll position without affecting layout.
                             .background(ScrollOffsetProbe(space: "homeScroll", id: "home"))
