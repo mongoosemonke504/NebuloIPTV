@@ -29,6 +29,9 @@ private struct SearchBarGlass: ViewModifier {
 ///     the overlay rise together.
 struct SearchView: View {
     @ObservedObject var viewModel: ChannelViewModel
+    /// Optional so the multi-view search overlay can omit it. When present, the
+    /// empty-query screen surfaces live games and recent channels.
+    var scoreViewModel: ScoreViewModel? = nil
     let accentColor: Color
     let playAction: (StreamChannel) -> Void
     let onCategorySelect: (StreamCategory) -> Void
@@ -113,7 +116,11 @@ struct SearchView: View {
                 ScrollView(showsIndicators: false) {
                     Group {
                         if query.isEmpty {
-                            browseGrid
+                            VStack(alignment: .leading, spacing: 26) {
+                                liveGamesSection
+                                recentChannelsSection
+                                browseGrid
+                            }
                         } else if viewModel.isSearching {
                             searchingSkeleton
                         } else {
@@ -135,11 +142,14 @@ struct SearchView: View {
             }
         }
         .onAppear {
-            fieldFocused = true
-            // Focus set during the blurFade insertion can be dropped by
-            // UIKit — re-assert shortly after so the keyboard always rises.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                fieldFocused = true
+            // Focus set during the blurFade insertion can be dropped by UIKit
+            // before the field joins the responder chain, so re-assert across
+            // several ticks — one of them lands once the field is ready and the
+            // keyboard rises with the overlay instead of on a second tap.
+            for delay in [0.0, 0.08, 0.2, 0.35, 0.55] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    fieldFocused = true
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
@@ -214,6 +224,93 @@ struct SearchView: View {
             .padding(.horizontal, 20)
         }
         .padding(.top, 8)
+    }
+
+    // MARK: - Live games (empty query)
+
+    /// Live sports happening right now — the most time-sensitive thing to
+    /// surface when the user opens search. Tapping resolves the best stream
+    /// (same smart-search the Sports hub uses) and closes the overlay.
+    @ViewBuilder
+    private var liveGamesSection: some View {
+        if let svm = scoreViewModel {
+            let games = Array(svm.allLiveGames.prefix(12))
+            if !games.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 8) {
+                        Circle().fill(Color.red).frame(width: 7, height: 7)
+                        Text("Live Now")
+                            .font(.title3.weight(.bold))
+                            .foregroundStyle(.white)
+                        Text("\(svm.allLiveGames.count)")
+                            .font(.caption.bold())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(Color.red))
+                    }
+                    .padding(.horizontal, 20)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 14) {
+                            ForEach(games) { game in
+                                LiveGameCard(game: game, accentColor: accentColor)
+                                    .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                    .onTapGesture {
+                                        viewModel.triggerSelectionHaptic()
+                                        let h = game.homeCompetitor?.team?.shortDisplayName ?? game.homeCompetitor?.athlete?.shortName ?? ""
+                                        let a = game.awayCompetitor?.team?.shortDisplayName ?? game.awayCompetitor?.athlete?.shortName ?? ""
+                                        fieldFocused = false
+                                        onDismiss()
+                                        viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: svm.sportType(for: game), network: game.broadcastName)
+                                    }
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Recently-watched channels — a one-tap way back into what you were
+    /// watching, without typing.
+    @ViewBuilder
+    private var recentChannelsSection: some View {
+        let recents = viewModel.recentIDs.prefix(12).compactMap { id in
+            viewModel.channels.first(where: { $0.id == id })
+        }
+        if !recents.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Jump Back In")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 20)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 14) {
+                        ForEach(recents) { channel in
+                            Button {
+                                viewModel.triggerSelectionHaptic()
+                                fieldFocused = false
+                                playAction(channel)
+                            } label: {
+                                VStack(spacing: 6) {
+                                    channelIcon(channel, size: 62, cornerRadius: 16)
+                                    Text(channel.name)
+                                        .font(.caption2)
+                                        .foregroundStyle(.white.opacity(0.8))
+                                        .lineLimit(1)
+                                        .frame(width: 70)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                }
+            }
+        }
     }
 
     // MARK: - Browse (empty query)

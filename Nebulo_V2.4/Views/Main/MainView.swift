@@ -338,6 +338,7 @@ extension MainView {
         if showSearch {
             SearchView(
                 viewModel: viewModel,
+                scoreViewModel: scoreViewModel,
                 accentColor: accentColor,
                 playAction: playChannel,
                 onCategorySelect: { cat in
@@ -761,9 +762,6 @@ struct StandardLayout: SwiftUI.View {
                             }
                             .padding(.horizontal)
                             .padding(.top, 8)
-                            // Zero-height probe riding on the header row —
-                            // reports scroll position without affecting layout.
-                            .background(ScrollOffsetProbe(space: "homeScroll", id: "home"))
 
                             // 2. Genre chips — "For You" + each non-empty home category group.
                             //    Tapping a chip filters the rest of the home page in-place
@@ -998,14 +996,16 @@ struct StandardLayout: SwiftUI.View {
                     .task(id: scoreViewModel.favoriteTeamIDs) {
                         favHeader = computeFavoriteHeader()
                     }
-                    .coordinateSpace(name: "homeScroll")
-                    .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
-                        guard let y = offsets["home"] else { return }
-                        // Set directly — no withAnimation. The value already
-                        // updates every frame during the scroll gesture, so
-                        // tracking it 1:1 is what makes the crossfade feel
-                        // tied to the finger instead of a canned transition.
-                        homeHeaderProgress.set(min(max(-y / 40, 0), 1))
+                    // Read the scroll offset directly instead of routing it
+                    // through a GeometryReader probe + preference key. The
+                    // preference pipeline recomputes across the home screen's
+                    // large view tree every frame, which is what made the header
+                    // crossfade hitch at the very start of a scroll; this reads
+                    // the offset synchronously with no tree-wide propagation.
+                    .onScrollGeometryChange(for: CGFloat.self) { geo in
+                        geo.contentOffset.y + geo.contentInsets.top
+                    } action: { _, scrolled in
+                        homeHeaderProgress.set(min(max(scrolled / 40, 0), 1))
                     }
                     // Compact header — always present, crossfading in as the
                     // big title above fades/scrolls away. Transparent scrim
