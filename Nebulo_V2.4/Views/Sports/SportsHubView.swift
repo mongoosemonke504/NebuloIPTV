@@ -157,8 +157,13 @@ struct SportsHubView: View {
             // Sync selectedSport when the chip selection changes so the
             // existing fetch/pre-resolution observers fire correctly.
             .onChangeCompat(of: sportsTab) { tab in
-                if case .sport(let s) = tab, s != scoreViewModel.selectedSport {
-                    scoreViewModel.selectedSport = s
+                if case .sport(let s) = tab {
+                    if s != scoreViewModel.selectedSport {
+                        scoreViewModel.selectedSport = s
+                    }
+                    // Warm this sport's crests at high priority so the tab's
+                    // logos are present as fast as possible on a cold cache.
+                    scoreViewModel.prefetchLogos(for: s)
                 }
             }
 
@@ -184,6 +189,10 @@ struct SportsHubView: View {
             scoreViewModel.applyFilter(text: viewModel.searchText)
             triggerPreResolution()
             recomputeStats()
+            // Proactively warm the soccer-leagues crests (the busiest tab —
+            // many league sections of logos) so they're cached before the
+            // user swipes there, instead of streaming in on arrival.
+            scoreViewModel.prefetchLogos(for: .soccerLeagues)
         }
         // Recompute header stats whenever the live game set changes.
         .task(id: scoreViewModel.allLiveGameIDsKey) {

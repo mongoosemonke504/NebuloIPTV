@@ -284,6 +284,36 @@ class ScoreViewModel: ObservableObject {
         }
     }
     
+    /// Warm the logo cache for one sport's games at user-initiated priority,
+    /// ahead of showing that tab. The background `preloadImages()` warms every
+    /// sport's crests mixed together; the soccer tab shows many league sections
+    /// of crests at once, so on a cold cache they streamed in. Prefetching the
+    /// selected sport's crests specifically makes them land first. Cached URLs
+    /// no-op, so this is cheap to call on every tab switch.
+    func prefetchLogos(for sport: SportType) {
+        var urls = Set<String>()
+        func collect(_ game: ESPNEvent) {
+            for competitor in [game.homeCompetitor, game.awayCompetitor] {
+                if let u = competitor?.team?.logo ?? competitor?.athlete?.flag?.href ?? competitor?.athlete?.headshot,
+                   !u.isEmpty {
+                    urls.insert(u)
+                }
+            }
+        }
+        if sport.isSoccer {
+            for section in masterSectionsMap[sport] ?? [] { for game in section.games { collect(game) } }
+        } else {
+            for game in masterGames[sport] ?? [] { collect(game) }
+        }
+        guard !urls.isEmpty else { return }
+        let toLoad = urls
+        Task.detached(priority: .userInitiated) {
+            await withTaskGroup(of: Void.self) { group in
+                for url in toLoad { group.addTask { await ImageCache.prefetchAndWait(urlString: url) } }
+            }
+        }
+    }
+
     func fetchScores(forceRefresh: Bool = false, silent: Bool = false) async {
         if !silent && !forceRefresh {
             if !masterGames.isEmpty && !masterSectionsMap.isEmpty {
