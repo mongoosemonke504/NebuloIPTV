@@ -84,7 +84,7 @@ struct ESPNEvent: Codable, Identifiable, Hashable, Sendable {
         try container.encode(leagueLabel, forKey: .leagueLabel)
     }
     
-    var allCompetitions: [ESPNCompetition] {
+    nonisolated var allCompetitions: [ESPNCompetition] {
         if !competitions.isEmpty { return competitions }
         return groupings?.flatMap { $0.competitions } ?? []
     }

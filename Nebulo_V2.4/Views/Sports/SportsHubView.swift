@@ -29,9 +29,10 @@ struct SportsHubView: View {
 
     /// 0 at rest, 1 once the big title has scrolled away. Tracked 1:1 with
     /// the scroll offset (no canned animation) — drives the title fade and
-    /// the compact line growing into the pinned chip bar. Same mechanism
-    /// and rate as the Recordings header.
-    @State private var statsProgress: CGFloat = 0
+    /// the compact line growing into the pinned chip bar. Held in its own
+    /// object (observed only by the fading title + gradient) so scrolling the
+    /// scoreboard doesn't re-render this whole hub every frame.
+    @State private var statsProgress = ScrollProgress()
 
     private var orderedSports: [SportType] {
         scoreViewModel.sportTabOrder.filter { !scoreViewModel.hiddenSportTabs.contains($0) }
@@ -91,7 +92,7 @@ struct SportsHubView: View {
                     statsHeader
                         .padding(.horizontal, 20)
                         .padding(.bottom, 10)
-                        .opacity(1 - statsProgress)
+                        .scrollProgressOpacity(statsProgress) { 1 - Double($0) }
                         .background(ScrollOffsetProbe(space: "sportsScroll", id: "sports"))
 
                     Section(header: pinnedChipHeader) {
@@ -128,7 +129,7 @@ struct SportsHubView: View {
             .coordinateSpace(name: "sportsScroll")
             .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
                 guard let y = offsets["sports"] else { return }
-                statsProgress = min(max(-y / 40, 0), 1)
+                statsProgress.set(min(max(-y / 40, 0), 1))
             }
             // Horizontal swipe anywhere on the list flips to the previous /
             // next sport, replacing the paged TabView's swipe. Simultaneous
@@ -278,7 +279,7 @@ struct SportsHubView: View {
             )
             .frame(height: 250)
             .offset(y: -130)
-            .opacity(statsProgress * statsProgress)
+            .scrollProgressOpacity(statsProgress) { Double($0 * $0) }
             .allowsHitTesting(false)
         }
     }

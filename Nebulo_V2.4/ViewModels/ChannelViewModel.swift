@@ -891,7 +891,12 @@ class ChannelViewModel: ObservableObject {
     }
 
     
-    @Published var preResolvedCache: [String: StreamChannel] = [:]
+    // Not @Published: this is a private resolver cache read only inside this
+    // view model (see runSmartSearch / preResolveGames). Publishing it made
+    // every pre-resolved game emit objectWillChange, needlessly re-rendering
+    // the whole channel UI while the Sports hub warmed matchups in the
+    // background.
+    var preResolvedCache: [String: StreamChannel] = [:]
 
     private struct GameSearchInfo: Sendable {
         let id: String

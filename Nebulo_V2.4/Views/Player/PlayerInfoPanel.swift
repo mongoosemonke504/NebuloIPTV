@@ -113,6 +113,21 @@ struct PlayerInfoPanel: View {
     /// Use special sentinel ids for built-in groups: -4 favorites.
     @State private var browsingCategoryID: Int? = nil
 
+    /// Cached result of the `browsingChannels` filter. The filter scans the
+    /// whole channel list, so recomputing it on every header-collapse frame
+    /// (the body re-runs each frame as `panelCollapse` ticks) was a large part
+    /// of the channel-list scroll jitter. Refreshed only when its inputs
+    /// actually change via `.task(id: browsingCacheKey)`.
+    @State private var cachedBrowsingChannels: [StreamChannel] = []
+
+    /// Bumps only when something that changes `browsingChannels` changes —
+    /// the browsed category, the current channel, or the channel/favorite/
+    /// hidden set sizes. Header-collapse ticks don't touch it, so the filter
+    /// doesn't re-run mid-scroll.
+    private var browsingCacheKey: String {
+        "\(browsingCategoryID ?? -999)|\(channel.id)|\(channel.categoryID)|\(viewModel.channels.count)|\(viewModel.favoriteIDs.count)|\(viewModel.hiddenIDs.count)"
+    }
+
     /// Which side the incoming tab content enters from — `true` when moving
     /// to a tab further right. Set BEFORE the animated change.
     @State private var slideFromTrailing = true
@@ -343,7 +358,7 @@ struct PlayerInfoPanel: View {
                 // rest of the content.
                 VStack(spacing: 0) {
                     Color.clear.frame(height: collapseCompensation)
-                    let chans = browsingChannels
+                    let chans = cachedBrowsingChannels
                     if chans.isEmpty {
                         emptyState(icon: "tv.slash", message: "No channels in this category")
                     } else if browsingCategoryID == nil {
@@ -355,12 +370,14 @@ struct PlayerInfoPanel: View {
                                 sectionHeader("Favorites")
                                 ForEach(favs) { ch in
                                     PanelChannelRow(channel: ch, viewModel: viewModel) { onPlayChannel?(ch) }
+                                        .equatable()
                                 }
                             }
                             if !others.isEmpty {
                                 sectionHeader(browsingTitle)
                                 ForEach(others) { ch in
                                     PanelChannelRow(channel: ch, viewModel: viewModel) { onPlayChannel?(ch) }
+                                        .equatable()
                                 }
                             }
                         }
@@ -372,6 +389,7 @@ struct PlayerInfoPanel: View {
                             sectionHeader("\(browsingTitle) · \(chans.count)")
                             ForEach(chans) { ch in
                                 PanelChannelRow(channel: ch, viewModel: viewModel) { onPlayChannel?(ch) }
+                                        .equatable()
                             }
                         }
                         .padding(.top, 4)
@@ -385,6 +403,12 @@ struct PlayerInfoPanel: View {
                 guard selectedTab == .channels else { return }
                 updateCollapse(scrolled: scrolled)
             }
+        }
+        .onAppear {
+            if cachedBrowsingChannels.isEmpty { cachedBrowsingChannels = browsingChannels }
+        }
+        .task(id: browsingCacheKey) {
+            cachedBrowsingChannels = browsingChannels
         }
     }
 
@@ -748,10 +772,19 @@ private struct ChannelLogoBox: View {
 
 // MARK: - Panel Channel Row
 
-private struct PanelChannelRow: View {
+private struct PanelChannelRow: View, Equatable {
     let channel: StreamChannel
     @ObservedObject var viewModel: ChannelViewModel
     let onPlay: () -> Void
+
+    // Equatable so the enclosing `.equatable()` lets SwiftUI skip re-rendering
+    // this row while the header collapses (the panel body re-runs every scroll
+    // frame, but the row's channel isn't changing). Data-driven refreshes still
+    // flow through the @ObservedObject subscription, so the program label stays
+    // current when the EPG or clock ticks.
+    static func == (lhs: PanelChannelRow, rhs: PanelChannelRow) -> Bool {
+        lhs.channel == rhs.channel
+    }
 
     private var currentProg: EPGProgram? { viewModel.getCurrentProgram(for: channel) }
 

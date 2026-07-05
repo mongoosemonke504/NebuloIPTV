@@ -49,9 +49,10 @@ struct FavoritesView: View {
     @State private var detailLeague: LeagueDetailSelection? = nil
     /// 0 at rest, 1 once the big title has scrolled away. Tracked 1:1 with
     /// the scroll offset (no canned animation) — drives the title fade and
-    /// the compact line growing into the pinned pill bar. Same mechanism
-    /// and rate as the Recordings header.
-    @State private var titleProgress: CGFloat = 0
+    /// the compact line growing into the pinned pill bar. Held in its own
+    /// object (observed only by the fading title + gradient) so scrolling
+    /// doesn't re-render this whole screen's content every frame.
+    @State private var titleProgress = ScrollProgress()
 
     /// Lightweight envelope used to drive `.sheet(item:)` on team taps. Carries
     /// the team plus its league context (needed to look up the right logo).
@@ -151,7 +152,7 @@ struct FavoritesView: View {
             ScrollView(showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                     titleRow
-                        .opacity(1 - titleProgress)
+                        .scrollProgressOpacity(titleProgress) { 1 - Double($0) }
                         .background(ScrollOffsetProbe(space: "favScroll", id: "fav"))
 
                     Section(header: pinnedPillHeader) {
@@ -173,7 +174,7 @@ struct FavoritesView: View {
             .coordinateSpace(name: "favScroll")
             .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
                 guard let y = offsets["fav"] else { return }
-                titleProgress = min(max(-y / 40, 0), 1)
+                titleProgress.set(min(max(-y / 40, 0), 1))
             }
             // Horizontal swipe flips to the previous/next filter, matching
             // the Sports hub. Simultaneous so vertical scrolling is
@@ -308,7 +309,7 @@ struct FavoritesView: View {
                 )
                 .frame(height: 250)
                 .offset(y: -130)
-                .opacity(titleProgress * titleProgress)
+                .scrollProgressOpacity(titleProgress) { Double($0 * $0) }
                 .allowsHitTesting(false)
             }
     }

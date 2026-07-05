@@ -2,230 +2,188 @@ import SwiftUI
 import Combine
 @preconcurrency import Foundation
 
-@MainActor
+/// Wraps a decoded image so it can cross a `Task.detached` boundary without a
+/// Sendable warning. Safe because the image is never mutated after decode.
+private struct DecodedImage: @unchecked Sendable { let image: UIImage? }
 
+@MainActor
 final class ImageCache: @unchecked Sendable {
 
     static let shared = ImageCache()
 
-    
-
     private let cache: NSCache<NSString, UIImage> = {
-
         let cache = NSCache<NSString, UIImage>()
-
-        cache.countLimit = 200 
-
-        cache.totalCostLimit = 100 * 1024 * 1024 
-
+        // A larger resident set keeps logos/icons in memory across a scroll
+        // session so re-appearing rows hit the memory cache instead of
+        // re-decoding from disk on the main thread. Actual memory is bounded
+        // by totalCostLimit below (each entry now reports a real byte cost),
+        // so this count is just a ceiling.
+        cache.countLimit = 512
+        cache.totalCostLimit = 100 * 1024 * 1024
         return cache
-
     }()
 
-    
+    /// On-disk cache directory. Computed from a nonisolated helper so the
+    /// decode paths can locate it without hopping to the main actor.
+    var cacheDirectory: URL { Self.diskCacheDirectory() }
 
-    private let fileManager = FileManager.default
-
-    private let cacheDirectory: URL
-
-    
+    /// In-flight remote loads keyed by URL. Concurrent requests for the same
+    /// image share one download + decode instead of each firing their own.
+    private var inFlight: [String: Task<UIImage?, Never>] = [:]
 
     init() {
-
-        let paths = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)
-
-        cacheDirectory = paths[0].appendingPathComponent("NebuloImageCache", isDirectory: true)
-
-        
-
-        if !fileManager.fileExists(atPath: cacheDirectory.path) {
-
-            try? fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
-
+        let dir = Self.diskCacheDirectory()
+        if !FileManager.default.fileExists(atPath: dir.path) {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
-
     }
 
-    
+    // MARK: - Synchronous cache access (memory + disk)
 
+    /// Memory hit, or a disk decode promoted into memory. NOTE: the disk path
+    /// decodes synchronously on the caller's thread — reserve it for one-shot
+    /// callers (e.g. glow extraction). Scrolling views should use the async
+    /// `image(forKey:)` so decoding stays off the main thread.
     func get(forKey key: String, size: CGSize? = nil) -> UIImage? {
-
-        let cacheKey = (key + (size != nil ? "_\(Int(size!.width))x\(Int(size!.height))" : "")) as NSString
-
-        
-
-        if let image = cache.object(forKey: cacheKey) {
-
-            return image
-
-        }
-
-        
-
-        let safeName = key.hashValueStr
-
-        let fileURL = cacheDirectory.appendingPathComponent(safeName)
-
-        
-
-        guard fileManager.fileExists(atPath: fileURL.path) else { return nil }
-
-        
-
-        
-
-        if let image = downsample(imageAt: fileURL, to: size ?? CGSize(width: 300, height: 300)) {
-
-            cache.setObject(image, forKey: cacheKey)
-
-            return image
-
-        }
-
-        
-
-        return nil
-
+        let cacheKey = Self.cacheKey(key, size)
+        if let image = cache.object(forKey: cacheKey) { return image }
+        guard let image = Self.decodeFromDisk(urlString: key, size: size) else { return nil }
+        store(image, key: cacheKey)
+        return image
     }
-
-    
 
     func getMemoryCache(forKey key: String, size: CGSize? = nil) -> UIImage? {
-
-        let cacheKey = (key + (size != nil ? "_\(Int(size!.width))x\(Int(size!.height))" : "")) as NSString
-
-        return cache.object(forKey: cacheKey)
-
+        cache.object(forKey: Self.cacheKey(key, size))
     }
-
-    
 
     func hasImage(forKey key: String) -> Bool {
-
-        let safeName = key.hashValueStr
-
-        let fileURL = cacheDirectory.appendingPathComponent(safeName)
-
-        return fileManager.fileExists(atPath: fileURL.path)
-
+        FileManager.default.fileExists(atPath: Self.fileURL(for: key).path)
     }
-
-    
 
     func set(_ image: UIImage, forKey key: String, size: CGSize? = nil, skipDiskWrite: Bool = false) {
-
-        let cacheKey = (key + (size != nil ? "_\(Int(size!.width))x\(Int(size!.height))" : "")) as NSString
-
-        cache.setObject(image, forKey: cacheKey)
-
-        
-
+        store(image, key: Self.cacheKey(key, size))
         if skipDiskWrite { return }
 
-        
-
-        let safeName = key.hashValueStr
-
-        let fileURL = cacheDirectory.appendingPathComponent(safeName)
-
-        
-
-        if !fileManager.fileExists(atPath: fileURL.path) {
-
+        let fileURL = Self.fileURL(for: key)
+        if !FileManager.default.fileExists(atPath: fileURL.path) {
             DispatchQueue.global(qos: .background).async {
-
                 if let data = image.pngData() {
-
                     try? data.write(to: fileURL)
-
                 }
+            }
+        }
+    }
 
+    private func store(_ image: UIImage, key: NSString) {
+        cache.setObject(image, forKey: key, cost: Self.cost(of: image))
+    }
+
+    // MARK: - Async load (decode off the main thread, coalesced)
+
+    /// Loads an image for display: memory → disk → network. Disk and network
+    /// decoding run on a detached task so the main thread never blocks on
+    /// image work, and concurrent requests for the same URL are coalesced.
+    func image(forKey urlString: String, size: CGSize? = nil) async -> UIImage? {
+        if let cached = cache.object(forKey: Self.cacheKey(urlString, size)) { return cached }
+        if let existing = inFlight[urlString] { return await existing.value }
+
+        let task = Task<UIImage?, Never> { [weak self] in
+            // Disk decode, off the main thread.
+            let disk = await Task.detached(priority: .userInitiated) {
+                DecodedImage(image: ImageCache.decodeFromDisk(urlString: urlString, size: size))
+            }.value.image
+            if let disk {
+                self?.store(disk, key: Self.cacheKey(urlString, size))
+                return disk
             }
 
+            // Network fetch (transfer is already off-main), then decode + persist off-main.
+            guard let url = URL(string: urlString),
+                  let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
+            let decoded = await Task.detached(priority: .userInitiated) {
+                DecodedImage(image: UIImage(data: data))
+            }.value.image
+            guard let image = decoded else { return nil }
+
+            let fileURL = ImageCache.fileURL(for: urlString)
+            DispatchQueue.global(qos: .background).async {
+                if !FileManager.default.fileExists(atPath: fileURL.path) {
+                    try? data.write(to: fileURL)
+                }
+            }
+            self?.store(image, key: Self.cacheKey(urlString, size))
+            return image
         }
 
+        inFlight[urlString] = task
+        let result = await task.value
+        inFlight[urlString] = nil
+        return result
     }
 
-    
+    // MARK: - Prefetch
 
-    
+    /// Warms the on-disk cache for a URL without touching the main thread.
+    /// Skips work entirely if the file already exists; decode happens off-main.
+    nonisolated static func prefetchAndWait(urlString: String, size: CGSize? = nil) async {
+        if FileManager.default.fileExists(atPath: fileURL(for: urlString).path) { return }
+        guard let url = URL(string: urlString),
+              let (data, _) = try? await URLSession.shared.data(from: url) else { return }
 
-    private func downsample(imageAt imageURL: URL, to pointSize: CGSize, scale: CGFloat? = nil) -> UIImage? {
-
-        let actualScale = scale ?? 2.0 
-
-        let imageSourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
-
-        guard let imageSource = CGImageSourceCreateWithURL(imageURL as CFURL, imageSourceOptions) else { return nil }
-
-        
-
-        let maxDimensionInPixels = max(pointSize.width, pointSize.height) * actualScale
-
-        let downsampleOptions = [
-
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-
-            kCGImageSourceShouldCacheImmediately: true,
-
-            kCGImageSourceCreateThumbnailWithTransform: true,
-
-            kCGImageSourceThumbnailMaxPixelSize: maxDimensionInPixels
-
-        ] as CFDictionary
-
-        
-
-        guard let downsampledImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, downsampleOptions) else { return nil }
-
-        return UIImage(cgImage: downsampledImage)
-
+        try? data.write(to: fileURL(for: urlString))
+        let decoded = await Task.detached(priority: .background) {
+            DecodedImage(image: UIImage(data: data))
+        }.value.image
+        if let image = decoded {
+            await shared.set(image, forKey: urlString, size: size, skipDiskWrite: true)
+        }
     }
-
-    
-
-    static func prefetchAndWait(urlString: String, size: CGSize? = nil) async {
-
-        if shared.hasImage(forKey: urlString) { return }
-
-        guard let url = URL(string: urlString) else { return }
-
-        
-
-        do {
-
-            let (data, _) = try await URLSession.shared.data(from: url)
-
-            if let image = UIImage(data: data) {
-
-                
-
-                let safeName = urlString.hashValueStr
-
-                let fileURL = shared.cacheDirectory.appendingPathComponent(safeName)
-
-                try? data.write(to: fileURL)
-
-                
-
-                
-
-                shared.set(image, forKey: urlString, size: size, skipDiskWrite: true)
-
-            }
-
-        } catch {}
-
-    }
-
-    
 
     func prefetch(urlString: String, size: CGSize? = nil) {
-
-        Task { await ImageCache.prefetchAndWait(urlString: urlString, size: size) }
-
+        Task.detached { await ImageCache.prefetchAndWait(urlString: urlString, size: size) }
     }
 
+    // MARK: - Nonisolated helpers (safe to call off the main actor)
+
+    nonisolated static func diskCacheDirectory() -> URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("NebuloImageCache", isDirectory: true)
+    }
+
+    nonisolated private static func fileURL(for key: String) -> URL {
+        diskCacheDirectory().appendingPathComponent(key.hashValueStr)
+    }
+
+    nonisolated private static func cacheKey(_ key: String, _ size: CGSize?) -> NSString {
+        (key + (size != nil ? "_\(Int(size!.width))x\(Int(size!.height))" : "")) as NSString
+    }
+
+    nonisolated private static func cost(of image: UIImage) -> Int {
+        if let cg = image.cgImage { return cg.bytesPerRow * cg.height }
+        return Int(image.size.width * image.size.height * 4)
+    }
+
+    nonisolated static func decodeFromDisk(urlString: String, size: CGSize? = nil) -> UIImage? {
+        let fileURL = fileURL(for: urlString)
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+        return downsample(imageAt: fileURL, to: size ?? CGSize(width: 300, height: 300))
+    }
+
+    nonisolated private static func downsample(imageAt imageURL: URL, to pointSize: CGSize, scale: CGFloat = 2.0) -> UIImage? {
+        let imageSourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let imageSource = CGImageSourceCreateWithURL(imageURL as CFURL, imageSourceOptions) else { return nil }
+
+        let maxDimensionInPixels = max(pointSize.width, pointSize.height) * scale
+        let downsampleOptions = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxDimensionInPixels
+        ] as CFDictionary
+
+        guard let downsampledImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, downsampleOptions) else { return nil }
+        return UIImage(cgImage: downsampledImage)
+    }
 }
 
 @MainActor
@@ -240,9 +198,7 @@ class ImageLoader: ObservableObject {
         // frame never shows a placeholder for an already-cached image.
         // Without the disk fallback, rows created mid-transition (e.g. the
         // directional sport swipe) rendered gray boxes for a beat and their
-        // logos popped in after the slide instead of moving with it. The
-        // disk read is a small downsampled decode — the loader already does
-        // the same synchronous read on MainActor in loadAsync.
+        // logos popped in after the slide instead of moving with it.
         if let cached = ImageCache.shared.getMemoryCache(forKey: urlString)
             ?? ImageCache.shared.get(forKey: urlString) {
             self.image = cached
@@ -267,28 +223,15 @@ class ImageLoader: ObservableObject {
             return
         }
 
-        // Clear stale image so the spinner shows while the new one loads.
-        image = nil
-
-        // Disk cache — synchronous read but we're already on MainActor.
-        if let cached = ImageCache.shared.get(forKey: url) {
-            image = cached
+        // Disk/network via the shared coalesced loader — decode runs off the
+        // main thread. The current image is kept on screen until the new one
+        // is ready, so a channel switch never flashes a spinner for an image
+        // that was already cached on disk.
+        let loaded = await ImageCache.shared.image(forKey: url)
+        guard !Task.isCancelled, loadedURL != url else { return }
+        if let loaded {
+            image = loaded
             loadedURL = url
-            return
-        }
-
-        guard let imageURL = URL(string: url) else { return }
-        do {
-            let (data, _) = try await URLSession.shared.data(from: imageURL)
-            // Bail out if the view disappeared while we were downloading.
-            guard !Task.isCancelled else { return }
-            if let downloaded = UIImage(data: data) {
-                ImageCache.shared.set(downloaded, forKey: url)
-                image = downloaded
-                loadedURL = url
-            }
-        } catch {
-            // Covers cancellation and network errors — nothing to do.
         }
     }
 }

@@ -201,7 +201,6 @@ struct MainViewModifiers: ViewModifier {
         let renameInput = Binding<String>(get: { viewModel.renameInput }, set: { viewModel.renameInput = $0 })
         let showNoStreamsAlert = Binding<Bool>(get: { viewModel.showNoStreamsAlert }, set: { viewModel.showNoStreamsAlert = $0 })
         let categories = Binding<[StreamCategory]>(get: { viewModel.categories }, set: { viewModel.categories = $0 })
-        let searchText = Binding<String>(get: { viewModel.searchText }, set: { viewModel.searchText = $0 })
 
         content
             .applyIf(!showMultiView) { view in
@@ -456,13 +455,17 @@ struct StandardLayout: SwiftUI.View {
     /// 0 at rest, 1 once the big header has fully scrolled past. Tracks the
     /// live scroll offset directly (no withAnimation) so the compact overlay
     /// crossfades in lockstep with the user's finger instead of snapping in
-    /// after a fixed-duration animation once a threshold is crossed.
-    @State private var homeHeaderProgress: CGFloat = 0
+    /// after a fixed-duration animation once a threshold is crossed. Held in
+    /// its own object (observed only by the two crossfading headers) so
+    /// scrolling the home screen doesn't re-render its whole body each frame.
+    @State private var homeHeaderProgress = ScrollProgress()
 
     /// Same idea for the hub sections (Sports/Favorites/Recordings): their
     /// scroll probes bubble up via preference, and this drives the compact
     /// title shown in the chrome row between the Back pill and the gear.
-    @State private var sectionTitleProgress: CGFloat = 0
+    /// Scoped the same way so scrolling a hub doesn't re-render this layout
+    /// (which would in turn re-render the whole hub view inside it).
+    @State private var sectionTitleProgress = ScrollProgress()
 
     /// One-line info shown under the compact chrome title for hubs.
     private func sectionChromeDetail(for cat: StreamCategory) -> String? {
@@ -660,7 +663,7 @@ struct StandardLayout: SwiftUI.View {
                 .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
                     let key: String? = cat.id == -3 ? "sports" : cat.id == -4 ? "fav" : cat.id == -5 ? "rec" : nil
                     guard let key, let y = offsets[key] else { return }
-                    sectionTitleProgress = min(max(-y / 40, 0), 1)
+                    sectionTitleProgress.set(min(max(-y / 40, 0), 1))
                 }
                 // Static chrome row: the Back pill (and, for plain categories,
                 // a centred title) lives OUTSIDE the transition group so it
@@ -712,7 +715,7 @@ struct StandardLayout: SwiftUI.View {
                             }
                             .lineLimit(1)
                             .padding(.horizontal, 80)
-                            .opacity(sectionTitleProgress)
+                            .scrollProgressOpacity(sectionTitleProgress) { Double($0) }
                         }
                     }
                     .padding(.horizontal, 16)
@@ -748,7 +751,7 @@ struct StandardLayout: SwiftUI.View {
                             }
                             .padding(.horizontal)
                             .padding(.top, 8)
-                            .opacity(1 - homeHeaderProgress)
+                            .scrollProgressOpacity(homeHeaderProgress) { 1 - Double($0) }
                             // Zero-height probe riding on the header row —
                             // reports scroll position without affecting layout.
                             .background(ScrollOffsetProbe(space: "homeScroll", id: "home"))
@@ -993,7 +996,7 @@ struct StandardLayout: SwiftUI.View {
                         // updates every frame during the scroll gesture, so
                         // tracking it 1:1 is what makes the crossfade feel
                         // tied to the finger instead of a canned transition.
-                        homeHeaderProgress = min(max(-y / 40, 0), 1)
+                        homeHeaderProgress.set(min(max(-y / 40, 0), 1))
                     }
                     // Compact header — always present, crossfading in as the
                     // big title above fades/scrolls away. Transparent scrim
@@ -1019,7 +1022,7 @@ struct StandardLayout: SwiftUI.View {
                             )
                         )
                         .allowsHitTesting(false)
-                        .opacity(homeHeaderProgress)
+                        .scrollProgressOpacity(homeHeaderProgress) { Double($0) }
                     }
                     .transition(.blurFade)
             }
@@ -1032,7 +1035,7 @@ struct StandardLayout: SwiftUI.View {
         // navigates back and forward again within the 0.8 s reset window.
         .onChangeCompat(of: selectedCategory) { cat in
             if cat != nil { isDetailInteractive = true }
-            sectionTitleProgress = 0
+            sectionTitleProgress.set(0)
         }
     }
 

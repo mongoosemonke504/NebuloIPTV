@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 struct ShimmerModifier: ViewModifier {
     @State private var phase: CGFloat = 0
@@ -170,6 +171,41 @@ struct GlobalOffsetProbe: View {
                 value: [id: g.frame(in: .global).minY]
             )
         }
+    }
+}
+
+/// Holds a single scroll-driven progress value (0…1) in its own observable
+/// object. A screen holds it via `@State` — which does NOT subscribe the
+/// screen to its changes — and only the small leaf views that render the
+/// progress (a fading title, a gradient) observe it via `@ObservedObject`.
+/// Updating it every scroll frame then re-renders just those leaves instead
+/// of the whole screen body, which — carrying the scrolling lists — was the
+/// source of the jitter during the header-fade at the start of a scroll.
+final class ScrollProgress: ObservableObject {
+    @Published var value: CGFloat = 0
+
+    /// Assigns only on a real change so identical per-frame readings don't
+    /// emit redundant publishes.
+    func set(_ newValue: CGFloat) {
+        if newValue != value { value = newValue }
+    }
+}
+
+/// Applies an opacity derived from a `ScrollProgress` without coupling the
+/// enclosing screen body to the value. The `@ObservedObject` lives on the
+/// modifier, so only this modifier re-renders as the value changes — the
+/// screen that built it stays put.
+struct ScrollProgressOpacity: ViewModifier {
+    @ObservedObject var progress: ScrollProgress
+    let map: (CGFloat) -> Double
+    func body(content: Content) -> some View {
+        content.opacity(map(progress.value))
+    }
+}
+
+extension View {
+    func scrollProgressOpacity(_ progress: ScrollProgress, _ map: @escaping (CGFloat) -> Double) -> some View {
+        modifier(ScrollProgressOpacity(progress: progress, map: map))
     }
 }
 
