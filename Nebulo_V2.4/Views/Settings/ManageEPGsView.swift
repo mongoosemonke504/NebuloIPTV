@@ -5,6 +5,7 @@ struct ManageEPGsView: View {
     @State private var showingAddSheet = false
     @State private var newEPGUrl = ""
     @State private var pendingRemoval: String? = nil
+    @AppStorage("customAccentHex") private var customAccentHex = "#FFFFFF"
 
     @AppStorage("nebColor1") private var nebColor1 = "#1A2538"
     @AppStorage("nebColor2") private var nebColor2 = "#11101A"
@@ -38,6 +39,7 @@ struct ManageEPGsView: View {
                 VStack(alignment: .leading, spacing: 24) {
                     headerCard
                     if let account = currentAccount {
+                        builtInCard(account: account)
                         if account.externalEPGUrls.isEmpty {
                             emptyStateCard
                         } else {
@@ -108,6 +110,58 @@ struct ManageEPGsView: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
         )
+    }
+
+    // MARK: Built-in source
+
+    /// The provider's own guide, shown as a locked first-class source so the
+    /// EPG list reflects everything that actually gets merged. Xtream
+    /// accounts serve XMLTV from their portal (xmltv.php); it can't be
+    /// removed because it comes with the playlist itself.
+    @ViewBuilder
+    private func builtInCard(account: Account) -> some View {
+        if account.type == .xtream {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill((Color(hex: customAccentHex) ?? .white).opacity(0.75).gradient)
+                        .frame(width: 32, height: 32)
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.black.opacity(0.8))
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Built-in Provider Guide")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text(URL(string: account.url)?.host ?? account.url)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.55))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text("ALWAYS ON")
+                    .font(.system(size: 9, weight: .black))
+                    .kerning(0.6)
+                    .foregroundStyle(.white.opacity(0.6))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.white.opacity(0.1), in: Capsule())
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.black.opacity(0.35))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+            )
+        }
     }
 
     // MARK: Empty state
@@ -227,7 +281,7 @@ struct ManageEPGsView: View {
             .padding(.vertical, 14)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.blue.opacity(0.7))
+                    .fill((Color(hex: customAccentHex) ?? .white).opacity(0.55))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -318,6 +372,7 @@ struct ManageEPGsView: View {
             withAnimation {
                 accountManager.saveAccount(account, makeActive: true)
             }
+            refreshMergedEPG()
         }
     }
 
@@ -329,6 +384,29 @@ struct ManageEPGsView: View {
             account.externalEPGUrls.remove(at: idx)
             withAnimation {
                 accountManager.saveAccount(account, makeActive: true)
+            }
+            refreshMergedEPG()
+        }
+    }
+
+    /// Source list changed — re-fetch and re-merge the guide right away so
+    /// the change takes effect without waiting for the next scheduled
+    /// refresh. Silent: no full-screen loading state, just the banner.
+    private func refreshMergedEPG() {
+        Task {
+            guard let account = currentAccount else { return }
+            if account.type == .xtream, let base = URL(string: account.url) {
+                await ChannelViewModel.shared.updateEPG(
+                    baseURL: base,
+                    user: account.username ?? "",
+                    pass: account.password ?? "",
+                    force: true,
+                    silent: true
+                )
+            } else {
+                let urls = account.externalEPGUrls.compactMap { URL(string: $0) }
+                guard !urls.isEmpty else { return }
+                await ChannelViewModel.shared.updateEPGFromURLs(urls, force: true, silent: true)
             }
         }
     }

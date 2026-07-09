@@ -72,7 +72,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     }
     @Published public var isPlaying = false {
         didSet {
-            if isPlaying { 
+            if isPlaying {
                 isBuffering = false
                 stopBufferWatchdog()
             }
@@ -359,7 +359,11 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     }
     
     private func setupAudioSession() {
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [.allowAirPlay, .allowBluetoothA2DP, .mixWithOthers])
+        // NON-mixable on purpose: a session with .mixWithOthers is treated
+        // as secondary audio and never becomes the system's "Now Playing"
+        // app — which made the lock-screen / Dynamic Island media card only
+        // show up sporadically during background playback.
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [.allowAirPlay, .allowBluetoothA2DP])
         try? AVAudioSession.sharedInstance().setActive(true, options: .notifyOthersOnDeactivation)
     }
     

@@ -81,10 +81,13 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
         }
     }
     
-    private func setupSilentAudio() {
-        
+    /// 10 seconds of silent 16-bit mono WAV. Looped at near-zero volume it
+    /// keeps the process alive in the background (the app declares the
+    /// `audio` background mode) — shared by the recorder and the
+    /// RecordingManager's scheduled-recording keep-alive.
+    static func makeSilentWAV() -> Data {
         let sampleRate: Int32 = 44100
-        let duration = 10 
+        let duration = 10
         let numSamples = sampleRate * Int32(duration)
         let numChannels: Int16 = 1
         let bitsPerSample: Int16 = 16
@@ -92,33 +95,41 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
         let byteRate = sampleRate * Int32(blockAlign)
         let dataSize = numSamples * Int32(blockAlign)
         let chunkSize = 36 + dataSize
-        
+
         var data = Data()
-        
-        
-        data.append(contentsOf: [0x52, 0x49, 0x46, 0x46]) 
+
+        data.append(contentsOf: [0x52, 0x49, 0x46, 0x46])
         data.append(withUnsafeBytes(of: UInt32(chunkSize).littleEndian) { Data($0) })
-        data.append(contentsOf: [0x57, 0x41, 0x56, 0x45]) 
-        
-        
-        data.append(contentsOf: [0x66, 0x6D, 0x74, 0x20]) 
-        data.append(withUnsafeBytes(of: UInt32(16).littleEndian) { Data($0) }) 
-        data.append(withUnsafeBytes(of: UInt16(1).littleEndian) { Data($0) }) 
+        data.append(contentsOf: [0x57, 0x41, 0x56, 0x45])
+
+        data.append(contentsOf: [0x66, 0x6D, 0x74, 0x20])
+        data.append(withUnsafeBytes(of: UInt32(16).littleEndian) { Data($0) })
+        data.append(withUnsafeBytes(of: UInt16(1).littleEndian) { Data($0) })
         data.append(withUnsafeBytes(of: numChannels.littleEndian) { Data($0) })
         data.append(withUnsafeBytes(of: sampleRate.littleEndian) { Data($0) })
         data.append(withUnsafeBytes(of: byteRate.littleEndian) { Data($0) })
         data.append(withUnsafeBytes(of: blockAlign.littleEndian) { Data($0) })
         data.append(withUnsafeBytes(of: bitsPerSample.littleEndian) { Data($0) })
-        
-        
-        data.append(contentsOf: [0x64, 0x61, 0x74, 0x61]) 
+
+        data.append(contentsOf: [0x64, 0x61, 0x74, 0x61])
         data.append(withUnsafeBytes(of: dataSize.littleEndian) { Data($0) })
-        data.append(Data(count: Int(dataSize))) 
-        
+        data.append(Data(count: Int(dataSize)))
+
+        return data
+    }
+
+    private func setupSilentAudio() {
+        let data = Self.makeSilentWAV()
         do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers, .allowAirPlay])
-            try AVAudioSession.sharedInstance().setActive(true, options: .notifyOthersOnDeactivation)
-            
+            // Only reconfigure the shared session when the player is idle —
+            // its NON-mixable session is what keeps the app as the system's
+            // Now Playing app, and flipping it to mixable mid-playback
+            // knocked the lock-screen media card out.
+            if !NebuloPlayerEngine.shared.isPlaying {
+                try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers, .allowAirPlay])
+                try AVAudioSession.sharedInstance().setActive(true, options: .notifyOthersOnDeactivation)
+            }
+
             silentAudioPlayer = try AVAudioPlayer(data: data)
             silentAudioPlayer?.numberOfLoops = -1 
             silentAudioPlayer?.volume = 0.01 
@@ -151,8 +162,12 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
         
         
         do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers, .allowAirPlay])
-            try AVAudioSession.sharedInstance().setActive(true, options: .notifyOthersOnDeactivation)
+            // Same rule as setupSilentAudio: never demote the player's
+            // non-mixable session to mixable while a stream is playing.
+            if !NebuloPlayerEngine.shared.isPlaying {
+                try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers, .allowAirPlay])
+                try AVAudioSession.sharedInstance().setActive(true, options: .notifyOthersOnDeactivation)
+            }
             silentAudioPlayer?.play()
         } catch {
             print("⚠️ [StreamRecorder] Failed to activate audio session: \(error)")

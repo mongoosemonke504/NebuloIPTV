@@ -100,13 +100,17 @@ struct FavoritesView: View {
         }
     }
 
+    /// One filter switch per drag — set mid-drag when the swipe fires,
+    /// cleared on finger-lift.
+    @State private var swipeConsumed = false
+
     /// Steps to the previous/next filter pill. Driven by the horizontal swipe.
+    /// No haptic — swipes stay silent; haptics belong to deliberate taps.
     private func advanceFilter(_ delta: Int) {
         let all = FavoritesFilter.allCases
         guard let idx = all.firstIndex(of: filter) else { return }
         let next = idx + delta
         guard all.indices.contains(next) else { return }
-        UISelectionFeedbackGenerator().selectionChanged()
         selectFilter(all[next])
     }
 
@@ -177,25 +181,30 @@ struct FavoritesView: View {
                 titleProgress.set(min(max(-y / 40, 0), 1))
             }
             // Horizontal swipe flips to the previous/next filter, matching
-            // the Sports hub. Simultaneous so vertical scrolling is
-            // unaffected; left-edge swipes stay reserved for back.
+            // the Sports hub. Fires mid-drag the moment the swipe reads as
+            // horizontal so the switch tracks the gesture instead of waiting
+            // for finger-lift. Left-edge swipes stay reserved for back.
             .simultaneousGesture(
-                DragGesture(minimumDistance: 25)
+                DragGesture(minimumDistance: 10, coordinateSpace: .global)
                     .onChanged { value in
+                        let dx = value.translation.width
+                        let dy = value.translation.height
                         // As soon as the drag reads as horizontal, open the
                         // tap-suppression window so the row under the finger
                         // doesn't ALSO fire on release.
-                        if abs(value.translation.width) > abs(value.translation.height) * 1.5 {
+                        if abs(dx) > abs(dy) * 1.4 {
                             SwipeTapGuard.suppress()
                         }
-                    }
-                    .onEnded { value in
-                        let dx = value.translation.width
-                        let dy = value.translation.height
-                        guard value.startLocation.x > 44,
-                              abs(dx) > 60, abs(dx) > abs(dy) * 1.5 else { return }
+                        // Low threshold + mid-drag firing: the swipe is
+                        // recognised almost as soon as the finger commits to
+                        // a horizontal motion.
+                        guard !swipeConsumed,
+                              value.startLocation.x > 44,
+                              abs(dx) > 20, abs(dx) > abs(dy) * 1.4 else { return }
+                        swipeConsumed = true
                         advanceFilter(dx < 0 ? 1 : -1)
                     }
+                    .onEnded { _ in swipeConsumed = false }
             )
         }
         // NOTE: no local bottom search pill here — MainViewModifiers already
@@ -401,22 +410,22 @@ struct FavoritesView: View {
                 )
                 .padding(.horizontal, 20)
             } else {
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 14) {
+                // Same row the category lists use — logo, name, current EPG
+                // program with progress bar and time left — so a favorited
+                // channel reads exactly like it does anywhere else.
+                LazyVStack(spacing: 0) {
                     ForEach(favoriteChannels) { channel in
-                        FavoriteChannelTile(
+                        ChannelRow(
                             channel: channel,
-                            isLive: scoreViewModel.liveGame(for: channel, currentEPGTitle: viewModel.getCurrentProgram(for: channel)?.title) != nil,
-                            onTap: {
-                                viewModel.triggerSelectionHaptic()
-                                playAction(channel)
-                            },
-                            onRemove: {
-                                viewModel.toggleFavorite(channel.id)
-                            }
+                            epgProgram: viewModel.getCurrentProgram(for: channel),
+                            isFavorite: true,
+                            accentColor: accentColor,
+                            playAction: { playAction(channel) },
+                            toggleFav: { viewModel.toggleFavorite(channel.id) }
                         )
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 4)
             }
         }
     }
@@ -707,6 +716,9 @@ struct FavoritesSectionHeader: View {
 struct FavoriteChannelTile: View {
     let channel: StreamChannel
     let isLive: Bool
+    /// Current EPG program title — shown under the channel name so the user
+    /// can see what's on without opening the channel.
+    var nowPlaying: String? = nil
     let onTap: () -> Void
     let onRemove: () -> Void
 
@@ -760,11 +772,20 @@ struct FavoriteChannelTile: View {
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
-                Text(isLive ? "Live" : "Off air")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.55))
+                if let program = nowPlaying, !program.isEmpty {
+                    Text(program)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(isLive ? .red : .white.opacity(0.55))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                        .minimumScaleFactor(0.9)
+                } else {
+                    Text(isLive ? "Live" : "Off air")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.55))
+                }
             }
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, alignment: .top)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

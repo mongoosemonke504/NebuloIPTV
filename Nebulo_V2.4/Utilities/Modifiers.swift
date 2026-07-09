@@ -130,6 +130,39 @@ enum SwipeTapGuard {
     }
 }
 
+/// Global "a horizontal shelf is scrolling" signal. Horizontal shelves and
+/// chip rows touch this while the user drags them; the page-level chip-swipe
+/// gestures check it and stand down, so a shelf scroll is never mistaken for
+/// a page swipe. Timestamp-based (not a flag) so a missed "ended" callback
+/// can't wedge the signal on.
+@MainActor
+enum HorizontalScrollActivity {
+    static var last = Date.distantPast
+    static func touch() { last = Date() }
+    static var isActive: Bool { Date().timeIntervalSince(last) < 0.2 }
+}
+
+/// Reports a view's frame in global (screen) coordinates whenever it moves.
+/// Used to carve chip rows out of page-level swipe gestures.
+struct GlobalFrameCapture: ViewModifier {
+    let onChange: (CGRect) -> Void
+    func body(content: Content) -> some View {
+        content.background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { onChange(geo.frame(in: .global)) }
+                    .onChangeCompat(of: geo.frame(in: .global)) { onChange($0) }
+            }
+        )
+    }
+}
+
+extension View {
+    func captureGlobalFrame(_ onChange: @escaping (CGRect) -> Void) -> some View {
+        modifier(GlobalFrameCapture(onChange: onChange))
+    }
+}
+
 /// Scroll offsets reported by ScrollOffsetProbe, keyed by an arbitrary page id
 /// so screens with multiple scroll views (paged tabs) can read just the one
 /// that's currently visible.

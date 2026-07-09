@@ -1,21 +1,129 @@
 import Foundation
 import Combine
 import AVFoundation
+import UIKit
 
 class RecordingManager: NSObject, ObservableObject {
     static let shared = RecordingManager()
-    
+
     @Published var recordings: [Recording] = []
-    
-    
+
+
     private var activeRecorders: [UUID: StreamRecorder] = [:]
-    
+
     private let recordingsKey = "saved_recordings_v1"
-    
+
+    /// Silent looped audio that holds the process open while backgrounded.
+    /// Without it, iOS suspends the app ~20-30s after backgrounding: pending
+    /// schedule timers freeze (the recording "just never starts") and an
+    /// in-flight recording's URLSession stops (~20s captured, then nothing).
+    /// Armed on every background transition while ANY recording is active or
+    /// still scheduled ahead; torn down on foreground and when idle.
+    private var keepAlivePlayer: AVAudioPlayer?
+
     override init() {
         super.init()
         loadRecordings()
         restoreActiveRecordings()
+
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(appDidEnterBackground),
+            name: UIApplication.didEnterBackgroundNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(appDidBecomeActive),
+            name: UIApplication.didBecomeActiveNotification, object: nil)
+    }
+
+    // MARK: - Background keep-alive
+
+    private var needsBackgroundRuntime: Bool {
+        let now = Date()
+        return recordings.contains {
+            $0.status == .recording || ($0.status == .scheduled && $0.endTime > now)
+        }
+    }
+
+    @objc private func appDidEnterBackground() {
+        guard needsBackgroundRuntime else { return }
+        startKeepAliveAudio()
+    }
+
+    @objc private func appDidBecomeActive() {
+        // Foregrounded — the process can't suspend, so the loop is dead
+        // weight (active StreamRecorders manage their own audio session).
+        stopKeepAliveAudio()
+        // Catch anything that slipped while we were suspended: overdue
+        // scheduled recordings start now, fully-missed windows are failed.
+        checkSchedules()
+    }
+
+    private func startKeepAliveAudio() {
+        if keepAlivePlayer?.isPlaying == true { return }
+        do {
+            // Don't reconfigure the session while the player is active: the
+            // player's NON-mixable session is what keeps the app as the
+            // system's Now Playing app (lock-screen media card), and it
+            // already holds the process open. The mixable category is only
+            // for the recording-with-nothing-playing case.
+            if !NebuloPlayerEngine.shared.isPlaying {
+                try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
+                try AVAudioSession.sharedInstance().setActive(true)
+            }
+            if keepAlivePlayer == nil {
+                keepAlivePlayer = try AVAudioPlayer(data: StreamRecorder.makeSilentWAV())
+                keepAlivePlayer?.numberOfLoops = -1
+                keepAlivePlayer?.volume = 0.01
+            }
+            keepAlivePlayer?.prepareToPlay()
+            keepAlivePlayer?.play()
+            print("🛡️ [RecordingManager] Background keep-alive audio started.")
+        } catch {
+            print("⚠️ [RecordingManager] Keep-alive audio failed: \(error)")
+        }
+    }
+
+    private func stopKeepAliveAudio() {
+        guard keepAlivePlayer?.isPlaying == true else { return }
+        keepAlivePlayer?.stop()
+        print("🛡️ [RecordingManager] Background keep-alive audio stopped.")
+    }
+
+    /// A recording just finished or failed — drop the keep-alive if nothing
+    /// else needs background runtime, so the silent loop never outlives its
+    /// purpose and drains the battery.
+    private func reassessKeepAlive() {
+        if UIApplication.shared.applicationState == .background, needsBackgroundRuntime {
+            startKeepAliveAudio()
+        } else {
+            stopKeepAliveAudio()
+        }
+    }
+
+    /// Starts anything overdue and fails anything fully missed. Runs on
+    /// launch (via restore) and on every foreground activation.
+    private func checkSchedules() {
+        let now = Date()
+        for i in recordings.indices {
+            let rec = recordings[i]
+            switch rec.status {
+            case .recording:
+                // A recorder we still hold is healthy; one we don't means
+                // the process died mid-recording — salvage or restart.
+                if activeRecorders[rec.id] == nil {
+                    if rec.endTime > now { startRecording(rec) }
+                    else { finalizeStaleRecording(index: i) }
+                }
+            case .scheduled:
+                if rec.endTime <= now {
+                    recordings[i].status = .failed
+                    saveRecordings()
+                } else if rec.startTime <= now {
+                    startRecording(rec)
+                }
+            default:
+                break
+            }
+        }
     }
     
     private func restoreActiveRecordings() {
@@ -162,6 +270,7 @@ class RecordingManager: NSObject, ObservableObject {
                     self.saveRecordings()
                     self.activeRecorders.removeValue(forKey: recording.id)
                 }
+                self.reassessKeepAlive()
             }
         }
 
@@ -170,6 +279,7 @@ class RecordingManager: NSObject, ObservableObject {
                 print("Recording error: \(error)")
                 self?.failRecording(recording, reason: error.localizedDescription)
                 self?.activeRecorders.removeValue(forKey: recording.id)
+                self?.reassessKeepAlive()
             }
         }
 

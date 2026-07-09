@@ -78,7 +78,10 @@ struct PlayerInfoPanel: View {
     /// row you touch stays under your finger for the entire collapse; the
     /// spacer then scrolls away like any other content.
     private var collapseCompensation: CGFloat {
-        guard headerFullHeight > 0 else { return 0 }
+        // In carried mode the collapse never "took" height from this tab's
+        // scroll (its list opens at the top), so no spacer is owed — leaving
+        // it in was exactly the blank band under the tab bar.
+        guard headerFullHeight > 0, !carriedCollapse else { return 0 }
         return max(0, (headerFullHeight - headerCompactHeight) * panelCollapse)
     }
 
@@ -93,6 +96,17 @@ struct PlayerInfoPanel: View {
         // Frozen during a collapse-preserving tab swipe (see selectTab) so the
         // incoming tab's initial offset-0 callback can't reset the collapse.
         guard Date() >= suppressCollapseUntil, headerFullHeight > 0 else { return }
+        // Carried mode: the header is latched compact regardless of this
+        // tab's offset (its list sits at the top). A decisive pull past the
+        // top releases the latch and re-opens the full header; normal
+        // offset-driven tracking resumes from there.
+        if carriedCollapse {
+            if scrolled < -36 {
+                carriedCollapse = false
+                withAnimation(.easeOut(duration: 0.25)) { panelCollapse = 0 }
+            }
+            return
+        }
         let distance = collapseDistance
         // Pure continuous mapping — no pixel quantization, no end snap
         // zones. Both were workarounds for noise in the old probe pipeline
@@ -150,38 +164,41 @@ struct PlayerInfoPanel: View {
     /// before we've scrolled it to the collapsed offset.
     @State private var suppressCollapseUntil = Date.distantPast
 
+    /// One tab switch per drag (set mid-drag, cleared on finger-lift), and
+    /// the category chip row's global frame so drags starting there scroll
+    /// chips instead of switching tabs.
+    @State private var swipeConsumed = false
+    @State private var categoryPickerFrame: CGRect = .zero
+
+    /// True when a collapsed header was carried across a tab switch. In this
+    /// mode the header is latched compact WITHOUT a compensation spacer or
+    /// offset gymnastics (the old approach scrolled the incoming list to a
+    /// matching offset, and whenever that couldn't land — short schedule
+    /// content, view not attached yet — the spacer showed as a dead blank
+    /// band). The latch releases when the user pulls decisively past the top
+    /// of the list, which re-opens the full header.
+    @State private var carriedCollapse = false
+
     /// Central tab switch: derives the slide direction from tab order and
-    /// swaps with a flat easeOut — no spring, no bounce. If the header is
-    /// collapsed, it STAYS collapsed: tracking is frozen briefly and the
-    /// incoming tab is scrolled to the matching offset so its list still opens
-    /// at the top under the compact header instead of the header springing
-    /// back open.
+    /// swaps with a flat easeOut — no spring, no bounce. A collapsed header
+    /// STAYS collapsed (latched) across the switch; the incoming tab opens
+    /// at the top of its list under the compact header.
     private func selectTab(_ newTab: InfoTab) {
         guard newTab != selectedTab, !isSliding else { return }
         slideFromTrailing = newTab.rawValue > selectedTab.rawValue
         isSliding = true
         ChannelViewModel.shared.triggerSelectionHaptic()
 
-        let frozenCollapse = panelCollapse
-        let keepCollapsed = frozenCollapse > 0.5
-        if keepCollapsed {
-            suppressCollapseUntil = Date().addingTimeInterval(0.4)
-        }
+        let keepCollapsed = panelCollapse > 0.5
+        carriedCollapse = keepCollapsed
+
+        // Freeze scroll-driven collapse updates during the slide so the
+        // outgoing tab's offset callbacks can't fight the state below.
+        suppressCollapseUntil = Date().addingTimeInterval(0.35)
 
         withAnimation(.easeOut(duration: 0.25)) {
             selectedTab = newTab
-            if !keepCollapsed { panelCollapse = 0 }
-        }
-
-        if keepCollapsed {
-            let target = collapseDistance * frozenCollapse
-            DispatchQueue.main.async {
-                switch newTab {
-                case .channels:   channelsScroll.scrollTo(y: target)
-                case .schedule:   scheduleScroll.scrollTo(y: target)
-                case .recordings: recordingsScroll.scrollTo(y: target)
-                }
-            }
+            panelCollapse = keepCollapsed ? 1 : 0
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
@@ -325,21 +342,27 @@ struct PlayerInfoPanel: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .clipped()
             .simultaneousGesture(
-                DragGesture(minimumDistance: 25)
+                DragGesture(minimumDistance: 25, coordinateSpace: .global)
                     .onChanged { value in
-                        // Horizontal drags open the tap-suppression window so
-                        // the row under the finger doesn't fire on release.
-                        if abs(value.translation.width) > abs(value.translation.height) * 1.5 {
-                            SwipeTapGuard.suppress()
-                        }
-                    }
-                    .onEnded { value in
                         let dx = value.translation.width
                         let dy = value.translation.height
-                        guard value.startLocation.x > 44,
-                              abs(dx) > 60, abs(dx) > abs(dy) * 1.5 else { return }
+                        // Horizontal drags open the tap-suppression window so
+                        // the row under the finger doesn't fire on release.
+                        if abs(dx) > abs(dy) * 1.5 {
+                            SwipeTapGuard.suppress()
+                        }
+                        // Fires mid-drag for an instant response. Drags that
+                        // start on the category chip row scroll the chips —
+                        // they must never flip to the Schedule tab.
+                        guard !swipeConsumed,
+                              value.startLocation.x > 44,
+                              !categoryPickerFrame.contains(value.startLocation),
+                              !HorizontalScrollActivity.isActive,
+                              abs(dx) > 50, abs(dx) > abs(dy) * 1.5 else { return }
+                        swipeConsumed = true
                         advanceTab(dx < 0 ? 1 : -1)
                     }
+                    .onEnded { _ in swipeConsumed = false }
             )
         }
         .background(Color.black)
@@ -462,6 +485,12 @@ struct PlayerInfoPanel: View {
             }
             .padding(.horizontal, 18)
         }
+        // Scrubbing this chip row must never flip tabs — mark the shared
+        // signal while it scrolls and let the tab-swipe gesture stand down.
+        .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.x }) { _, _ in
+            HorizontalScrollActivity.touch()
+        }
+        .captureGlobalFrame { categoryPickerFrame = $0 }
     }
 
     @ViewBuilder

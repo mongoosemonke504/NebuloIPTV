@@ -123,10 +123,25 @@ final class ImageCache: @unchecked Sendable {
 
     // MARK: - Prefetch
 
-    /// Warms the on-disk cache for a URL without touching the main thread.
-    /// Skips work entirely if the file already exists; decode happens off-main.
+    /// Warms the MEMORY cache for a URL without touching the main thread.
+    /// A disk-only warm isn't enough: list rows built mid-transition do a
+    /// synchronous memory lookup first and fall back to a main-thread disk
+    /// decode — with dozens of crests that decode queue made the soccer
+    /// rows pop in one after another instead of landing together. Promoting
+    /// the disk copy into memory here means every row hits the instant path.
     nonisolated static func prefetchAndWait(urlString: String, size: CGSize? = nil) async {
-        if FileManager.default.fileExists(atPath: fileURL(for: urlString).path) { return }
+        if await shared.getMemoryCache(forKey: urlString, size: size) != nil { return }
+
+        if FileManager.default.fileExists(atPath: fileURL(for: urlString).path) {
+            let decoded = await Task.detached(priority: .utility) {
+                DecodedImage(image: decodeFromDisk(urlString: urlString, size: size))
+            }.value.image
+            if let image = decoded {
+                await shared.set(image, forKey: urlString, size: size, skipDiskWrite: true)
+            }
+            return
+        }
+
         guard let url = URL(string: urlString),
               let (data, _) = try? await URLSession.shared.data(from: url) else { return }
 

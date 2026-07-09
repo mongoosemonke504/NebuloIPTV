@@ -207,6 +207,7 @@ struct PlaybackCard: View {
     @AppStorage("autoBuffer") private var autoBuffer = true
     @AppStorage("bufferTime") private var bufferTime = 10.0
     @AppStorage("defaultPlayerEngine") private var defaultPlayerEngine = "VLC"
+    @AppStorage("customAccentHex") private var customAccentHex = "#FFFFFF"
     @ObservedObject var viewModel: ChannelViewModel
     
     var body: some View {
@@ -238,7 +239,7 @@ struct PlaybackCard: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Slider(value: $bufferTime, in: 0.5...10.0, step: 0.5)
-                            .tint(.blue)
+                            .tint(Color(hex: customAccentHex) ?? .white)
                     }
                 }
             }
@@ -512,7 +513,7 @@ struct ContentManagementCard: View {
                     dismissSettings()
                     playAction?(channel)
                 })) {
-                    SettingsRow(icon: "recordingtape", title: "Recordings", subtitle: "\(RecordingManager.shared.recordings.count) Saved", iconColor: .red)
+                    SettingsRow(icon: "recordingtape", title: "Recordings", subtitle: "\(RecordingManager.shared.recordings.filter { $0.status == .completed }.count) Saved", iconColor: .red)
                 }
                 .foregroundStyle(.primary)
 
@@ -527,6 +528,7 @@ struct ContentManagementCard: View {
 
 struct SupportCard: View {
     @AppStorage("showSupportPopup") private var showSupportPopup = true
+    @State private var snapshotCopied = false
     
     var body: some View {
         SettingsCard {
@@ -545,6 +547,22 @@ struct SupportCard: View {
 
                 Button(action: { UIApplication.shared.open(URL(string: "https://buymeacoffee.com/mongoosemonke")!) }) {
                     SettingsRow(icon: "cup.and.saucer.fill", title: "Buy Me a Coffee", iconColor: .yellow)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.primary)
+
+                Button(action: {
+                    UIPasteboard.general.string = AppDefaults.snapshotJSON()
+                    snapshotCopied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { snapshotCopied = false }
+                }) {
+                    SettingsRow(
+                        icon: snapshotCopied ? "checkmark.circle.fill" : "doc.on.doc.fill",
+                        title: snapshotCopied ? "Copied!" : "Copy Settings Snapshot",
+                        subtitle: snapshotCopied ? nil : "Export appearance & playback prefs as JSON",
+                        iconColor: snapshotCopied ? .green : .gray,
+                        showChevron: false
+                    )
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.primary)
@@ -926,6 +944,7 @@ struct SportTabsManagerView: View {
 struct HiddenChannelsSettingsView: View {
     @ObservedObject var viewModel: ChannelViewModel
     @State private var searchText = ""
+    @AppStorage("customAccentHex") private var customAccentHex = "#FFFFFF"
 
     @AppStorage("nebColor1") private var nebColor1 = "#1A2538"
     @AppStorage("nebColor2") private var nebColor2 = "#11101A"
@@ -986,7 +1005,7 @@ struct HiddenChannelsSettingsView: View {
                                     withAnimation { viewModel.unhideChannel(c.id) }
                                 }
                                 .buttonStyle(.bordered)
-                                .tint(.blue)
+                                .tint(Color(hex: customAccentHex) ?? .white)
                                 .controlSize(.small)
                             }
                             .listRowBackground(Color.black.opacity(0.35))

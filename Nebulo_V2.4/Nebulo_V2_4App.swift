@@ -50,6 +50,7 @@ struct Nebulo_V2_4App: App {
     let timer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
     init() {
+        AppDefaults.register()
         BackgroundManager.shared.register()
     }
     
@@ -81,52 +82,49 @@ struct Nebulo_V2_4App: App {
 class BackgroundManager {
     static let shared = BackgroundManager()
     let backgroundTaskID = "com.nebulo.epgUpdate"
-    
+
     func register() {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: backgroundTaskID, using: nil) { task in
-            if let refreshTask = task as? BGAppRefreshTask {
-                self.handleAppRefresh(task: refreshTask)
-            }
+            self.handleEPGRefresh(task: task)
         }
     }
-    
+
+    /// A PROCESSING task, not an app-refresh task: a full guide download and
+    /// parse takes minutes, and app-refresh tasks get killed after ~30s.
+    /// Earliest run = 12 hours after the last successful update, so the
+    /// guide refreshes on the same cadence whether or not the app is open.
     func scheduleAppRefresh() {
-        let request = BGAppRefreshTaskRequest(identifier: backgroundTaskID)
-        request.earliestBeginDate = getNextRunDate()
-        
+        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: backgroundTaskID)
+        let request = BGProcessingTaskRequest(identifier: backgroundTaskID)
+        request.requiresNetworkConnectivity = true
+        request.requiresExternalPower = false
+        request.earliestBeginDate = nextRunDate()
+
         do {
             try BGTaskScheduler.shared.submit(request)
-            
         } catch {
-            print("Could not schedule app refresh: \(error)")
+            print("Could not schedule EPG background refresh: \(error)")
         }
     }
-    
-    func handleAppRefresh(task: BGAppRefreshTask) {
-        scheduleAppRefresh() 
-        
-        task.expirationHandler = {
-            task.setTaskCompleted(success: false)
-        }
-        
-        Task {
+
+    func handleEPGRefresh(task: BGTask) {
+        scheduleAppRefresh()
+
+        let work = Task {
             let result = await ChannelViewModel.shared.backgroundFetch()
             task.setTaskCompleted(success: result != .noData)
         }
-    }
-    
-    private func getNextRunDate() -> Date {
-        let now = Date()
-        let calendar = Calendar.current
-        var components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: now)
-        components.hour = 4
-        components.minute = 30
-        
-        guard let scheduledDate = calendar.date(from: components) else { return now.addingTimeInterval(3600) }
-        
-        if scheduledDate <= now {
-            return calendar.date(byAdding: .day, value: 1, to: scheduledDate) ?? now.addingTimeInterval(3600)
+        task.expirationHandler = {
+            work.cancel()
+            task.setTaskCompleted(success: false)
         }
-        return scheduledDate
+    }
+
+    private func nextRunDate() -> Date {
+        let last = ChannelViewModel.shared.lastEPGUpdateDate ?? .distantPast
+        let next = last.addingTimeInterval(ChannelViewModel.epgMaxAge)
+        // Never sooner than 15 minutes out — the system ignores immediate
+        // dates anyway, and the update would be redundant right after use.
+        return max(next, Date().addingTimeInterval(15 * 60))
     }
 }

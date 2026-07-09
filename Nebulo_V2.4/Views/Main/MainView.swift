@@ -116,12 +116,58 @@ struct MainView: SwiftUI.View {
                 viewModel.channelToAutoPlay = nil 
             } 
         }
-        .onChangeCompat(of: viewModel.triggerMultiView) { nv in 
-            if nv { 
+        .onChangeCompat(of: viewModel.triggerMultiView) { nv in
+            if nv {
                 selectedChannel = nil
                 withAnimation(.spring()) { showMultiView = true }
-                viewModel.triggerMultiView = false 
-            } 
+                viewModel.triggerMultiView = false
+            }
+        }
+        // Search lives in its own presented context: inside the main ZStack,
+        // the keyboard-driven relayout of the hierarchy underneath animated
+        // ACROSS the overlay as a dark full-screen cover sliding left→right
+        // on open. A fullScreenCover fully occludes the app, so whatever
+        // reflows behind it is invisible. Presented without animation.
+        .fullScreenCover(isPresented: $showSearch) {
+            SearchView(
+                viewModel: viewModel,
+                scoreViewModel: scoreViewModel,
+                accentColor: accentColor,
+                playAction: { channel in
+                    dismissSearch()
+                    playChannel(channel)
+                },
+                onCategorySelect: { cat in
+                    viewModel.lastSelectedHomeID = cat.id
+                    viewModel.lastSourceCategory = cat
+                    dismissSearch()
+                    withAnimation { selectedCategory = cat }
+                },
+                onDismiss: {
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    dismissSearch(animated: true)
+                }
+            )
+            // Match the environment the overlay had inside the ignoresSafeArea
+            // ZStack: SearchView measures device insets and tracks the
+            // keyboard manually, so automatic avoidance must stay off.
+            .ignoresSafeArea()
+            .ignoresSafeArea(.keyboard)
+        }
+    }
+
+    /// Closes the search cover and clears the query. The plain close (X /
+    /// Cancel) slides down with the keyboard; hand-offs into playback or a
+    /// category dismiss instantly so the destination isn't hidden behind a
+    /// departing cover.
+    private func dismissSearch(animated: Bool = false) {
+        viewModel.searchText = ""
+        if animated {
+            showSearch = false
+        } else {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { showSearch = false }
         }
     }
     
@@ -211,9 +257,15 @@ struct MainViewModifiers: ViewModifier {
                 // gear below, and each section's Back pill via StandardLayout.
                 view.toolbar(.hidden, for: .navigationBar)
                 .safeAreaInset(edge: .bottom, spacing: 0) {
+                    // Fallback action (VoiceOver / non-touch activation) —
+                    // touch opens via the touch-down gesture below, which
+                    // will already have set showSearch by release.
                     Button(action: {
+                        guard !showSearch else { return }
                         viewModel.triggerSelectionHaptic()
-                        withAnimation(.easeOut(duration: 0.22)) { showSearch = true }
+                        var t = Transaction()
+                        t.disablesAnimations = true
+                        withTransaction(t) { showSearch = true }
                     }) {
                         HStack(spacing: 10) {
                             Image(systemName: "magnifyingglass")
@@ -232,6 +284,33 @@ struct MainViewModifiers: ViewModifier {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    // Open on touch-DOWN, not tap-release: the section SNAPS
+                    // in (no presentation animation) the instant the finger
+                    // lands, and SearchView's field takes focus on the next
+                    // tick — so the keyboard starts rising the moment the
+                    // section is on screen, together. An animated cover
+                    // couldn't do this: UIKit defers any keyboard requested
+                    // inside a presentation transition until it finishes,
+                    // which is why the keyboard kept trailing the slide.
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { _ in
+                                guard !showSearch else { return }
+                                viewModel.triggerSelectionHaptic()
+                                var t = Transaction()
+                                t.disablesAnimations = true
+                                withTransaction(t) { showSearch = true }
+                            }
+                    )
+                    // Invisible host for the keyboard pre-warm field — must
+                    // live in the main hierarchy so it can take first
+                    // responder BEFORE the search cover presents.
+                    .background(
+                        KeyboardPrewarmField()
+                            .frame(width: 1, height: 1)
+                            .opacity(0.01)
+                            .allowsHitTesting(false)
+                    )
                 }
             }
             .fullScreenCover(item: $selectedRecording) { recording in
@@ -330,32 +409,10 @@ extension MainView {
         // pill indicator so the user can keep browsing.
         // EPGProgressBanner observes epgState directly so 10-fps progress ticks
         // never cause MainView or any channel list to re-render.
-        // Search overlay — blur-fades in/out like CategoryDetailView.
-        // Keyboard avoidance is tracked manually inside SearchView itself.
-        if showSearch {
-            SearchView(
-                viewModel: viewModel,
-                scoreViewModel: scoreViewModel,
-                accentColor: accentColor,
-                playAction: playChannel,
-                onCategorySelect: { cat in
-                    viewModel.lastSelectedHomeID = cat.id
-                    viewModel.lastSourceCategory = cat
-                    withAnimation {
-                        selectedCategory = cat
-                        showSearch = false
-                    }
-                    viewModel.searchText = ""
-                },
-                onDismiss: {
-                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                    viewModel.searchText = ""
-                    withAnimation { showSearch = false }
-                }
-            )
-            .transition(.opacity)
-            .zIndex(90)
-        }
+        // NOTE: the search overlay is presented via .fullScreenCover on the
+        // MainView body, NOT here — presenting it inside this ZStack let the
+        // keyboard-driven relayout of everything underneath animate across
+        // the overlay as a full-screen sliding cover on open.
 
         let isInitialLoad = viewModel.isLoading
         if isInitialLoad || viewModel.isUpdatingEPG {
@@ -430,7 +487,7 @@ struct StandardLayout: SwiftUI.View {
 
     /// Featured carousel content for the active chip — cached to avoid
     /// rebuilding the category Dictionary on every render.
-    @State private var cachedDisplayedFeatured: [StreamChannel] = []
+    @State private var cachedDisplayedFeatured: [FeaturedItem] = []
 
     /// Continue Watching channel objects, resolved from `recentIDs` once.
     @State private var cachedRecent: [StreamChannel] = []
@@ -457,6 +514,15 @@ struct StandardLayout: SwiftUI.View {
     /// its own object (observed only by the two crossfading headers) so
     /// scrolling the home screen doesn't re-render its whole body each frame.
     @State private var homeHeaderProgress = ScrollProgress()
+
+    /// Central home-chip switch (tap-only, no slide animation). The featured
+    /// list for the incoming page is computed synchronously so the carousel
+    /// swaps in the same frame instead of popping in a beat later.
+    private func setHomeGroup(_ newValue: HomeCategoryGroup?) {
+        guard newValue != selectedHomeGroup else { return }
+        selectedHomeGroup = newValue
+        cachedDisplayedFeatured = computeDisplayedFeatured()
+    }
 
     /// Same idea for the hub sections (Sports/Favorites/Recordings): their
     /// scroll probes bubble up via preference, and this drives the compact
@@ -626,6 +692,7 @@ struct StandardLayout: SwiftUI.View {
             } else if !searchText.isEmpty {
                 searchView
                     .modifier(SwipeBackModifier(onBack: { withAnimation { searchText = "" } }))
+                    .zIndex(2)
             } else if let cat = selectedCategory {
                 // `.allowsHitTesting(isDetailInteractive)` is the key fix for
                 // Quick Access buttons becoming unresponsive after navigation.
@@ -720,7 +787,15 @@ struct StandardLayout: SwiftUI.View {
                     .padding(.vertical, 4)
                 }
                 .allowsHitTesting(isDetailInteractive)
-            } else {
+                .zIndex(1)
+            }
+
+            // Home stays MOUNTED (hidden) underneath every section instead of
+            // being torn down: recreating the ScrollView reset its offset, so
+            // returning from a section always snapped back to the top. It
+            // sits at zIndex 0 below the section overlays, with opacity and
+            // hit-testing gated while a section is open.
+            if !viewModel.isLoading {
                 ScrollView(showsIndicators: false) {
                     // Batch every liquid-glass element on the home screen into a
                     // single coordinated render pass. Each `.glassEffect` card
@@ -774,8 +849,14 @@ struct StandardLayout: SwiftUI.View {
                             //    Quick Access panel + Live Now shelf already give the user
                             //    two ways to reach the Sports hub from this screen.
                             HomeFilterChips(
+                                // Routed through setHomeGroup so a chip tap
+                                // slides the content in the direction of the
+                                // chip order.
                                 groups: chipGroups,
-                                selected: $selectedHomeGroup
+                                selected: Binding(
+                                    get: { selectedHomeGroup },
+                                    set: { setHomeGroup($0) }
+                                )
                             )
 
                             // 3. Featured Carousel — uses cached snapshot. Updated by the
@@ -784,7 +865,7 @@ struct StandardLayout: SwiftUI.View {
                             //     live, the channel broadcasting their game leads the carousel.
                             if !cachedDisplayedFeatured.isEmpty {
                                 FeaturedCarousel(
-                                    channels: cachedDisplayedFeatured,
+                                    items: cachedDisplayedFeatured,
                                     viewModel: viewModel,
                                     accentColor: accentColor,
                                     playAction: playAction
@@ -1036,7 +1117,9 @@ struct StandardLayout: SwiftUI.View {
                         .allowsHitTesting(false)
                         .scrollProgressOpacity(homeHeaderProgress) { Double($0) }
                     }
-                    .transition(.blurFade)
+                    .opacity(searchText.isEmpty && selectedCategory == nil ? 1 : 0)
+                    .allowsHitTesting(searchText.isEmpty && selectedCategory == nil)
+                    .zIndex(0)
             }
         }
         // easeOut, not a spring: the spring's overshoot read as sections
@@ -1174,34 +1257,41 @@ struct StandardLayout: SwiftUI.View {
     /// • "For You" → pre-computed mixed-genre list from ChannelViewModel.
     /// • Specific group → channels from that group, preferring ones with a
     ///   currently-live program (better hero cards) and limiting to 6.
-    func computeDisplayedFeatured() -> [StreamChannel] {
+    func computeDisplayedFeatured() -> [FeaturedItem] {
         if let group = selectedHomeGroup {
-            let catLookup: [Int: StreamCategory] = Dictionary(uniqueKeysWithValues: viewModel.categories.map { ($0.id, $0) })
+            // Classify each CATEGORY once (dozens), never per CHANNEL
+            // (thousands) — the keyword classifier runs a regex plus ~250
+            // substring checks, and calling it for every channel made each
+            // chip tap stall for around a second.
+            var groupByCatID: [Int: HomeCategoryGroup] = [:]
+            groupByCatID.reserveCapacity(viewModel.categories.count)
+            for cat in viewModel.categories {
+                groupByCatID[cat.id] = HomeCategoryGroup.classify(cat)
+            }
             var inGroup: [StreamChannel] = []
             inGroup.reserveCapacity(64)
             for channel in viewModel.channels {
                 if viewModel.hiddenIDs.contains(channel.id) { continue }
-                guard let cat = catLookup[channel.categoryID] else { continue }
-                guard HomeCategoryGroup.classify(cat) == group else { continue }
+                guard groupByCatID[channel.categoryID] == group else { continue }
                 inGroup.append(channel)
                 if inGroup.count > 60 { break }
             }
             let withLive = inGroup.filter { viewModel.getCurrentProgram(for: $0) != nil }
             let pool = withLive.isEmpty ? inGroup : withLive
-            return Array(pool.prefix(6))
+            return Array(pool.prefix(6)).map { FeaturedItem(channel: $0) }
         }
 
-        var result: [StreamChannel] = []
+        var result: [FeaturedItem] = []
         var usedIDs = Set<Int>()
 
         for game in scoreViewModel.favoriteLiveGames() {
             if let ch = viewModel.resolveChannel(forGame: game), usedIDs.insert(ch.id).inserted {
-                result.append(ch)
+                result.append(FeaturedItem(channel: ch, game: game))
             }
         }
 
         for ch in viewModel.featuredChannels where usedIDs.insert(ch.id).inserted {
-            result.append(ch)
+            result.append(FeaturedItem(channel: ch))
         }
 
         return result
@@ -2127,188 +2217,46 @@ private extension UIImage {
 /// Uses a base Rectangle of fixed height so the card's size is never derived
 /// from any child — then stacks all visual layers and content via .overlay()
 /// modifiers. This is the only layout technique that is 100% immune to the
-/// "ZStack children expand beyond the clip frame" problem that occurred with
-/// ZStack + Spacer and ZStack + .frame(maxHeight:.infinity) approaches:
-/// children with oversized frames (e.g. 260-pt glow circles) set the ZStack's
-/// natural height, .frame(height:200) then centres that taller content inside
-/// 200 pt, clipping both the pill at the top and the resume button at the bottom.
-/// Overlay modifiers do not participate in layout — they cannot inflate the
-/// base view's frame.
+struct FeaturedItem {
+    let channel: StreamChannel
+    var game: ESPNEvent? = nil
+}
+
 struct FeaturedHeroCard: View {
     let channel: StreamChannel
     let program: EPGProgram?
     let accentColor: Color
     let onPlay: () -> Void
-
-    /// When set, the glow uses this colour and skips logo extraction —
-    /// sports channels glow in the app accent so the whole sports experience
-    /// (hub, featured game card, hero card) shares one identity.
     var glowOverride: Color? = nil
+    var game: ESPNEvent? = nil
 
-    /// Glow colour extracted from the channel logo (see LogoGlowCache).
-    /// Neutral warm-white until the logo is loaded and analysed.
     @State private var glowColor: Color? = nil
 
     private static let cardHeight: CGFloat = 200
 
+    private var hasMatchup: Bool {
+        game?.homeCompetitor?.team?.logo != nil && game?.awayCompetitor?.team?.logo != nil
+    }
+
     var body: some View {
         Button(action: onPlay) {
-            Rectangle()
-                .fill(Color.clear)
-                // ── 1. Solid gradient base — always fills the card even while
-                //       the image is loading or if it's transparent/square-padded
-                .overlay {
-                    // Neutral dark base — the blurred channel-logo layer above
-                    // provides the card's colour. An accent-tinted base washed
-                    // every card in blue regardless of the channel's branding.
-                    LinearGradient(
-                        colors: [Color.white.opacity(0.12), Color.black.opacity(0.85)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                }
-                // ── 2. Blurred logo texture — moderate size; blur radius 55 + 1.8×
-                //       scale destroys all fine detail so there's no visual
-                //       difference vs 500 pt, but ~90 % less memory per card.
-                .overlay {
-                    CachedAsyncImage(urlString: channel.icon ?? "",
-                                     size: CGSize(width: 160, height: 160))
-                        .blur(radius: 55)
-                        .opacity(0.48)
-                        .scaleEffect(1.8)
-                        .allowsHitTesting(false)
-                }
-                // ── 3. Brand glow circles — tinted with the dominant colour of
-                //       the channel's logo (extracted async below) so every
-                //       card glows in its own branding rather than the accent.
-                .overlay {
-                    Circle()
-                        .fill((glowOverride ?? glowColor ?? Color(white: 0.75)).opacity(0.55))
-                        .frame(width: 200, height: 200)
-                        .blur(radius: 60)
-                        .offset(x: -60, y: 20)
-                        .allowsHitTesting(false)
-                }
-                .overlay {
-                    Circle()
-                        .fill((glowOverride ?? glowColor ?? Color(white: 0.75)).opacity(0.30))
-                        .frame(width: 130, height: 130)
-                        .blur(radius: 40)
-                        .offset(x: 40, y: 10)
-                        .allowsHitTesting(false)
-                }
-                // ── 4. Darkening gradient for text legibility ────────────
-                .overlay {
-                    LinearGradient(
-                        colors: [Color.black.opacity(0.05),
-                                 Color.black.opacity(0.65)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                }
-                // ── 4. Top bar: FEATURED pill (left) · Resume pill (right) ─
-                //       Both live in one HStack so they share the same baseline
-                //       and can never crowd the bottom text area.
-                .overlay(alignment: .top) {
-                    HStack {
-                        // FEATURED pill
-                        HStack(spacing: 5) {
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 8, weight: .black))
-                            Text("FEATURED")
-                                .font(.caption2.weight(.black))
-                                .kerning(1.4)
-                        }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 4)
-                        .background(Color.black.opacity(0.85), in: Capsule())
-
-                        Spacer()
-
-                        // Resume pill — top-right, never touches the text below
-                        HStack(spacing: 6) {
-                            Image(systemName: "play.fill")
-                                .font(.caption.weight(.bold))
-                            Text("Resume")
-                                .font(.caption.weight(.semibold))
-                        }
-                        .foregroundStyle(.black)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .background(.white, in: Capsule())
-                    }
-                    .padding(.top, 16)
-                    .padding(.horizontal, 16)
-                }
-                // ── 5. Bottom row: logo · channel/EPG info ───────────────
-                //       Resume is gone from here so the text has full width.
-                .overlay(alignment: .bottomLeading) {
-                    HStack(alignment: .bottom, spacing: 14) {
-                        // Channel logo box
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(.ultraThinMaterial)
-                            CachedAsyncImage(urlString: channel.icon ?? "", size: nil)
-                                .padding(12)
-                        }
-                        .frame(width: 76, height: 76)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .stroke(Color.white.opacity(0.22), lineWidth: 0.5)
-                        )
-
-                        // Channel name + full-width EPG text
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(channel.name)
-                                .font(.title3.weight(.bold))
-                                .foregroundStyle(.white)
-                                .lineLimit(1)
-                            if let prog = program {
-                                Text(prog.title)
-                                    .font(.footnote.weight(.medium))
-                                    .foregroundStyle(.white.opacity(0.85))
-                                    .lineLimit(1)
-                                if let desc = prog.description, !desc.isEmpty {
-                                    Text(desc)
-                                        .font(.caption)
-                                        .foregroundStyle(.white.opacity(0.62))
-                                        .lineLimit(2)
-                                }
-                            } else {
-                                Text("Tap to resume watching")
-                                    .font(.footnote.weight(.medium))
-                                    .foregroundStyle(.white.opacity(0.85))
-                                    .lineLimit(1)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .padding(.bottom, 16)
-                    .padding(.horizontal, 16)
-                }
-                // ── Frame & clip ─────────────────────────────────────────
-                .frame(height: Self.cardHeight)
-                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .stroke(Color.white.opacity(0.18), lineWidth: 0.5)
+            if hasMatchup, let g = game {
+                MatchupHeroContent(
+                    game: g,
+                    footerIcon: "tv",
+                    footerText: channel.name,
+                    height: Self.cardHeight,
+                    cornerRadius: 24
                 )
-                // Rasterise the whole card once: the 55-pt logo blur and the
-                // two glow blurs otherwise re-composite on the GPU every
-                // scroll frame, which showed up as home-screen jitter.
-                .drawingGroup()
-                .shadow(color: .black.opacity(0.32), radius: 18, x: 0, y: 8)
+            } else {
+                standardCard
+            }
         }
         .buttonStyle(PressableCardStyle())
         .task(id: channel.icon) {
-            guard glowOverride == nil else { return }
+            guard glowOverride == nil, !hasMatchup else { return }
             guard let icon = channel.icon, !icon.isEmpty else { glowColor = nil; return }
             if let cached = LogoGlowCache.colors[icon] { glowColor = cached; return }
-            // The logo may still be downloading (CachedAsyncImage above owns
-            // the fetch) — poll the shared cache briefly rather than kicking
-            // off a duplicate download.
             for _ in 0..<12 {
                 if let ui = ImageCache.shared.get(forKey: icon, size: CGSize(width: 160, height: 160)) {
                     if let extracted = ui.glowColor() {
@@ -2321,6 +2269,298 @@ struct FeaturedHeroCard: View {
                 try? await Task.sleep(nanoseconds: 250_000_000)
             }
         }
+    }
+
+    private var standardCard: some View {
+        Rectangle()
+            .fill(Color.clear)
+            .overlay {
+                LinearGradient(
+                    colors: [Color.white.opacity(0.12), Color.black.opacity(0.85)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
+            .overlay {
+                CachedAsyncImage(urlString: channel.icon ?? "",
+                                 size: CGSize(width: 160, height: 160))
+                    .blur(radius: 55)
+                    .opacity(0.48)
+                    .scaleEffect(1.8)
+                    .allowsHitTesting(false)
+            }
+            .overlay {
+                Circle()
+                    .fill((glowOverride ?? glowColor ?? Color(white: 0.75)).opacity(0.55))
+                    .frame(width: 200, height: 200)
+                    .blur(radius: 60)
+                    .offset(x: -60, y: 20)
+                    .allowsHitTesting(false)
+            }
+            .overlay {
+                Circle()
+                    .fill((glowOverride ?? glowColor ?? Color(white: 0.75)).opacity(0.30))
+                    .frame(width: 130, height: 130)
+                    .blur(radius: 40)
+                    .offset(x: 40, y: 10)
+                    .allowsHitTesting(false)
+            }
+            .overlay {
+                LinearGradient(
+                    colors: [Color.black.opacity(0.05),
+                             Color.black.opacity(0.65)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
+            .overlay(alignment: .top) {
+                HStack {
+                    HStack(spacing: 5) {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 8, weight: .black))
+                        Text("FEATURED")
+                            .font(.caption2.weight(.black))
+                            .kerning(1.4)
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .background(Color.black.opacity(0.85), in: Capsule())
+
+                    Spacer()
+
+                    HStack(spacing: 6) {
+                        Image(systemName: "play.fill")
+                            .font(.caption.weight(.bold))
+                        Text("Resume")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(.white, in: Capsule())
+                }
+                .padding(.top, 16)
+                .padding(.horizontal, 16)
+            }
+            .overlay(alignment: .bottomLeading) {
+                defaultBottomRow
+            }
+            .frame(height: Self.cardHeight)
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(Color.white.opacity(0.18), lineWidth: 0.5)
+            )
+            .drawingGroup()
+            .shadow(color: .black.opacity(0.32), radius: 18, x: 0, y: 8)
+    }
+
+    private var defaultBottomRow: some View {
+        HStack(alignment: .bottom, spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                CachedAsyncImage(urlString: channel.icon ?? "", size: nil)
+                    .padding(12)
+            }
+            .frame(width: 76, height: 76)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.white.opacity(0.22), lineWidth: 0.5)
+            )
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(channel.name)
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                if let prog = program {
+                    Text(prog.title)
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .lineLimit(1)
+                    if let desc = prog.description, !desc.isEmpty {
+                        Text(desc)
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.62))
+                            .lineLimit(2)
+                    }
+                } else {
+                    Text("Tap to resume watching")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.bottom, 16)
+        .padding(.horizontal, 16)
+    }
+}
+
+/// Matchup card content — team colors bleed in from each side over a dark
+/// centre, big partly-translucent crests in the background with the score,
+/// names, LIVE pill and watch pill reading over them. Shared by the home
+/// featured carousel and the Sports hub featured card so the two read as
+/// one design.
+struct MatchupHeroContent: View {
+    let game: ESPNEvent
+    var footerIcon: String? = nil
+    var footerText: String? = nil
+    let height: CGFloat
+    let cornerRadius: CGFloat
+
+    private func teamColor(_ c: ESPNCompetitor?) -> Color {
+        guard let hex = c?.team?.color, !hex.isEmpty else { return Color(white: 0.22) }
+        return Color(hex: hex.hasPrefix("#") ? hex : "#\(hex)") ?? Color(white: 0.22)
+    }
+
+    var body: some View {
+        let away = game.awayCompetitor
+        let home = game.homeCompetitor
+        let isLive = game.status.type.state == "in"
+        let showScores = game.status.type.state != "pre"
+
+        Rectangle()
+            .fill(Color(white: 0.07))
+            .overlay {
+                LinearGradient(
+                    stops: [
+                        .init(color: teamColor(away).opacity(0.90), location: 0.0),
+                        .init(color: teamColor(away).opacity(0.35), location: 0.32),
+                        .init(color: Color.clear, location: 0.5),
+                        .init(color: teamColor(home).opacity(0.35), location: 0.68),
+                        .init(color: teamColor(home).opacity(0.90), location: 1.0)
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            }
+            .overlay { Color.black.opacity(0.18) }
+            .overlay {
+                // Big, partly-translucent crests living in the BACKGROUND —
+                // they bleed slightly off each edge and everything else
+                // (score, names, pills) reads over them.
+                HStack {
+                    CachedAsyncImage(urlString: away?.team?.logo ?? "",
+                                     size: CGSize(width: 150, height: 150))
+                        .opacity(0.55)
+                        .offset(x: -18)
+                    Spacer()
+                    CachedAsyncImage(urlString: home?.team?.logo ?? "",
+                                     size: CGSize(width: 150, height: 150))
+                        .opacity(0.55)
+                        .offset(x: 18)
+                }
+                .padding(.horizontal, 6)
+                .allowsHitTesting(false)
+            }
+            .overlay {
+                // Names on the sides, the score as its own big centred
+                // cluster — all floating over the translucent crests, with
+                // soft shadows so they stay legible on any logo.
+                HStack(spacing: 0) {
+                    teamName(away)
+                        .frame(maxWidth: .infinity)
+                    Group {
+                        if showScores {
+                            HStack(spacing: 10) {
+                                Text(away?.score ?? "0")
+                                Text("–")
+                                    .foregroundStyle(.white.opacity(0.4))
+                                Text(home?.score ?? "0")
+                            }
+                            .font(.system(size: 34, weight: .black).monospacedDigit())
+                            .foregroundStyle(.white)
+                        } else {
+                            Text("vs")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.5))
+                        }
+                    }
+                    .frame(minWidth: 84)
+                    .shadow(color: .black.opacity(0.45), radius: 4, x: 0, y: 1)
+                    teamName(home)
+                        .frame(maxWidth: .infinity)
+                }
+                .padding(.horizontal, 18)
+                .padding(.top, 14)
+            }
+            .overlay(alignment: .top) {
+                HStack {
+                    HStack(spacing: 6) {
+                        if isLive {
+                            HStack(spacing: 4) {
+                                Circle().fill(.white).frame(width: 6, height: 6)
+                                Text("LIVE")
+                                    .font(.system(size: 10, weight: .black))
+                                    .kerning(0.6)
+                            }
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.red.opacity(0.9), in: Capsule())
+                        }
+                        Text(game.status.type.detail.uppercased())
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.75))
+                            .lineLimit(1)
+                    }
+
+                    Spacer()
+
+                    HStack(spacing: 6) {
+                        Image(systemName: "play.fill")
+                            .font(.caption.weight(.bold))
+                        Text("Watch")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(.white, in: Capsule())
+                }
+                .padding(.top, 14)
+                .padding(.horizontal, 14)
+            }
+            .overlay(alignment: .bottom) {
+                if let text = footerText, !text.isEmpty {
+                    HStack(spacing: 6) {
+                        if let icon = footerIcon {
+                            Image(systemName: icon)
+                                .font(.system(size: 10, weight: .semibold))
+                        }
+                        Text(text)
+                            .font(.system(size: 12, weight: .semibold))
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(.white.opacity(0.9))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.black.opacity(0.35), in: Capsule())
+                    .padding(.bottom, 12)
+                    .padding(.horizontal, 14)
+                }
+            }
+            .frame(height: height)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.white.opacity(0.18), lineWidth: 0.5)
+            )
+            .shadow(color: .black.opacity(0.32), radius: 18, x: 0, y: 8)
+    }
+
+    private func teamName(_ c: ESPNCompetitor?) -> some View {
+        Text(c?.team?.shortDisplayName ?? c?.team?.abbreviation ?? "—")
+            .font(.system(size: 14, weight: .bold))
+            .foregroundStyle(.white)
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+            .shadow(color: .black.opacity(0.55), radius: 3, x: 0, y: 1)
     }
 }
 
@@ -2443,12 +2683,12 @@ struct HomeFilterChips: View {
             HStack(spacing: 10) {
                 chip(title: "For You",
                      isSelected: selected == nil,
-                     onTap: { withAnimation(.easeOut(duration: 0.2)) { selected = nil } })
+                     onTap: { withAnimation(.easeOut(duration: 0.25)) { selected = nil } })
                 ForEach(groups, id: \.self) { group in
                     chip(title: group.rawValue,
                          isSelected: selected == group,
                          onTap: {
-                             withAnimation(.easeOut(duration: 0.2)) {
+                             withAnimation(.easeOut(duration: 0.25)) {
                                  selected = (selected == group) ? nil : group
                              }
                          })
@@ -2528,17 +2768,75 @@ struct TouchPassingHorizontalScroll<Content: View>: UIViewRepresentable {
         ])
 
         context.coordinator.host = host
+        scrollView.delegate = context.coordinator
         return scrollView
     }
 
     func updateUIView(_ scrollView: UIScrollView, context: Context) {
         context.coordinator.host?.rootView = content()
+        context.coordinator.scrollView = scrollView
+        // Content can shrink on a data refresh (fewer live games, shorter
+        // shelf) while the old contentOffset survives — the shelf then shows
+        // a stray blank gap before the first card. Clamp after the new
+        // content has been laid out.
+        DispatchQueue.main.async {
+            Coordinator.clampOffset(scrollView)
+        }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    final class Coordinator {
+    final class Coordinator: NSObject, UIScrollViewDelegate {
         var host: UIHostingController<Content>?
+        weak var scrollView: UIScrollView?
+
+        override init() {
+            super.init()
+            // Returning from the background can leave the hosted SwiftUI
+            // content re-laid-out while the scroll view keeps a stale
+            // offset/content size — the shelf comes back with a huge blank
+            // gap or the first card shoved half off-screen with no way to
+            // drag it back. Force a fresh layout and re-clamp on every
+            // foreground activation.
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(appDidBecomeActive),
+                name: UIApplication.didBecomeActiveNotification,
+                object: nil
+            )
+        }
+
+        @objc private func appDidBecomeActive() {
+            guard let scrollView else { return }
+            host?.view.invalidateIntrinsicContentSize()
+            host?.view.setNeedsLayout()
+            scrollView.setNeedsLayout()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                scrollView.layoutIfNeeded()
+                Self.clampOffset(scrollView)
+            }
+        }
+
+        /// Clamps the offset into the valid range in BOTH directions —
+        /// a stale offset can survive as too-far-right (content shrank) or
+        /// negative (restored mid-bounce), and either strands the shelf.
+        static func clampOffset(_ scrollView: UIScrollView) {
+            guard !scrollView.isDragging, !scrollView.isDecelerating else { return }
+            let maxX = max(0, scrollView.contentSize.width - scrollView.bounds.width)
+            let x = min(max(0, scrollView.contentOffset.x), maxX)
+            if x != scrollView.contentOffset.x {
+                scrollView.setContentOffset(CGPoint(x: x, y: 0), animated: false)
+            }
+        }
+
+        // While the user is actively dragging this shelf, mark the global
+        // horizontal-scroll signal so page-level chip-swipe gestures ignore
+        // the same drag.
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            if scrollView.isDragging || scrollView.isDecelerating {
+                HorizontalScrollActivity.touch()
+            }
+        }
     }
 }
 
@@ -2692,50 +2990,42 @@ struct LiveGameCard: View {
 /// left UIScrollView gesture recognisers in a stuck state after a swipe,
 /// permanently blocking taps on sibling views. TabView avoids this entirely.
 struct FeaturedCarousel: View {
-    let channels: [StreamChannel]
+    let items: [FeaturedItem]
     @ObservedObject var viewModel: ChannelViewModel
     let accentColor: Color
     let playAction: (StreamChannel) -> Void
 
-    /// Tracks the visible page index for the pill dots and TabView selection.
     @State private var currentIndex: Int = 0
 
     var body: some View {
         VStack(spacing: 10) {
             TabView(selection: $currentIndex) {
-                ForEach(0 ..< channels.count, id: \.self) { i in
-                    let channel = channels[i]
-                    // Sports channels glow in the accent colour (matching the
-                    // Sports hub's featured card); everything else glows in
-                    // the dominant colour of its own logo.
-                    let isSports = viewModel.categories.first(where: { $0.id == channel.categoryID })
-                        .map { HomeCategoryGroup.classify($0) == .sports } ?? false
+                ForEach(0 ..< items.count, id: \.self) { i in
+                    let item = items[i]
+                    let isSports = item.game != nil || (viewModel.categories.first(where: { $0.id == item.channel.categoryID })
+                        .map { HomeCategoryGroup.classify($0) == .sports } ?? false)
                     FeaturedHeroCard(
-                        channel: channel,
-                        program: viewModel.getCurrentProgram(for: channel),
+                        channel: item.channel,
+                        program: viewModel.getCurrentProgram(for: item.channel),
                         accentColor: accentColor,
                         onPlay: {
                             viewModel.triggerSelectionHaptic()
-                            playAction(channel)
+                            playAction(item.channel)
                         },
-                        glowOverride: isSports ? accentColor : nil
+                        glowOverride: isSports ? accentColor : nil,
+                        game: item.game
                     )
-                    // Horizontal padding gives the card breathing room and
-                    // lets the nebula gradient peek at the edges — same visual
-                    // weight as the previous scroll-based design.
                     .padding(.horizontal, 16)
                     .tag(i)
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
-            // TabView's own background must be clear so the nebula shows through.
             .background(Color.clear)
             .frame(height: 200)
 
-            // Pill-style page dots — only when there is more than one card.
-            if channels.count > 1 {
+            if items.count > 1 {
                 HStack(spacing: 5) {
-                    ForEach(channels.indices, id: \.self) { i in
+                    ForEach(items.indices, id: \.self) { i in
                         Capsule()
                             .fill(i == currentIndex
                                   ? Color.primary.opacity(0.75)
@@ -2780,10 +3070,13 @@ enum HomeCategoryGroup: String, CaseIterable, Hashable {
 
     /// Strip common country-code prefixes ("US:", "USA |", "UK -", etc.) so
     /// that "US: Animal Planet" still classifies as Documentary.
+    /// Compiled once — building an NSRegularExpression on every call made
+    /// classification measurably slow on hot paths.
+    nonisolated private static let prefixRegex = try? NSRegularExpression(pattern: #"^([a-z]{2,4})\s*[:|\-–—]\s*"#)
+
     nonisolated private static func cleanedName(_ raw: String) -> String {
         let lowered = raw.lowercased()
-        let pattern = #"^([a-z]{2,4})\s*[:|\-–—]\s*"#
-        if let regex = try? NSRegularExpression(pattern: pattern) {
+        if let regex = prefixRegex {
             let range = NSRange(lowered.startIndex..., in: lowered)
             return regex.stringByReplacingMatches(in: lowered, options: [], range: range, withTemplate: "")
         }

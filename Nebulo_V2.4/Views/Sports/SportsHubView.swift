@@ -55,8 +55,33 @@ struct SportsHubView: View {
     /// — rapid swipes must wait ~0.3s for the previous slide to settle.
     @State private var isSliding = false
 
+    /// One tab switch per drag: set the moment the swipe fires (mid-drag,
+    /// in `.onChanged`), cleared when the finger lifts.
+    @State private var swipeConsumed = false
+
+    /// Global frame of the pinned chip row. Drags starting inside it scroll
+    /// the chips instead of flipping the page.
+    @State private var chipBarFrame: CGRect = .zero
+
+    /// Offset-based scroll control for the hub's single scroll view.
+    /// `scrollTo(id:)` was a silent no-op whenever the target row wasn't
+    /// materialised by the LazyVStack (always the case when scrolled deep),
+    /// so tab switches never actually reset — ScrollPosition works on raw
+    /// offsets and is independent of lazy materialisation.
+    @State private var hubScrollPos = ScrollPosition()
+
+    /// Measured height of the stats-header block (title + counts + padding).
+    /// Scrolling to exactly this offset lands on the "compact" state where
+    /// the chip bar pins. Class box: layout writes must not re-render.
+    final class HubMetrics { var headerHeight: CGFloat = 96 }
+    @State private var hubMetrics = HubMetrics()
+
     /// Central tab switch: derives the slide direction from chip order and
     /// swaps with a flat easeOut — deliberately no spring, no bounce.
+    /// The page snaps INSTANTLY (no animation) to the new tab's top before
+    /// the slide begins. If the header was already collapsed (user was
+    /// scrolled down), it lands on the compact anchor instead so the chip
+    /// bar stays pinned rather than the big title reappearing.
     private func selectTab(_ newTab: SportsTab) {
         guard newTab != sportsTab, !isSliding else { return }
         let tabs = orderedTabs
@@ -64,6 +89,15 @@ struct SportsHubView: View {
         let newIdx = tabs.firstIndex(of: newTab) ?? 0
         slideFromTrailing = newIdx > oldIdx
         isSliding = true
+        // Deep-scrolled → land on the compact offset (chips pinned, no big
+        // title); near the top → true top. Raw offsets, so this works no
+        // matter which rows the lazy list has materialised.
+        let targetY: CGFloat = statsProgress.value >= 0.99 ? hubMetrics.headerHeight : 0
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            hubScrollPos.scrollTo(y: targetY)
+        }
         withAnimation(.easeOut(duration: 0.25)) { sportsTab = newTab }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             isSliding = false
@@ -71,12 +105,13 @@ struct SportsHubView: View {
     }
 
     /// Steps to the previous/next chip. Driven by the horizontal swipe.
+    /// No haptic here — the buzz on every page swipe broke the immersion;
+    /// haptics stay on deliberate chip taps only.
     private func advanceSportsTab(_ delta: Int) {
         let tabs = orderedTabs
         guard let idx = tabs.firstIndex(of: sportsTab) else { return }
         let next = idx + delta
         guard tabs.indices.contains(next) else { return }
-        ChannelViewModel.shared.triggerSelectionHaptic()
         selectTab(tabs[next])
     }
 
@@ -94,6 +129,15 @@ struct SportsHubView: View {
                         .padding(.bottom, 10)
                         .scrollProgressOpacity(statsProgress) { 1 - Double($0) }
                         .background(ScrollOffsetProbe(space: "sportsScroll", id: "sports"))
+                        // Height of the header block == the compact scroll
+                        // offset used by selectTab's reset.
+                        .background(
+                            GeometryReader { g in
+                                Color.clear
+                                    .onAppear { hubMetrics.headerHeight = g.size.height }
+                                    .onChangeCompat(of: g.size.height) { hubMetrics.headerHeight = $0 }
+                            }
+                        )
 
                     Section(header: pinnedChipHeader) {
                         // ZStack so the outgoing and incoming lists overlap
@@ -117,20 +161,15 @@ struct SportsHubView: View {
                                 }
                             }
                             .id(sportsTab)
-                            // Opaque backdrop so a tab slide cleanly covers the
-                            // outgoing tab instead of the two sets of crests
-                            // ghosting through each other. It must be ALWAYS on
-                            // (not just while sliding): the outgoing tab is a
-                            // stale snapshot during removal and won't re-render
-                            // with a fresh flag, so gating on `isSliding` left
-                            // whichever tab renders on top able to show through.
-                            // The fill matches the dark backdrop so the games
-                            // look unchanged at rest. Paired with a pure `.move`
-                            // (no opacity) — a fade would re-introduce see-through.
-                            .background(Color(red: 0.05, green: 0.055, blue: 0.08))
+                            // Same slide as the Favorites section: move +
+                            // opacity, NO opaque backdrop. The backdrop's dark
+                            // fill clashed with the header gradient and the
+                            // nebula behind the games; the fade keeps the
+                            // brief overlap of outgoing/incoming lists subtle
+                            // instead.
                             .transition(.asymmetric(
-                                insertion: .move(edge: slideFromTrailing ? .trailing : .leading),
-                                removal: .move(edge: slideFromTrailing ? .leading : .trailing)
+                                insertion: .move(edge: slideFromTrailing ? .trailing : .leading).combined(with: .opacity),
+                                removal: .move(edge: slideFromTrailing ? .leading : .trailing).combined(with: .opacity)
                             ))
                         }
                         .padding(.top, 10)
@@ -138,42 +177,56 @@ struct SportsHubView: View {
                 }
             }
             .coordinateSpace(name: "sportsScroll")
+            .scrollPosition($hubScrollPos)
             .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
                 guard let y = offsets["sports"] else { return }
                 statsProgress.set(min(max(-y / 40, 0), 1))
             }
             // Horizontal swipe anywhere on the list flips to the previous /
-            // next sport, replacing the paged TabView's swipe. Simultaneous
-            // so vertical scrolling is unaffected; only clearly-horizontal
-            // drags count, and swipes starting at the left edge stay
-            // reserved for back navigation.
+            // next sport. Fires DURING the drag the moment it clearly reads
+            // as a horizontal page swipe — waiting for finger-lift made every
+            // switch feel like it lagged a beat behind the gesture. Drags
+            // that start on the chip row scroll the chips instead, and
+            // left-edge swipes stay reserved for back navigation.
             .simultaneousGesture(
-                DragGesture(minimumDistance: 25)
+                DragGesture(minimumDistance: 10, coordinateSpace: .global)
                     .onChanged { value in
+                        let dx = value.translation.width
+                        let dy = value.translation.height
                         // As soon as the drag reads as horizontal, open the
                         // tap-suppression window so the game row under the
                         // finger doesn't ALSO fire on release.
-                        if abs(value.translation.width) > abs(value.translation.height) * 1.5 {
+                        if abs(dx) > abs(dy) * 1.4 {
                             SwipeTapGuard.suppress()
                         }
-                    }
-                    .onEnded { value in
-                        let dx = value.translation.width
-                        let dy = value.translation.height
-                        guard value.startLocation.x > 44,
-                              abs(dx) > 60, abs(dx) > abs(dy) * 1.5 else { return }
+                        // Low threshold + mid-drag firing so the page turns
+                        // with the finger, not after it. The chip row is the
+                        // only horizontal scroller here and it's excluded by
+                        // frame — no shared-signal check (the chip row's own
+                        // programmatic centering scroll was tripping it and
+                        // blocking follow-up swipes).
+                        guard !swipeConsumed,
+                              value.startLocation.x > 44,
+                              !chipBarFrame.contains(value.startLocation),
+                              abs(dx) > 20, abs(dx) > abs(dy) * 1.4 else { return }
+                        swipeConsumed = true
                         advanceSportsTab(dx < 0 ? 1 : -1)
                     }
+                    .onEnded { _ in swipeConsumed = false }
             )
             // Sync selectedSport when the chip selection changes so the
             // existing fetch/pre-resolution observers fire correctly.
+            // Deferred past the slide: the observers kick off score fetches,
+            // channel pre-resolution and crest prefetches — running those in
+            // the same frames as the slide animation is what made the chip
+            // switch look choppy.
             .onChangeCompat(of: sportsTab) { tab in
-                if case .sport(let s) = tab {
+                guard case .sport(let s) = tab else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    guard sportsTab == tab else { return }
                     if s != scoreViewModel.selectedSport {
                         scoreViewModel.selectedSport = s
                     }
-                    // Warm this sport's crests at high priority so the tab's
-                    // logos are present as fast as possible on a cold cache.
                     scoreViewModel.prefetchLogos(for: s)
                 }
             }
@@ -270,8 +323,9 @@ struct SportsHubView: View {
                 set: { newSport in
                     // selectTab derives the slide direction from chip order
                     // so tapping a chip slides the same way a swipe does.
+                    // selectedSport syncs via the deferred sportsTab observer
+                    // so the fetch/pre-resolution work never lands mid-slide.
                     selectTab(.sport(newSport))
-                    scoreViewModel.selectedSport = newSport
                 }
             ),
             pinnedCount: scoreViewModel.allPinnedGames.count,
@@ -285,6 +339,7 @@ struct SportsHubView: View {
             Task { await scoreViewModel.fetchScores() }
         }
         .padding(.vertical, 4)
+        .captureGlobalFrame { chipBarFrame = $0 }
         // Home-style dark gradient. As part of the pinned header it renders
         // ABOVE the scrolling games (dimming them as they pass under) but
         // BEHIND the chips themselves, which stay at full contrast. The tall
@@ -408,11 +463,20 @@ struct SportGamesListView: View {
     
     // Content only — no ScrollView. SportsHubView provides the single
     // scroll so the title, pinned chips and games all share one page.
+    //
+    // Hybrid laziness: the first screenful of rows renders EAGERLY so the
+    // tab slides in fully formed (an all-lazy list materialised visible
+    // cards in batches mid-slide — the staggered pop-in), while everything
+    // below the fold stays LAZY (an all-eager list built 100+ rows the
+    // moment a swipe fired — the pre-switch stutter).
+    private static let eagerRowBudget = 6
+
     var body: some View {
-            LazyVStack(spacing: 12) {
+            VStack(spacing: 12) {
                 if sport == .pinned {
                     if scoreViewModel.allPinnedGames.isEmpty {
-                        EmptyStateView(title: "No Pinned Games", systemImage: "pin.slash", description: "Pin games to see them here.").frame(height: 300)
+                        EmptyStateView(title: "No Pinned Games", systemImage: "pin.slash", description: "Pin games to see them here.")
+                            .frame(maxWidth: .infinity, minHeight: 300)
                     } else {
                         ForEach(scoreViewModel.allPinnedGames) { game in
                             scoreButton(game: game, sport: .nfl)
@@ -420,10 +484,10 @@ struct SportGamesListView: View {
                     }
                 } else if isSoccerCategory(sport) {
                     if let sections = scoreViewModel.filteredSectionsMap[sport], !sections.isEmpty {
-                        
+
                         let allSoccerGames = sections.flatMap { $0.games }
                         let pinnedSoccer = allSoccerGames.filter { scoreViewModel.pinnedGameIDs.contains($0.id) }
-                        
+
                         if !pinnedSoccer.isEmpty {
                             Section(header: subCategoryHeader("Pinned")) {
                                 ForEach(pinnedSoccer) { game in
@@ -431,14 +495,15 @@ struct SportGamesListView: View {
                                 }
                             }
                         }
-                        
-                        ForEach(sections, id: \.league) { s in
-                            let remainingGames = s.games.filter { !scoreViewModel.pinnedGameIDs.contains($0.id) }
-                            if !remainingGames.isEmpty {
-                                Section(header: leagueHeader(s.league)) {
-                                    ForEach(remainingGames) { game in
-                                        scoreButton(game: game, sport: .soccerLeagues) 
-                                    }
+
+                        let split = splitSections(sections)
+                        ForEach(split.eager, id: \.league) { s in
+                            soccerSection(s)
+                        }
+                        if !split.lazy.isEmpty {
+                            LazyVStack(spacing: 12) {
+                                ForEach(split.lazy, id: \.league) { s in
+                                    soccerSection(s)
                                 }
                             }
                         }
@@ -452,7 +517,7 @@ struct SportGamesListView: View {
                     } else {
                         let pinned = filtered.filter { scoreViewModel.pinnedGameIDs.contains($0.id) }
                         let unpinned = filtered.filter { !scoreViewModel.pinnedGameIDs.contains($0.id) }
-                        
+
                         if !pinned.isEmpty {
                             Section(header: subCategoryHeader("Pinned")) {
                                 ForEach(pinned) { game in
@@ -460,11 +525,18 @@ struct SportGamesListView: View {
                                 }
                             }
                         }
-                        
+
                         if !unpinned.isEmpty {
                             Section(header: pinned.isEmpty ? AnyView(EmptyView()) : AnyView(subCategoryHeader("Games"))) {
-                                ForEach(unpinned) { game in
+                                ForEach(Array(unpinned.prefix(Self.eagerRowBudget))) { game in
                                     scoreButton(game: game, sport: sport)
+                                }
+                            }
+                            if unpinned.count > Self.eagerRowBudget {
+                                LazyVStack(spacing: 12) {
+                                    ForEach(Array(unpinned.dropFirst(Self.eagerRowBudget))) { game in
+                                        scoreButton(game: game, sport: sport)
+                                    }
                                 }
                             }
                         }
@@ -473,6 +545,35 @@ struct SportGamesListView: View {
             }
             .padding(.horizontal)
             .padding(.bottom, 120)
+    }
+
+    /// Splits the league sections at the eager-row budget: sections up to
+    /// the first screenful render eagerly, the rest lazily.
+    private func splitSections(_ sections: [SoccerGameSection]) -> (eager: [SoccerGameSection], lazy: [SoccerGameSection]) {
+        var eager: [SoccerGameSection] = []
+        var lazy: [SoccerGameSection] = []
+        var count = 0
+        for s in sections {
+            if count < Self.eagerRowBudget {
+                eager.append(s)
+                count += s.games.count
+            } else {
+                lazy.append(s)
+            }
+        }
+        return (eager, lazy)
+    }
+
+    @ViewBuilder
+    private func soccerSection(_ s: SoccerGameSection) -> some View {
+        let remainingGames = s.games.filter { !scoreViewModel.pinnedGameIDs.contains($0.id) }
+        if !remainingGames.isEmpty {
+            Section(header: leagueHeader(s.league)) {
+                ForEach(remainingGames) { game in
+                    scoreButton(game: game, sport: .soccerLeagues)
+                }
+            }
+        }
     }
 
     private func subCategoryHeader(_ title: String) -> some View {
@@ -490,10 +591,13 @@ struct SportGamesListView: View {
     @ViewBuilder
     private var emptyState: some View {
         if scoreViewModel.isLoading {
-            CustomSpinner(color: .white, lineWidth: 4, size: 40).padding(.top, 100)
+            CustomSpinner(color: .white, lineWidth: 4, size: 40)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 100)
         }
         else {
-            EmptyStateView(title: "No Match Data", systemImage: "calendar.badge.exclamationmark", description: "No matches found for \(sport.rawValue).").frame(height: 300)
+            EmptyStateView(title: "No Match Data", systemImage: "calendar.badge.exclamationmark", description: "No matches found for \(sport.rawValue).")
+                .frame(maxWidth: .infinity, minHeight: 300)
         }
     }
     
@@ -771,86 +875,106 @@ struct AllLiveSportsView: View {
         let subtitle = featuredSubtitle(for: game, sport: sport)
         let description = featuredDescription(for: game)
 
+        let hasLogos = game.homeCompetitor?.team?.logo != nil && game.awayCompetitor?.team?.logo != nil
+        let footer = game.broadcastName.flatMap { $0.isEmpty ? nil : "\(subtitle) · on \($0)" } ?? subtitle
+
         Button(action: {
             guard SwipeTapGuard.tapsAllowed else { return }
             ChannelViewModel.shared.triggerSelectionHaptic()
             playGame(game, sport: sport)
         }) {
-            ZStack(alignment: .bottomLeading) {
-                // Glow gradient — accent at top-left fading to black bottom-right.
-                LinearGradient(
-                    colors: [accentColor.opacity(0.55), Color.black.opacity(0.85)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
+            if hasLogos {
+                MatchupHeroContent(
+                    game: game,
+                    footerIcon: "tv",
+                    footerText: footer,
+                    height: 220,
+                    cornerRadius: 22
                 )
+            } else {
+                ZStack(alignment: .bottomLeading) {
+                    LinearGradient(
+                        colors: [accentColor.opacity(0.55), Color.black.opacity(0.85)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
 
-                Circle()
-                    .fill(accentColor.opacity(0.45))
-                    .frame(width: 220, height: 220)
-                    .blur(radius: 70)
-                    .offset(x: -40, y: -40)
-                    .allowsHitTesting(false)
+                    Circle()
+                        .fill(accentColor.opacity(0.45))
+                        .frame(width: 220, height: 220)
+                        .blur(radius: 70)
+                        .offset(x: -40, y: -40)
+                        .allowsHitTesting(false)
 
-                LinearGradient(
-                    colors: [Color.black.opacity(0.05), Color.black.opacity(0.6)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
+                    LinearGradient(
+                        colors: [Color.black.opacity(0.05), Color.black.opacity(0.6)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
 
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 5) {
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 8, weight: .black))
-                        Text("FEATURED")
-                            .font(.caption2.weight(.black))
-                            .kerning(1.4)
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 4)
-                    .background(Color.black.opacity(0.45), in: Capsule())
-                    .overlay(Capsule().stroke(Color.white.opacity(0.2), lineWidth: 0.5))
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 5) {
+                            if game.status.type.state == "in" {
+                                Circle().fill(.red).frame(width: 7, height: 7)
+                                Text("LIVE")
+                                    .font(.caption2.weight(.black))
+                                    .kerning(1.4)
+                            } else {
+                                Image(systemName: "play.fill")
+                                    .font(.system(size: 8, weight: .black))
+                                Text("FEATURED")
+                                    .font(.caption2.weight(.black))
+                                    .kerning(1.4)
+                            }
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .background(Color.black.opacity(0.45), in: Capsule())
+                        .overlay(Capsule().stroke(Color.white.opacity(0.2), lineWidth: 0.5))
 
-                    Spacer(minLength: 0)
+                        Spacer(minLength: 0)
 
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(title)
-                            .font(.title2.weight(.bold))
-                            .foregroundStyle(.white)
-                            .lineLimit(2)
-                        Text(subtitle)
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(.white.opacity(0.85))
-                            .lineLimit(1)
-                        if !description.isEmpty {
-                            Text(description)
-                                .font(.footnote)
-                                .foregroundStyle(.white.opacity(0.7))
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(title)
+                                .font(.title2.weight(.bold))
+                                .foregroundStyle(.white)
                                 .lineLimit(2)
-                        }
+                            Text(subtitle)
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(.white.opacity(0.85))
+                                .lineLimit(1)
+                            if !description.isEmpty {
+                                Text(description)
+                                    .font(.footnote)
+                                    .foregroundStyle(.white.opacity(0.7))
+                                    .lineLimit(2)
+                            }
 
-                        HStack(spacing: 6) {
-                            Image(systemName: "play.fill")
-                                .font(.footnote.weight(.bold))
-                            Text("Watch")
-                                .font(.subheadline.weight(.semibold))
+                            HStack(spacing: 6) {
+                                Image(systemName: "play.fill")
+                                    .font(.footnote.weight(.bold))
+                                Text("Watch")
+                                    .font(.subheadline.weight(.semibold))
+                            }
+                            .foregroundStyle(.black)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 9)
+                            .background(.white, in: Capsule())
+                            .padding(.top, 6)
                         }
-                        .foregroundStyle(.black)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 9)
-                        .background(.white, in: Capsule())
-                        .padding(.top, 6)
                     }
+                    .padding(20)
                 }
-                .padding(20)
+                .frame(height: 240)
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(Color.white.opacity(0.18), lineWidth: 0.5)
+                )
+                .drawingGroup()
+                .shadow(color: .black.opacity(0.30), radius: 16, x: 0, y: 8)
             }
-            .frame(height: 240)
-            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .stroke(Color.white.opacity(0.18), lineWidth: 0.5)
-            )
-            .shadow(color: .black.opacity(0.30), radius: 16, x: 0, y: 8)
         }
         .buttonStyle(.plain)
     }
@@ -1070,9 +1194,23 @@ struct SportSelectorView: View {
                 .padding(.horizontal)
                 .padding(.vertical, 10)
             }
-            .onAppear { proxy.scrollTo(selectedSport, anchor: .center) }
+            .onAppear { proxy.scrollTo(selectedSport, anchor: nil) }
+            // anchor nil = scroll the MINIMUM needed to bring the chip fully
+            // into view, and not at all if it's already visible — centring
+            // on every swipe dragged the whole row around unnecessarily.
+            // Spring, not easeOut: consecutive swipes retarget a spring
+            // mid-flight so the row glides to the new chip, where the old
+            // quick easeOut restarted from zero and read as a jittery snap.
             .onChangeCompat(of: selectedSport) { ns in
-                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(ns, anchor: .center) }
+                withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) {
+                    proxy.scrollTo(ns, anchor: nil)
+                }
+            }
+            .onChangeCompat(of: allMode?.wrappedValue ?? false) { isAll in
+                guard isAll else { return }
+                withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) {
+                    proxy.scrollTo("__all__", anchor: nil)
+                }
             }
         }
     }

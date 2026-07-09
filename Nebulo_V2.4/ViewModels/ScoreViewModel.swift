@@ -301,7 +301,15 @@ class ScoreViewModel: ObservableObject {
             }
         }
         if sport.isSoccer {
-            for section in masterSectionsMap[sport] ?? [] { for game in section.games { collect(game) } }
+            for section in masterSectionsMap[sport] ?? [] {
+                // League section headers draw their own crest — warm those
+                // too or they pop in after the team logos.
+                if let leagueLogo = LeagueLogoURL.url(sport: sport, leagueLabel: section.league),
+                   !leagueLogo.isEmpty {
+                    urls.insert(leagueLogo)
+                }
+                for game in section.games { collect(game) }
+            }
         } else {
             for game in masterGames[sport] ?? [] { collect(game) }
         }
@@ -374,6 +382,13 @@ class ScoreViewModel: ObservableObject {
                     self.preloadImages()
                     self.migrateLegacyTeamKeys()
                     self.isLoading = false
+                    // Warm the crest-heavy tabs at high priority the moment
+                    // scores land (app launch fetches these for the home
+                    // shelf) — by the time the user opens the Sports hub and
+                    // swipes to a soccer tab the logos are already cached
+                    // instead of streaming in mid-transition.
+                    self.prefetchLogos(for: self.selectedSport)
+                    self.prefetchLogos(for: .soccerLeagues)
                 }
             }
         }

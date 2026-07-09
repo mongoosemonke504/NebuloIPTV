@@ -89,7 +89,12 @@ class EPGService: NSObject, XMLParserDelegate {
                                 UserDefaults.standard.set(Int(fileSize), forKey: sizeKey)
                             }
                             
-                            if let data = try? Data(contentsOf: fileURL) {
+                            if let rawData = try? Data(contentsOf: fileURL) {
+                                // External guides are usually served gzipped
+                                // (.xml.gz). XMLParser can't read gzip bytes,
+                                // so those sources silently contributed
+                                // nothing until this decompression step.
+                                let data = EPGService.gunzippedIfNeeded(rawData)
                                 let ticker = Task {
                                     let startTime = Date()
                                     while !Task.isCancelled {
@@ -157,29 +162,70 @@ class EPGService: NSObject, XMLParserDelegate {
     }
     
     
-    private func decompress(data: Data) -> Data? {
-        let bufferSize = 64_000_000
-        let destinationBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
-        
-        let decodedSize = data.withUnsafeBytes { sourcePtr in
-            return compression_decode_buffer(
-                destinationBuffer,
-                bufferSize,
-                sourcePtr.bindMemory(to: UInt8.self).baseAddress!,
-                data.count,
-                nil,
-                COMPRESSION_ZLIB
-            )
+    /// If `data` is a gzip file (magic 0x1f 0x8b), strips the gzip framing
+    /// and inflates the raw-deflate body; otherwise returns it untouched.
+    /// Apple's Compression framework only speaks raw DEFLATE, so the gzip
+    /// header (with its optional extra/name/comment fields) and the 8-byte
+    /// CRC trailer must be peeled off by hand.
+    nonisolated static func gunzippedIfNeeded(_ data: Data) -> Data {
+        guard data.count > 18, data[data.startIndex] == 0x1f, data[data.startIndex + 1] == 0x8b else {
+            return data
         }
-        
-        if decodedSize > 0 {
-            let res = Data(bytes: destinationBuffer, count: decodedSize)
-            destinationBuffer.deallocate()
-            return res
+        let bytes = [UInt8](data)
+        var idx = 10
+        let flags = bytes[3]
+        if flags & 0x04 != 0 {                       // FEXTRA
+            guard bytes.count > idx + 2 else { return data }
+            let xlen = Int(bytes[idx]) | (Int(bytes[idx + 1]) << 8)
+            idx += 2 + xlen
         }
-        
-        destinationBuffer.deallocate()
-        return nil
+        if flags & 0x08 != 0 {                       // FNAME (nul-terminated)
+            while idx < bytes.count, bytes[idx] != 0 { idx += 1 }
+            idx += 1
+        }
+        if flags & 0x10 != 0 {                       // FCOMMENT (nul-terminated)
+            while idx < bytes.count, bytes[idx] != 0 { idx += 1 }
+            idx += 1
+        }
+        if flags & 0x02 != 0 { idx += 2 }            // FHCRC
+        guard idx < bytes.count - 8 else { return data }
+        let deflated = Data(bytes[idx..<(bytes.count - 8)])
+        return inflateRawDeflate(deflated) ?? data
+    }
+
+    /// Streaming raw-DEFLATE inflate — guides decompress to 10× their wire
+    /// size or more, so a fixed one-shot buffer isn't safe.
+    nonisolated private static func inflateRawDeflate(_ data: Data) -> Data? {
+        let dstSize = 1 << 20
+        let dstBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: dstSize)
+        defer { dstBuffer.deallocate() }
+
+        let streamPtr = UnsafeMutablePointer<compression_stream>.allocate(capacity: 1)
+        defer { streamPtr.deallocate() }
+
+        var status = compression_stream_init(streamPtr, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB)
+        guard status != COMPRESSION_STATUS_ERROR else { return nil }
+        defer { compression_stream_destroy(streamPtr) }
+
+        var output = Data()
+        let ok: Bool = data.withUnsafeBytes { (srcPtr: UnsafeRawBufferPointer) -> Bool in
+            guard let base = srcPtr.bindMemory(to: UInt8.self).baseAddress else { return false }
+            streamPtr.pointee.src_ptr = base
+            streamPtr.pointee.src_size = data.count
+            repeat {
+                streamPtr.pointee.dst_ptr = dstBuffer
+                streamPtr.pointee.dst_size = dstSize
+                status = compression_stream_process(streamPtr, Int32(COMPRESSION_STREAM_FINALIZE.rawValue))
+                switch status {
+                case COMPRESSION_STATUS_OK, COMPRESSION_STATUS_END:
+                    output.append(dstBuffer, count: dstSize - streamPtr.pointee.dst_size)
+                default:
+                    return false
+                }
+            } while status == COMPRESSION_STATUS_OK
+            return true
+        }
+        return ok && !output.isEmpty ? output : nil
     }
     
     private func downloadFileWithProgress(url: URL, expectedSize: Int64?, onProgress: @escaping (Double) -> Void) async throws -> URL {

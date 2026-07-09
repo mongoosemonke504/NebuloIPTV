@@ -108,6 +108,11 @@ class ChannelViewModel: ObservableObject {
     private var currentLoadTask: Task<Void, Never>? 
     private var currentLoadID: UUID?
     
+    /// The guide is considered stale after this long (12 hours) — both the
+    /// in-app freshness checks and the background refresh scheduling key off
+    /// this single constant.
+    static let epgMaxAge: TimeInterval = 12 * 3600
+
     private var lastEPGUpdateTime: Date? {
         get {
             guard let interval = UserDefaults.standard.object(forKey: settingsPrefix + "lastEPGUpdate") as? TimeInterval else { return nil }
@@ -121,6 +126,10 @@ class ChannelViewModel: ObservableObject {
             }
         }
     }
+
+    /// Read-only view of the last successful EPG refresh, for the background
+    /// scheduler to compute the next earliest run.
+    var lastEPGUpdateDate: Date? { lastEPGUpdateTime }
     
     
     private var visualProgress: Double = 0        // internal only — not published
@@ -187,14 +196,14 @@ class ChannelViewModel: ObservableObject {
         }
 
         
-        if let lastUpdate = lastEPGUpdateTime, now.timeIntervalSince(lastUpdate) < 86400 {
-            print("✅ [ChannelViewModel] EPG is fresh (< 24h). Skipping update.")
-            
+        if let lastUpdate = lastEPGUpdateTime, now.timeIntervalSince(lastUpdate) < Self.epgMaxAge {
+            print("✅ [ChannelViewModel] EPG is fresh (< 12h). Skipping update.")
+
             await loadActiveAccounts(silent: true, performEpgCheck: false)
             return
         }
-        
-        print("🔄 [ChannelViewModel] EPG is stale (> 24h). triggering update...")
+
+        print("🔄 [ChannelViewModel] EPG is stale (> 12h). triggering update...")
         await loadActiveAccounts(silent: false, performEpgCheck: true)
     }
 
@@ -206,8 +215,8 @@ class ChannelViewModel: ObservableObject {
         var shouldUpdateEPG = performEpgCheck
         let now = Date()
         if performEpgCheck && !force {
-            if let last = lastEPGUpdateTime, now.timeIntervalSince(last) < 86400 {
-                print("✅ [ChannelViewModel] EPG is fresh (< 24h). Suppressing EPG update.")
+            if let last = lastEPGUpdateTime, now.timeIntervalSince(last) < Self.epgMaxAge {
+                print("✅ [ChannelViewModel] EPG is fresh (< 12h). Suppressing EPG update.")
                 shouldUpdateEPG = false
             }
         }
@@ -757,10 +766,10 @@ class ChannelViewModel: ObservableObject {
         searchTask = Task.detached(priority: .userInitiated) { [weak self, searchQuery, resultCap] in
             guard let self = self else { return }
 
-            // Debounce — 300ms is the sweet spot for typing-driven search:
-            // long enough that a fast typist hits a few keys before any work
-            // happens, short enough that the result panel feels live.
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            // Light debounce only — SearchView already debounces keystrokes
+            // for 250 ms before handing the query over, so this just absorbs
+            // programmatic double-sets.
+            try? await Task.sleep(nanoseconds: 80_000_000)
             guard !Task.isCancelled else { return }
 
             let allChannels   = await self.channels
@@ -1700,7 +1709,7 @@ class ChannelViewModel: ObservableObject {
 
     func updateEPG(baseURL: URL, user: String, pass: String, force: Bool = false, silent: Bool = false) async {
         let now = Date()
-        let isStale = lastEPGUpdateTime == nil || now.timeIntervalSince(lastEPGUpdateTime!) >= 86400 
+        let isStale = lastEPGUpdateTime == nil || now.timeIntervalSince(lastEPGUpdateTime!) >= Self.epgMaxAge
         
         
         if !force && !isStale {
@@ -1731,7 +1740,7 @@ class ChannelViewModel: ObservableObject {
     
     func updateEPGFromURLs(_ urls: [URL], force: Bool = false, silent: Bool = false) async {
         let now = Date()
-        let isStale = lastEPGUpdateTime == nil || now.timeIntervalSince(lastEPGUpdateTime!) >= 86400 
+        let isStale = lastEPGUpdateTime == nil || now.timeIntervalSince(lastEPGUpdateTime!) >= Self.epgMaxAge
         
         let urlsChanged = Set(urls) != Set(lastFetchedEPGUrls)
         if urlsChanged { lastFetchedEPGUrls = urls }
