@@ -183,8 +183,9 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     }
     
     private var timeObserverTimer: Timer?
-    
-    
+    private var localStartUnmuteTimer: Timer?
+
+
     private var lastProgressCheckTime: Date?
     private var lastProgressValue: Double = -1
     
@@ -513,6 +514,9 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     }
     
     public func stop() {
+        // Never carry a startup mute into the next stream.
+        localStartUnmuteTimer?.invalidate(); localStartUnmuteTimer = nil
+        vlcMediaPlayer.audio?.isMuted = false
         if currentBackend == .vlc { vlcMediaPlayer.stop(); vlcMediaPlayer.drawable = nil }
         else if currentBackend == .ksplayer { ksPlayerView.pause(); ksPlayerView.removeFromSuperview() }
         currentBackend = .none
@@ -636,7 +640,33 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             ])
             
             self.vlcMediaPlayer.media = media
+            if url.isFileURL {
+                // Recordings capture the raw stream mid-GOP: audio decodes from
+                // the first packet, but video can't render until the first
+                // keyframe — so sound runs ahead of a black screen for a second
+                // or two. Keep audio muted until the video output exists so
+                // picture and sound start together.
+                self.vlcMediaPlayer.audio?.isMuted = true
+                self.startLocalUnmutePoll()
+            }
             self.vlcMediaPlayer.play()
+        }
+    }
+
+    private func startLocalUnmutePoll() {
+        localStartUnmuteTimer?.invalidate()
+        let deadline = Date().addingTimeInterval(5)
+        localStartUnmuteTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
+            guard let self = self else { timer.invalidate(); return }
+            if self.vlcMediaPlayer.hasVideoOut || Date() > deadline {
+                timer.invalidate()
+                self.localStartUnmuteTimer = nil
+                self.vlcMediaPlayer.audio?.isMuted = false
+            } else {
+                // VLC creates its audio output lazily; a mute set before the
+                // aout exists is dropped, so re-assert until video appears.
+                self.vlcMediaPlayer.audio?.isMuted = true
+            }
         }
     }
     

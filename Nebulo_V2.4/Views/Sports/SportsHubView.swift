@@ -693,6 +693,15 @@ private struct GameScoreButton: View {
                       systemImage: isScheduled ? "stop.circle" : "record.circle")
             }
 
+            if game.status.type.state == "pre" {
+                Button {
+                    scoreViewModel.toggleReminder(game)
+                } label: {
+                    Label(isReminderSet ? "Cancel Reminder" : "Remind Me",
+                          systemImage: isReminderSet ? "bell.slash" : "bell")
+                }
+            }
+
             Button {
                 scoreViewModel.togglePin(game.id)
             } label: {

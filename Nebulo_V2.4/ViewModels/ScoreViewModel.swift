@@ -194,17 +194,21 @@ class ScoreViewModel: ObservableObject {
             UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["game_\(game.id)"])
         } else {
             reminderGameIDs.insert(game.id)
-            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
-                if granted {
-                    let content = UNMutableNotificationContent()
-                    content.title = "Game Reminder"
-                    content.body = "\(game.shortName) is starting soon!"
-                    content.sound = .default
-                    let triggerDate = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: game.gameDate.addingTimeInterval(-600))
-                    let trigger = UNCalendarNotificationTrigger(dateMatching: triggerDate, repeats: false)
-                    let request = UNNotificationRequest(identifier: "game_\(game.id)", content: content, trigger: trigger)
-                    UNUserNotificationCenter.current().add(request)
-                }
+            let secondsUntilStart = game.gameDate.timeIntervalSinceNow
+            guard secondsUntilStart > 0 else { return }
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+                guard granted else { return }
+                let content = UNMutableNotificationContent()
+                content.title = "Game Starting Soon"
+                content.body = "\(game.shortName) is about to start!"
+                content.sound = .default
+                content.interruptionLevel = .timeSensitive
+                // 10 minutes before tip-off — or right away if it's closer
+                // than that (a calendar trigger in the past never fires).
+                let delay = max(1, secondsUntilStart - 600)
+                let trigger = UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false)
+                let request = UNNotificationRequest(identifier: "game_\(game.id)", content: content, trigger: trigger)
+                UNUserNotificationCenter.current().add(request)
             }
         }
         saveToCache()
@@ -242,14 +246,14 @@ class ScoreViewModel: ObservableObject {
             let bState = b.status.type.state
             if aState == "in" && bState != "in" { return true }
             if aState != "in" && bState == "in" { return false }
-            if aState == "in" && bState == "in" { return a.gameDate > b.gameDate }
+            if aState == "in" && bState == "in" { return a.gameDate < b.gameDate }
             if aState == "pre" && bState == "post" { return true }
             if aState == "post" && bState == "pre" { return false }
-            if aState == "pre" && bState == "pre" { return a.gameDate > b.gameDate }
-            return a.gameDate > b.gameDate
+            if aState == "pre" && bState == "pre" { return a.gameDate < b.gameDate }
+            return a.gameDate < b.gameDate
         }
     }
-    
+
     private func preloadImages() {
         var urls = Set<String>()
         for games in masterGames.values {
@@ -405,11 +409,11 @@ class ScoreViewModel: ObservableObject {
             let bState = b.status.type.state
             if aState == "in" && bState != "in" { return true }
             if aState != "in" && bState == "in" { return false }
-            if aState == "in" && bState == "in" { return a.gameDate > b.gameDate }
+            if aState == "in" && bState == "in" { return a.gameDate < b.gameDate }
             if aState == "pre" && bState == "post" { return true }
             if aState == "post" && bState == "pre" { return false }
-            if aState == "pre" && bState == "pre" { return a.gameDate > b.gameDate }
-            return a.gameDate > b.gameDate
+            if aState == "pre" && bState == "pre" { return a.gameDate < b.gameDate }
+            return a.gameDate < b.gameDate
         }
         return events
     }
@@ -433,7 +437,7 @@ class ScoreViewModel: ObservableObject {
                             let bState = b.status.type.state
                             if aState == "in" && bState != "in" { return true }
                             if aState != "in" && bState == "in" { return false }
-                            if aState == "in" && bState == "in" { return a.gameDate > b.gameDate }
+                            if aState == "in" && bState == "in" { return a.gameDate < b.gameDate }
                             if aState == "pre" && bState == "post" { return true }
                             if aState == "post" && bState == "pre" { return false }
                             if aState == "pre" && bState == "pre" { return a.gameDate < b.gameDate }
@@ -490,7 +494,7 @@ class ScoreViewModel: ObservableObject {
                 result.append(game)
             }
         }
-        let sorted = result.sorted { $0.gameDate > $1.gameDate }
+        let sorted = result.sorted { $0.gameDate < $1.gameDate }
         // Only publish when the set actually changed — avoids spurious
         // re-renders when scores tick on the same set of games.
         let newIDs = sorted.map { $0.id }
@@ -535,7 +539,7 @@ class ScoreViewModel: ObservableObject {
                 }
             }
         }
-        return result.sorted { $0.gameDate > $1.gameDate }
+        return result.sorted { $0.gameDate < $1.gameDate }
     }
 
     /// Best-guess sport classification for an arbitrary live game, used by

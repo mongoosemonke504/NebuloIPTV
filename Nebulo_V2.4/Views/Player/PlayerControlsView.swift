@@ -87,8 +87,22 @@ struct PlayerControlsView: View {
                         
                         
                         
-                        HStack(spacing: 60) {
-                            
+                        HStack(spacing: isInlineMode ? 32 : 48) {
+
+                            if isRecordingPlayback {
+                                Button(action: {
+                                    ChannelViewModel.shared.triggerSelectionHaptic()
+                                    seekBackward()
+                                }) {
+                                    Image(systemName: "gobackward.10")
+                                        .font(.system(size: 22, weight: .bold))
+                                        .foregroundStyle(.primary)
+                                        .frame(width: 56, height: 56)
+                                        .modifier(GlassEffect(cornerRadius: 28, isSelected: true, accentColor: nil))
+                                }
+                                .buttonStyle(.plain)
+                            }
+
                             Button(action: {
                                 ChannelViewModel.shared.triggerSelectionHaptic()
                                 if !playerManager.playbackFailed {
@@ -103,6 +117,20 @@ struct PlayerControlsView: View {
                             }
                             .buttonStyle(.plain)
                             .disabled(playerManager.playbackFailed)
+
+                            if isRecordingPlayback {
+                                Button(action: {
+                                    ChannelViewModel.shared.triggerSelectionHaptic()
+                                    seekForward()
+                                }) {
+                                    Image(systemName: "goforward.10")
+                                        .font(.system(size: 22, weight: .bold))
+                                        .foregroundStyle(.primary)
+                                        .frame(width: 56, height: 56)
+                                        .modifier(GlassEffect(cornerRadius: 28, isSelected: true, accentColor: nil))
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
                         
                         

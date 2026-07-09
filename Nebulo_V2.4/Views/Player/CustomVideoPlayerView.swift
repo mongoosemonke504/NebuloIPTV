@@ -303,8 +303,8 @@ struct CustomVideoPlayerView: SwiftUI.View {
             onDismiss: { dismissAnimate() },
             togglePlay: { togglePlay() },
             toggleControls: { toggleControls() },
-            seekForward: { playerManager.seek(to: playerManager.currentTime + 15); resetTimer() },
-            seekBackward: { playerManager.seek(to: playerManager.currentTime - 15); resetTimer() }
+            seekForward: { playerManager.seek(to: min(playerManager.duration, playerManager.currentTime + 10)); resetTimer() },
+            seekBackward: { playerManager.seek(to: max(0, playerManager.currentTime - 10)); resetTimer() }
         )
 
         // Portrait fullscreen pushes the close/AirPlay/Mini/Multi-view/expand
@@ -430,8 +430,8 @@ struct CustomVideoPlayerView: SwiftUI.View {
                     onDismiss: { dismissAnimate() },
                     togglePlay: { togglePlay() },
                     toggleControls: { toggleControls() },
-                    seekForward: { playerManager.seek(to: playerManager.currentTime + 15); resetTimer() },
-                    seekBackward: { playerManager.seek(to: playerManager.currentTime - 15); resetTimer() }
+                    seekForward: { playerManager.seek(to: min(playerManager.duration, playerManager.currentTime + 10)); resetTimer() },
+                    seekBackward: { playerManager.seek(to: max(0, playerManager.currentTime - 10)); resetTimer() }
                 )
             }
             .frame(width: videoWidth, height: videoHeight)

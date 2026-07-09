@@ -447,7 +447,11 @@ extension MainView {
 
         } 
     }
-    func shouldUseSidebar(isLandscape: Bool) -> Bool { if selectedCategory?.id == -3 { return false }; switch ViewMode(rawValue: viewMode) ?? .automatic { case .automatic: return isLandscape; case .sidebar: return true; case .standard: return false } }
+    // Automatic must NOT flip to the sidebar layout on device rotation: the
+    // home UI is portrait-only, and swapping the layout branch while a video
+    // is fullscreen-landscape tears down whatever that branch is presenting
+    // (the recordings player fullScreenCover dismissed itself mid-rotation).
+    func shouldUseSidebar(isLandscape: Bool) -> Bool { if selectedCategory?.id == -3 { return false }; switch ViewMode(rawValue: viewMode) ?? .automatic { case .automatic: return false; case .sidebar: return true; case .standard: return false } }
 }
 
 struct StandardLayout: SwiftUI.View {

@@ -6,6 +6,7 @@ import SwiftUI
 import Combine
 import BackgroundTasks
 import UIKit
+import UserNotifications
 
 // MARK: - Orientation manager
 // Allows the video player to unlock landscape while keeping everything else portrait.
@@ -15,19 +16,47 @@ final class PlayerOrientationManager {
 
     var allowsLandscape = false {
         didSet {
-            // Tell every window's root view controller to re-query supported orientations.
-            DispatchQueue.main.async {
-                UIApplication.shared.connectedScenes
-                    .compactMap { $0 as? UIWindowScene }
-                    .flatMap { $0.windows }
-                    .forEach { $0.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations() }
+            // UIKit ignores orientation invalidation that lands mid-transition
+            // (e.g. while a fullScreenCover is still presenting), so re-assert
+            // once more after the presentation has settled.
+            notifyWindows()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                self.notifyWindows()
             }
+        }
+    }
+
+    private func notifyWindows() {
+        DispatchQueue.main.async {
+            UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap { $0.windows }
+                .forEach { window in
+                    // The system asks the TOPMOST presented controller for its
+                    // supported orientations — invalidating only the root does
+                    // nothing while a cover (recording player) or sheet
+                    // (settings → recordings) is up. Walk the whole chain.
+                    var vc = window.rootViewController
+                    vc?.setNeedsUpdateOfSupportedInterfaceOrientations()
+                    while let presented = vc?.presentedViewController {
+                        presented.setNeedsUpdateOfSupportedInterfaceOrientations()
+                        vc = presented
+                    }
+                }
         }
     }
 }
 
 // MARK: - App delegate
-class AppDelegate: NSObject, UIApplicationDelegate {
+class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        UNUserNotificationCenter.current().delegate = self
+        return true
+    }
+
     func application(
         _ application: UIApplication,
         supportedInterfaceOrientationsFor window: UIWindow?
@@ -35,6 +64,16 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         PlayerOrientationManager.shared.allowsLandscape
             ? [.portrait, .landscapeLeft, .landscapeRight]
             : .portrait
+    }
+
+    // Game reminders should still banner when the app is open — without this,
+    // foreground notifications are silently dropped.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound, .list])
     }
 }
 
