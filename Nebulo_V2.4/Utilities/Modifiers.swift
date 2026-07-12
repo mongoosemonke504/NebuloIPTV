@@ -242,6 +242,26 @@ extension View {
     }
 }
 
+/// Same idea for pinned chrome that fades in as the user scrolls (the
+/// compact score bar on the game detail pages): opacity tracks the
+/// scroll-driven progress directly, and hit testing only switches on once
+/// the bar is mostly visible so the invisible bar never eats touches meant
+/// for the content beneath it.
+struct ScrollProgressReveal: ViewModifier {
+    @ObservedObject var progress: ScrollProgress
+    func body(content: Content) -> some View {
+        content
+            .opacity(Double(progress.value))
+            .allowsHitTesting(progress.value > 0.5)
+    }
+}
+
+extension View {
+    func scrollProgressReveal(_ progress: ScrollProgress) -> some View {
+        modifier(ScrollProgressReveal(progress: progress))
+    }
+}
+
 struct GlassEffect: ViewModifier {
     let cornerRadius: CGFloat
     let isSelected: Bool
