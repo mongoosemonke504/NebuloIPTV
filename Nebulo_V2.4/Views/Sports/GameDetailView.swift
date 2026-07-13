@@ -770,7 +770,7 @@ struct GameDetailContentView: View {
                 HStack {
                     momentumLegend(detail.awaySide, percent: 100 - Int((last * 100).rounded()))
                     Spacer()
-                    Text(detail.statusState == "in" ? "LIVE · HOLD TO SCRUB" : "HOLD TO SCRUB")
+                    Text(detail.statusState == "in" ? "LIVE · SLIDE TO SCRUB" : "SLIDE TO SCRUB")
                         .font(.system(size: 9, weight: .black))
                         .foregroundStyle(.tertiary)
                     Spacer()
@@ -1120,8 +1120,6 @@ struct GameDetailContentView: View {
                     }
                 }
             }
-            .contentShape(Rectangle())
-            .simultaneousGesture(sideSwipeGesture($boxSide))
         }
     }
 
@@ -1149,6 +1147,17 @@ struct GameDetailContentView: View {
                     }
                 }
                 .frame(width: 140, alignment: .leading)
+                .overlay(HorizontalPanOverlay { translation in
+                    if translation < 0 && boxSide == "away" {
+                        ChannelViewModel.shared.triggerSelectionHaptic()
+                        withAnimation(.easeOut(duration: 0.15)) { boxSide = "home" }
+                    } else if translation > 0 && boxSide == "home" {
+                        ChannelViewModel.shared.triggerSelectionHaptic()
+                        withAnimation(.easeOut(duration: 0.15)) { boxSide = "away" }
+                    } else {
+                        onPageGame(translation < 0 ? 1 : -1)
+                    }
+                })
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 0) {
@@ -1185,8 +1194,8 @@ struct GameDetailContentView: View {
         }
     }
 
-    private func sideSwipeGesture(_ selection: Binding<String>) -> some Gesture {
-        DragGesture(minimumDistance: 30)
+    private func sideSwipeGesture(_ selection: Binding<String>, pageThrough: ((Int) -> Void)? = nil) -> some Gesture {
+        DragGesture(minimumDistance: 12)
             .onEnded { value in
                 let h = value.translation.width
                 guard abs(h) > abs(value.translation.height) else { return }
@@ -1196,6 +1205,8 @@ struct GameDetailContentView: View {
                 } else if h > 0 && selection.wrappedValue == "home" {
                     ChannelViewModel.shared.triggerSelectionHaptic()
                     withAnimation(.easeOut(duration: 0.15)) { selection.wrappedValue = "away" }
+                } else if let pageThrough {
+                    pageThrough(h < 0 ? 1 : -1)
                 }
             }
     }
@@ -1730,6 +1741,45 @@ struct ShotMapView: View {
     }
 }
 
+// MARK: - Horizontal-only pan (UIKit)
+
+private struct HorizontalPanOverlay: UIViewRepresentable {
+    let onSwipe: (CGFloat) -> Void
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .clear
+        let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.panned(_:)))
+        pan.delegate = context.coordinator
+        view.addGestureRecognizer(pan)
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onSwipe = onSwipe
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(onSwipe: onSwipe) }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onSwipe: (CGFloat) -> Void
+        init(onSwipe: @escaping (CGFloat) -> Void) { self.onSwipe = onSwipe }
+
+        @objc func panned(_ pan: UIPanGestureRecognizer) {
+            guard pan.state == .ended else { return }
+            let t = pan.translation(in: pan.view)
+            guard abs(t.x) > abs(t.y) else { return }
+            onSwipe(t.x)
+        }
+
+        func gestureRecognizerShouldBegin(_ r: UIGestureRecognizer) -> Bool {
+            guard let pan = r as? UIPanGestureRecognizer else { return false }
+            let v = pan.velocity(in: pan.view)
+            return abs(v.x) > abs(v.y)
+        }
+    }
+}
+
 // MARK: - Momentum chart
 
 /// FotMob-style momentum ribbon: the area above the midline (home on top)
@@ -1791,24 +1841,15 @@ struct MomentumChart: View {
 
     // MARK: Scrubbing
 
-    /// Long-press first so vertical page scrolling that starts on the chart
-    /// still wins; once held, the finger drags the marker. 0.3s (not
-    /// shorter): a scroll swipe often starts with the finger briefly at
-    /// rest, and a quicker trigger captured those touches — the swipe then
-    /// scrubbed instead of scrolling. The haptic marks the handoff into
-    /// scrub mode so a held finger knows the chart has taken the touch.
     private func scrubGesture(in size: CGSize) -> some Gesture {
-        LongPressGesture(minimumDuration: 0.3)
-            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
+        DragGesture(minimumDistance: 15, coordinateSpace: .local)
             .onChanged { value in
-                switch value {
-                case .second(true, let drag):
-                    if scrubFraction == nil { ChannelViewModel.shared.triggerSelectionHaptic() }
-                    let x = drag?.location.x ?? size.width * span
-                    scrubFraction = min(max(x / max(size.width, 1), 0), span)
-                default:
-                    break
+                guard abs(value.translation.width) > abs(value.translation.height) else {
+                    if scrubFraction != nil { scrubFraction = nil }
+                    return
                 }
+                if scrubFraction == nil { ChannelViewModel.shared.triggerSelectionHaptic() }
+                scrubFraction = min(max(value.location.x / max(size.width, 1), 0), span)
             }
             .onEnded { _ in scrubFraction = nil }
     }
