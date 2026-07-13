@@ -70,6 +70,16 @@ struct GameDetailView: View {
             .preferredColorScheme(.dark)
         }
     }
+
+}
+
+/// Vertical scroll readings the detail page reacts to each frame: the
+/// scrolled distance (drives the compact-bar fade) and the deepest valid
+/// offset (so a tab switch that shrinks the content can detect a stranded
+/// scroll position).
+private struct GDScrollMetrics: Equatable {
+    let scrolled: CGFloat
+    let maxScrolled: CGFloat
 }
 
 /// FotMob-style match detail page, split into tabs:
@@ -96,6 +106,22 @@ struct GameDetailContentView: View {
     /// header and the player panel collapse. Held in its own object so
     /// scrolling doesn't re-render this whole page each frame.
     @State private var collapseProgress = ScrollProgress()
+    /// How far past their natural position the tab chips are being held
+    /// (0 while riding with the content, growing as they dock under the
+    /// compact bar). Same leaf-only re-render trick as collapseProgress.
+    @State private var chipStick = ScrollProgress()
+    /// Measured height of each tab's content, so the pager can be framed to
+    /// the visible tab and a short tab can't scroll as deep as its tallest
+    /// neighbor.
+    /// Measured height of the compact score bar — the dock line for the
+    /// sticky chips.
+    @State private var barHeight: CGFloat = 64
+    @State private var scrollTarget = ScrollPosition(edge: .top)
+    /// Per-gesture latch for the edge-overscroll game paging; a box so the
+    /// per-frame writes never invalidate the page.
+    /// True while the vertical scroll is untouched — rubber-band overshoot
+    /// while dragging must not be mistaken for a stranded offset.
+    @State private var scrollIdle = ValueBox(true)
 
     private var tab: GDTab { scrolledTab ?? .overview }
 
@@ -148,33 +174,73 @@ struct GameDetailContentView: View {
                         .padding(.top, 40)
                     } else {
                         if availableTabs.count > 1 {
-                            // Stays in the layout so the scroll height never
-                            // jumps; the pinned copy takes over visually.
-                            tabChips.scrollProgressOpacity(collapseProgress) { 1 - Double($0) }
+                            // One set of chips, no pinned copy: they scroll
+                            // with the content and the offset below holds
+                            // them docked under the compact bar once they
+                            // reach it — the hub's pin/unpin feel. The outer
+                            // container is never offset, so the probe reads
+                            // their natural position.
+                            // No backing scrim on the chips themselves — the
+                            // compact bar's PinnedHeaderGradient reaches down
+                            // past the dock line and dims content passing
+                            // under them, same as the hub's pinned pills.
+                            ZStack(alignment: .top) {
+                                tabChips
+                                    .padding(.vertical, 6)
+                                    .scrollProgressOffset(chipStick)
+                            }
+                            .background(GlobalOffsetProbe(id: "gdChips"))
+                            .zIndex(1)
                         }
-                        tabPager
-                            .padding(.horizontal, -16)
+                        tabContent(for: tab)
                     }
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 18)
                 .padding(.bottom, 40)
             }
+            .scrollPosition($scrollTarget)
             // Scroll-linked, not threshold + animation: the bar's opacity
             // maps directly onto the offset (fading in over 105→155pt, where
             // the big score header scrolls out) so it moves with the finger
             // and reverses the same way — no spring, no bounce.
-            .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                geometry.contentOffset.y + geometry.contentInsets.top
-            } action: { _, scrolled in
-                collapseProgress.set(min(max((scrolled - 105) / 50, 0), 1))
+            .onScrollGeometryChange(for: GDScrollMetrics.self) { geometry in
+                GDScrollMetrics(
+                    scrolled: geometry.contentOffset.y + geometry.contentInsets.top,
+                    maxScrolled: max(0, geometry.contentSize.height + geometry.contentInsets.top
+                        + geometry.contentInsets.bottom - geometry.containerSize.height)
+                )
+            } action: { _, metrics in
+                collapseProgress.set(min(max((metrics.scrolled - 105) / 50, 0), 1))
+                // Content got shorter than the current offset (switched to a
+                // tab with less content): bring the new tab's bottom to the
+                // bottom of the screen instead of leaving empty space. Only
+                // while idle — rubber-band overshoot mid-drag settles itself.
+                if scrollIdle.value && metrics.scrolled > metrics.maxScrolled + 1 {
+                    withAnimation(.easeOut(duration: 0.3)) { scrollTarget.scrollTo(edge: .bottom) }
+                }
             }
+            .onScrollPhaseChange { _, newPhase in
+                scrollIdle.value = newPhase == .idle
+            }
+            .background(GlobalOffsetProbe(id: "gdContainer"))
             // Overlay, not safeAreaInset: the bar takes no layout space, so
             // nothing jumps when it appears — content just slides under it.
             .overlay(alignment: .top) {
                 compactHeader
                     .scrollProgressReveal(collapseProgress)
+                    .background(
+                        GeometryReader { g in
+                            Color.clear
+                                .onAppear { barHeight = g.size.height }
+                                .onChangeCompat(of: g.size.height) { barHeight = $0 }
+                        }
+                    )
             }
+        }
+        .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
+            guard let containerTop = offsets["gdContainer"], let chipsTop = offsets["gdChips"] else { return }
+            chipStick.set(max(0, containerTop + barHeight - chipsTop))
         }
         .preferredColorScheme(.dark)
         .task(id: request.id) {
@@ -184,9 +250,8 @@ struct GameDetailContentView: View {
 
     /// Apple Sports-style pinned bar once the big header scrolls away: each
     /// team's score sits beside its logo, the status in the middle (with
-    /// the mini base diamond while baseball is live), and the tab chips
-    /// ride on the same blur band so switching tabs never requires
-    /// scrolling back.
+    /// the mini base diamond while baseball is live). The tab chips aren't
+    /// part of the bar — they're sticky content that docks just beneath it.
     private var compactHeader: some View {
         VStack(spacing: 10) {
             HStack(spacing: 10) {
@@ -229,14 +294,11 @@ struct GameDetailContentView: View {
                 CachedAsyncImage(urlString: detail.homeSide.logo ?? "", size: CGSize(width: 34, height: 34))
                     .frame(width: 34, height: 34)
             }
-            if availableTabs.count > 1 {
-                tabChips
-            }
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .padding(.bottom, 10)
-        .background(.thinMaterial.opacity(0.6), ignoresSafeAreaEdges: .top)
+        .background(alignment: .top) { PinnedHeaderGradient() }
     }
 
     private func compactBattingColor(_ situation: GDBaseballSituation) -> Color {
@@ -297,22 +359,6 @@ struct GameDetailContentView: View {
         .transaction { $0.animation = nil }
     }
 
-    private var tabPager: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .top, spacing: 8) {
-                ForEach(availableTabs, id: \.self) { candidate in
-                    VStack(spacing: 14) {
-                        tabContent(for: candidate)
-                    }
-                    .containerRelativeFrame(.horizontal)
-                }
-            }
-            .scrollTargetLayout()
-        }
-        .scrollTargetBehavior(.viewAligned)
-        .safeAreaPadding(.horizontal, 16)
-        .scrollPosition(id: $scrolledTab)
-    }
 
     @ViewBuilder
     private func tabContent(for candidate: GDTab) -> some View {
@@ -963,6 +1009,8 @@ struct GameDetailContentView: View {
                         .padding(.vertical, 12)
                 }
             }
+            .contentShape(Rectangle())
+            .simultaneousGesture(sideSwipeGesture($lineupSide))
         }
     }
 
@@ -1011,6 +1059,8 @@ struct GameDetailContentView: View {
                     }
                 }
             }
+            .contentShape(Rectangle())
+            .simultaneousGesture(sideSwipeGesture($boxSide))
         }
     }
 
@@ -1072,6 +1122,21 @@ struct GameDetailContentView: View {
             sideChip(side: detail.awaySide, value: "away", selection: selection)
             sideChip(side: detail.homeSide, value: "home", selection: selection)
         }
+    }
+
+    private func sideSwipeGesture(_ selection: Binding<String>) -> some Gesture {
+        DragGesture(minimumDistance: 30)
+            .onEnded { value in
+                let h = value.translation.width
+                guard abs(h) > abs(value.translation.height) else { return }
+                if h < 0 && selection.wrappedValue == "away" {
+                    ChannelViewModel.shared.triggerSelectionHaptic()
+                    withAnimation(.easeOut(duration: 0.15)) { selection.wrappedValue = "home" }
+                } else if h > 0 && selection.wrappedValue == "home" {
+                    ChannelViewModel.shared.triggerSelectionHaptic()
+                    withAnimation(.easeOut(duration: 0.15)) { selection.wrappedValue = "away" }
+                }
+            }
     }
 
     private func sideChip(side: GDTeamSide, value: String, selection: Binding<String>) -> some View {
@@ -1659,7 +1724,6 @@ struct MomentumChart: View {
                     scrubOverlay(values, fraction: fraction, in: size)
                 }
             }
-            .contentShape(Rectangle())
             .simultaneousGesture(scrubGesture(in: size), isEnabled: interactive)
         }
     }
