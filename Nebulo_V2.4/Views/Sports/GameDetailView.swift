@@ -44,7 +44,7 @@ struct GameDetailView: View {
                             } else if page.sport == .mma {
                                 MMADetailContentView(request: page, viewModel: viewModel, accentColor: accentColor)
                             } else {
-                                GameDetailContentView(request: page, viewModel: viewModel, accentColor: accentColor)
+                                GameDetailContentView(request: page, viewModel: viewModel, accentColor: accentColor, onPageGame: pageGame)
                             }
                         }
                         .containerRelativeFrame(.horizontal)
@@ -71,6 +71,15 @@ struct GameDetailView: View {
         }
     }
 
+    /// Steps the carousel one game left/right. Fired by the tab pager when
+    /// the user swipes past its first/last chip — the overscroll reads as
+    /// "next page", so it pages games the same way the header swipe does.
+    private func pageGame(_ delta: Int) {
+        guard let current = currentID,
+              let index = pages.firstIndex(where: { $0.id == current }),
+              pages.indices.contains(index + delta) else { return }
+        withAnimation(.easeOut(duration: 0.35)) { currentID = pages[index + delta].id }
+    }
 }
 
 /// Vertical scroll readings the detail page reacts to each frame: the
@@ -94,6 +103,7 @@ struct GameDetailContentView: View {
     let request: GameDetailRequest
     @ObservedObject var viewModel: ChannelViewModel
     let accentColor: Color
+    let onPageGame: (Int) -> Void
 
     @StateObject private var detail: GameDetailViewModel
     @Environment(\.dismiss) private var dismiss
@@ -113,12 +123,14 @@ struct GameDetailContentView: View {
     /// Measured height of each tab's content, so the pager can be framed to
     /// the visible tab and a short tab can't scroll as deep as its tallest
     /// neighbor.
+    @State private var tabHeights: [GDTab: CGFloat] = [:]
     /// Measured height of the compact score bar — the dock line for the
     /// sticky chips.
     @State private var barHeight: CGFloat = 64
     @State private var scrollTarget = ScrollPosition(edge: .top)
     /// Per-gesture latch for the edge-overscroll game paging; a box so the
     /// per-frame writes never invalidate the page.
+    @State private var edgeFired = ValueBox(false)
     /// True while the vertical scroll is untouched — rubber-band overshoot
     /// while dragging must not be mistaken for a stranded offset.
     @State private var scrollIdle = ValueBox(true)
@@ -131,10 +143,11 @@ struct GameDetailContentView: View {
         case table = "Table"
     }
 
-    init(request: GameDetailRequest, viewModel: ChannelViewModel, accentColor: Color) {
+    init(request: GameDetailRequest, viewModel: ChannelViewModel, accentColor: Color, onPageGame: @escaping (Int) -> Void = { _ in }) {
         self.request = request
         self.viewModel = viewModel
         self.accentColor = accentColor
+        self.onPageGame = onPageGame
         _detail = StateObject(wrappedValue: GameDetailViewModel(request: request))
     }
 
@@ -192,7 +205,11 @@ struct GameDetailContentView: View {
                             .background(GlobalOffsetProbe(id: "gdChips"))
                             .zIndex(1)
                         }
-                        tabContent(for: tab)
+                        tabPager
+                            .padding(.horizontal, -16)
+                            .frame(height: tabHeights[tab], alignment: .top)
+                            .clipped()
+                            .animation(.easeOut(duration: 0.25), value: tab)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -359,6 +376,50 @@ struct GameDetailContentView: View {
         .transaction { $0.animation = nil }
     }
 
+    private var tabPager: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 8) {
+                ForEach(availableTabs, id: \.self) { candidate in
+                    VStack(spacing: 14) {
+                        tabContent(for: candidate)
+                    }
+                    .background(
+                        GeometryReader { g in
+                            Color.clear
+                                .onAppear { tabHeights[candidate] = g.size.height }
+                                .onChangeCompat(of: g.size.height) { tabHeights[candidate] = $0 }
+                        }
+                    )
+                    .containerRelativeFrame(.horizontal)
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .scrollTargetBehavior(.viewAligned)
+        .safeAreaPadding(.horizontal, 16)
+        .scrollPosition(id: $scrolledTab)
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        .onScrollGeometryChange(for: CGFloat.self) { geometry in
+            let restX = -geometry.contentInsets.leading
+            let maxX = max(restX, geometry.contentSize.width - geometry.containerSize.width
+                + geometry.contentInsets.trailing)
+            if geometry.contentOffset.x < restX { return geometry.contentOffset.x - restX }
+            if geometry.contentOffset.x > maxX { return geometry.contentOffset.x - maxX }
+            return 0
+        } action: { _, overshoot in
+            if abs(overshoot) < 4 {
+                edgeFired.value = false
+            } else if !edgeFired.value {
+                if overshoot <= -30 {
+                    edgeFired.value = true
+                    onPageGame(-1)
+                } else if overshoot >= 30 {
+                    edgeFired.value = true
+                    onPageGame(1)
+                }
+            }
+        }
+    }
 
     @ViewBuilder
     private func tabContent(for candidate: GDTab) -> some View {

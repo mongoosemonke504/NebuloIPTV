@@ -16,12 +16,18 @@ struct ESPNEvent: Codable, Identifiable, Hashable, Sendable {
     /// bracket and round labels in the league detail sheet.
     let season: ESPNEventSeason?
     var leagueLabel: String? = nil
+    /// Tournament round for tennis matches ("Final", "Round of 16", …) —
+    /// nil for every other sport.
+    var tennisRound: String? = nil
+    /// "<tour>/<tournament event id>" ("wta/188-2026") — everything needed
+    /// to re-find this match in ESPN's tennis APIs. Nil for other sports.
+    var tennisPath: String? = nil
 
 
     private let _dateParsed: Date?
 
     enum CodingKeys: String, CodingKey {
-        case id, shortName, status, competitions, date, groupings, season, leagueLabel
+        case id, shortName, status, competitions, date, groupings, season, leagueLabel, tennisRound, tennisPath
     }
 
     init(from decoder: Decoder) throws {
@@ -34,8 +40,27 @@ struct ESPNEvent: Codable, Identifiable, Hashable, Sendable {
         self.groupings = try container.decodeIfPresent([ESPNGrouping].self, forKey: .groupings)
         self.season = try? container.decodeIfPresent(ESPNEventSeason.self, forKey: .season)
         self.leagueLabel = try container.decodeIfPresent(String.self, forKey: .leagueLabel)
+        self.tennisRound = try container.decodeIfPresent(String.self, forKey: .tennisRound)
+        self.tennisPath = try container.decodeIfPresent(String.self, forKey: .tennisPath)
 
         self._dateParsed = ESPNEvent.parseDate(self.date)
+    }
+
+    /// Builds a standalone event from parts — used to convert each tennis
+    /// match (a competition inside a tournament's groupings) into its own
+    /// scoreboard row.
+    nonisolated init(id: String, shortName: String, status: ESPNStatus, competitions: [ESPNCompetition], date: String, leagueLabel: String? = nil, tennisRound: String? = nil, tennisPath: String? = nil) {
+        self.id = id
+        self.shortName = shortName
+        self.status = status
+        self.competitions = competitions
+        self.date = date
+        self.groupings = nil
+        self.season = nil
+        self.leagueLabel = leagueLabel
+        self.tennisRound = tennisRound
+        self.tennisPath = tennisPath
+        self._dateParsed = ESPNEvent.parseDate(date)
     }
 
     /// ESPN's scoreboard API isn't strictly consistent — some endpoints return
@@ -82,6 +107,8 @@ struct ESPNEvent: Codable, Identifiable, Hashable, Sendable {
         try container.encode(groupings, forKey: .groupings)
         try container.encodeIfPresent(season, forKey: .season)
         try container.encode(leagueLabel, forKey: .leagueLabel)
+        try container.encodeIfPresent(tennisRound, forKey: .tennisRound)
+        try container.encodeIfPresent(tennisPath, forKey: .tennisPath)
     }
     
     nonisolated var allCompetitions: [ESPNCompetition] {
@@ -113,7 +140,14 @@ struct ESPNEvent: Codable, Identifiable, Hashable, Sendable {
 nonisolated struct ESPNEventSeason: Codable, Hashable, Sendable { let slug: String? }
 struct ESPNGrouping: Codable, Hashable, Sendable { let competitions: [ESPNCompetition] }
 struct ESPNStatus: Codable, Hashable, Sendable { let type: ESPNStatusType }
-struct ESPNStatusType: Codable, Hashable, Sendable { let detail: String; let state: String }
+struct ESPNStatusType: Codable, Hashable, Sendable {
+    let detail: String
+    let state: String
+    /// ESPN's machine name ("STATUS_SUSPENDED", …). Decoded so tennis can
+    /// tell a set-break/rain "suspension" apart from a finished match.
+    var name: String? = nil
+    var completed: Bool? = nil
+}
 struct ESPNCompetition: Codable, Hashable, Sendable { let competitors: [ESPNCompetitor]?; let broadcasts: [ESPNBroadcast]?; let leaders: [ESPNLeader]? }
 struct ESPNBroadcast: Codable, Hashable, Sendable { let names: [String] }
 struct ESPNCompetitor: Codable, Identifiable, Hashable, Sendable {
@@ -124,13 +158,49 @@ struct ESPNCompetitor: Codable, Identifiable, Hashable, Sendable {
     let athlete: ESPNAthlete?
     let order: Int?
     let winner: Bool?
-    
+    /// Per-period scores — for tennis these are the per-set game counts,
+    /// with `winner` marking sets the player took and `tiebreak` the
+    /// tiebreak points.
+    let linescores: [ESPNLinescore]?
+    /// True while this side is serving (live tennis only).
+    let possession: Bool?
+    /// Doubles pairing — carries the combined display name and the two
+    /// athletes (for their flags). Singles matches use `athlete` instead.
+    let roster: ESPNRoster?
+    /// World ranking / tournament seed where ESPN provides one.
+    let curatedRank: ESPNCuratedRank?
+    /// Win-loss records ("18-11-1") — MMA fighters carry these.
+    let records: [ESPNRecordEntry]?
+
     enum CodingKeys: String, CodingKey {
         case _id = "id"
-        case homeAway, score, team, athlete, order, winner
+        case homeAway, score, team, athlete, order, winner, linescores, possession, roster, curatedRank, records
     }
-    
+
     var id: String { _id ?? team?.id ?? athlete?.displayName ?? UUID().uuidString }
+
+    nonisolated init(id: String?, homeAway: String?, score: String?, team: ESPNTeam?, athlete: ESPNAthlete?, order: Int?, winner: Bool?, linescores: [ESPNLinescore]?, possession: Bool? = nil, roster: ESPNRoster? = nil, curatedRank: ESPNCuratedRank? = nil, records: [ESPNRecordEntry]? = nil) {
+        self._id = id
+        self.homeAway = homeAway
+        self.score = score
+        self.team = team
+        self.athlete = athlete
+        self.order = order
+        self.winner = winner
+        self.linescores = linescores
+        self.possession = possession
+        self.roster = roster
+        self.curatedRank = curatedRank
+        self.records = records
+    }
+}
+nonisolated struct ESPNCuratedRank: Codable, Hashable, Sendable { let current: Int? }
+nonisolated struct ESPNRecordEntry: Codable, Hashable, Sendable { let summary: String? }
+nonisolated struct ESPNLinescore: Codable, Hashable, Sendable { let value: Double?; let winner: Bool?; let tiebreak: Int? }
+nonisolated struct ESPNRoster: Codable, Hashable, Sendable {
+    let displayName: String?
+    let shortDisplayName: String?
+    let athletes: [ESPNAthlete]?
 }
 nonisolated struct ESPNTeam: Codable, Hashable, Sendable { let id: String; let abbreviation: String?; let displayName: String?; let shortDisplayName: String?; let logo: String?; let color: String? }
 struct ESPNLeader: Codable, Hashable, Sendable { let name: String?; let displayName: String?; let leaders: [ESPNLeaderEntry]? }
@@ -144,3 +214,38 @@ struct ESPNAthlete: Codable, Hashable, Sendable {
     let shortName: String?
 }
 struct ESPNFlag: Codable, Hashable, Sendable { let href: String? }
+
+// MARK: - Tennis scoreboard
+
+/// The tennis scoreboard's shape differs from every team sport: each event
+/// is a whole tournament whose matches live inside `groupings` (Men's
+/// Singles, Women's Singles, …) and carry their own status/date/round.
+/// These mirror just enough of that JSON to convert each match into a
+/// standalone `ESPNEvent`.
+nonisolated struct TennisScoreboard: Codable, Sendable {
+    let events: [TennisTournament]?
+}
+nonisolated struct TennisTournament: Codable, Sendable {
+    let id: String?
+    let name: String?
+    let groupings: [TennisGroupingRaw]?
+}
+nonisolated struct TennisGroupingRaw: Codable, Sendable {
+    let grouping: TennisGroupingInfo?
+    let competitions: [TennisMatchRaw]?
+}
+nonisolated struct TennisGroupingInfo: Codable, Sendable {
+    let slug: String?
+    let displayName: String?
+}
+nonisolated struct TennisMatchRaw: Codable, Sendable {
+    let id: String?
+    let date: String?
+    let status: ESPNStatus?
+    let competitors: [ESPNCompetitor]?
+    let broadcasts: [ESPNBroadcast]?
+    let round: TennisRoundRaw?
+}
+nonisolated struct TennisRoundRaw: Codable, Sendable {
+    let displayName: String?
+}

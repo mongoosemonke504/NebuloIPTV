@@ -33,7 +33,69 @@ class ScoreViewModel: ObservableObject {
     /// independent of what's on today's scoreboards. Loaded from disk
     /// instantly at launch, refreshed in the background at most once a week.
     @Published private(set) var teamCatalog: [TeamCatalogService.Entry] = []
+    /// When set, the sports hub presents the match detail sheet for this game.
+    @Published var detailRequest: GameDetailRequest?
     private var currentSearchText = ""
+
+    /// Opens the FotMob-style match detail sheet, resolving the aggregate
+    /// tabs (Pinned, the soccer buckets) to a concrete sport and mapping a
+    /// soccer game's league label to its ESPN competition code.
+    func presentGameDetails(_ game: ESPNEvent, sport: SportType) {
+        detailRequest = makeDetailRequest(for: game, sport: sport)
+    }
+
+    func makeDetailRequest(for game: ESPNEvent, sport: SportType) -> GameDetailRequest {
+        var resolved = sport
+        if sport == .pinned { resolved = sportType(for: game) }
+        let code = game.leagueLabel.flatMap { label in
+            SportType.soccerCompetitionGroups
+                .flatMap { $0.competitions }
+                .first { $0.name == label }?.code
+        }
+        return GameDetailRequest(game: game, sport: resolved, leagueCode: code)
+    }
+
+    /// The full ordered list of games the detail sheet can page through,
+    /// centered on the list the user came from: live games page through the
+    /// Live Now order (grouped by sport, same as the hub); anything else
+    /// pages through its own sport's scoreboard. F1 is skipped — it has no
+    /// detail page. Always contains `request` itself.
+    func detailPagingList(from request: GameDetailRequest) -> [GameDetailRequest] {
+        var list = liveOrderForPaging()
+        if !list.contains(where: { $0.id == request.game.id }) {
+            if request.sport.isSoccer {
+                list = filteredSectionsMap[request.sport]?.flatMap { $0.games } ?? []
+            } else {
+                list = filteredGames[request.sport] ?? []
+            }
+        }
+        var seen = Set<String>()
+        var out: [GameDetailRequest] = []
+        for game in list {
+            let sport = sportType(for: game)
+            guard sport != .f1 else { continue }
+            guard seen.insert(game.id).inserted else { continue }
+            out.append(game.id == request.game.id ? request : makeDetailRequest(for: game, sport: sport))
+        }
+        if !seen.contains(request.game.id) { out = [request] }
+        return out
+    }
+
+    /// `allLiveGames` flattened into the exact order the Live Now page
+    /// displays: grouped by sport, groups ordered by first appearance.
+    private func liveOrderForPaging() -> [ESPNEvent] {
+        var orderedSports: [SportType] = []
+        var buckets: [SportType: [ESPNEvent]] = [:]
+        for game in allLiveGames {
+            let sport = sportType(for: game)
+            if buckets[sport] == nil {
+                orderedSports.append(sport)
+                buckets[sport] = []
+            }
+            buckets[sport]!.append(game)
+        }
+        return orderedSports.flatMap { buckets[$0] ?? [] }
+    }
     
     static let noCacheSession: URLSession = {
         let config = URLSessionConfiguration.default
@@ -109,10 +171,17 @@ class ScoreViewModel: ObservableObject {
         if let savedOrder = UserDefaults.standard.stringArray(forKey: "sportTabOrder") {
             self.sportTabOrder = savedOrder.compactMap { SportType(rawValue: $0) }
         }
-        if self.sportTabOrder.isEmpty { 
-            self.sportTabOrder = SportType.allCases 
-        } else if !self.sportTabOrder.contains(.pinned) {
-            self.sportTabOrder.insert(.pinned, at: 0)
+        if self.sportTabOrder.isEmpty {
+            self.sportTabOrder = SportType.allCases
+        } else {
+            if !self.sportTabOrder.contains(.pinned) {
+                self.sportTabOrder.insert(.pinned, at: 0)
+            }
+            // Sports added in an update (e.g. Tennis) aren't in the saved
+            // order — append them so they surface without a reset.
+            for sport in SportType.allCases where !self.sportTabOrder.contains(sport) {
+                self.sportTabOrder.append(sport)
+            }
         }
         
         if let savedHidden = UserDefaults.standard.stringArray(forKey: "hiddenSportTabs") {
@@ -353,8 +422,15 @@ class ScoreViewModel: ObservableObject {
                         }
                     }
 
+                    // Tennis mirrors the soccer pattern: several feeds (ATP +
+                    // WTA), sectioned output (one section per tournament draw).
+                    group.addTask {
+                        let (sections, games) = await self.fetchTennisInternal()
+                        return (SportType.tennis, games.isEmpty ? nil : games, sections.isEmpty ? nil : sections)
+                    }
+
                     for sport in SportType.allCases {
-                        if sport == .pinned || sport.isSoccer { continue }
+                        if sport == .pinned || sport.isSoccer || sport == .tennis { continue }
                         group.addTask {
                             guard let url = URL(string: sport.endpoint) else { return (sport, nil, nil) }
                             do {
@@ -467,6 +543,11 @@ class ScoreViewModel: ObservableObject {
         return (allSections, allGames)
     }
     
+    /// Both tennis tours flattened into hub sections — see TennisFeed.
+    nonisolated private func fetchTennisInternal() async -> ([SoccerGameSection], [ESPNEvent]) {
+        await TennisFeed.fetchSections(session: ScoreViewModel.noCacheSession)
+    }
+
     /// Pre-computed snapshot of all currently-live games across every sport.
     /// Refreshed by `recomputeLiveGames()` whenever `filteredGames` or
     /// `filteredSectionsMap` mutate — never re-walked from `body`. Views
@@ -587,6 +668,18 @@ class ScoreViewModel: ObservableObject {
                 let away = (ev.awayCompetitor?.team?.shortDisplayName ?? ev.awayCompetitor?.team?.displayName ?? "").lowercased()
                 guard !home.isEmpty && !away.isEmpty else { return false }
                 return epgLower.contains(home) && epgLower.contains(away)
+            }) { return match }
+
+            // 2b) Athlete sports (tennis): both players' last names in the
+            // EPG title — titles carry "Muchova" but never "K. Muchova".
+            if let match = live.first(where: { ev in
+                guard ev.homeCompetitor?.athlete != nil || ev.homeCompetitor?.roster != nil else { return false }
+                let home = TennisFeed.searchName(ev.homeCompetitor).lowercased()
+                let away = TennisFeed.searchName(ev.awayCompetitor).lowercased()
+                guard !home.isEmpty && !away.isEmpty else { return false }
+                let homeHit = home.split(separator: " ").contains { epgLower.contains($0) }
+                let awayHit = away.split(separator: " ").contains { epgLower.contains($0) }
+                return homeHit && awayHit
             }) { return match }
         }
 

@@ -917,9 +917,8 @@ class ChannelViewModel: ObservableObject {
     func preResolveGames(_ games: [ESPNEvent]) {
         
         let infos: [GameSearchInfo] = games.map {
-            let h = $0.homeCompetitor?.team?.shortDisplayName ?? $0.homeCompetitor?.athlete?.shortName ?? ""
-            let a = $0.awayCompetitor?.team?.shortDisplayName ?? $0.awayCompetitor?.athlete?.shortName ?? ""
-            return GameSearchInfo(id: $0.id, home: h, away: a, network: $0.broadcastName)
+            let terms = $0.searchTerms
+            return GameSearchInfo(id: $0.id, home: terms.home, away: terms.away, network: $0.broadcastName)
         }
         
         let inputChannels = self.channels

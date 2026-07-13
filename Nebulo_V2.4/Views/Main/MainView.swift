@@ -2471,14 +2471,14 @@ struct MatchupHeroContent: View {
                         .frame(maxWidth: .infinity)
                     Group {
                         if showScores {
-                            HStack(spacing: 10) {
-                                Text(away?.score ?? "0")
-                                Text("–")
-                                    .foregroundStyle(.white.opacity(0.4))
-                                Text(home?.score ?? "0")
-                            }
-                            .font(.system(size: 34, weight: .black).monospacedDigit())
-                            .foregroundStyle(.white)
+                            // One Text so a big baseball/basketball score
+                            // scales down as a unit instead of wrapping a
+                            // "10" onto two lines.
+                            Text("\(Text(away?.score ?? "0")) \(Text("–").foregroundStyle(.white.opacity(0.4))) \(Text(home?.score ?? "0"))")
+                                .font(.system(size: 34, weight: .black).monospacedDigit())
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.5)
                         } else {
                             Text("vs")
                                 .font(.system(size: 14, weight: .bold))
@@ -2486,6 +2486,7 @@ struct MatchupHeroContent: View {
                         }
                     }
                     .frame(minWidth: 84)
+                    .layoutPriority(1)
                     .shadow(color: .black.opacity(0.45), radius: 4, x: 0, y: 1)
                     teamName(home)
                         .frame(maxWidth: .infinity)
@@ -2864,8 +2865,7 @@ struct LiveGamesPreviewList: View {
                         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .onTapGesture {
                             viewModel.triggerSelectionHaptic()
-                            let h = game.homeCompetitor?.team?.shortDisplayName ?? game.homeCompetitor?.athlete?.shortName ?? ""
-                            let a = game.awayCompetitor?.team?.shortDisplayName ?? game.awayCompetitor?.athlete?.shortName ?? ""
+                            let (h, a) = game.searchTerms
                             let sport = scoreViewModel.sportType(for: game)
                             viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.broadcastName)
                         }

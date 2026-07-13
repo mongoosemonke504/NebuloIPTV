@@ -19,6 +19,7 @@ enum SportType: String, CaseIterable, Identifiable, Sendable {
     case international = "International Soccer"
     case cbb = "NCAAB", cfb = "NCAAF", nfl = "NFL", nba = "NBA", wnba = "WNBA", nhl = "NHL", mlb = "MLB"
     case f1 = "Formula 1"
+    case tennis = "Tennis"
     case collegeHockey = "NCAA Hockey"
     case softball = "NCAA Softball"
     case mLacrosse = "NCAA M-Lacrosse"
@@ -45,6 +46,9 @@ enum SportType: String, CaseIterable, Identifiable, Sendable {
         case .mVolleyball: return "https://site.api.espn.com/apis/site/v2/sports/volleyball/mens-college-volleyball/scoreboard"
         case .wVolleyball: return "https://site.api.espn.com/apis/site/v2/sports/volleyball/womens-college-volleyball/scoreboard"
         case .soccerLeagues, .domesticCups, .continental, .international: return ""
+        // Tennis aggregates the ATP + WTA scoreboards with a custom fetch
+        // (see ScoreViewModel.fetchTennisInternal), so no single endpoint.
+        case .tennis: return ""
         case .f1: return "https://site.api.espn.com/apis/site/v2/sports/racing/f1/scoreboard"
         case .mma: return "https://site.api.espn.com/apis/site/v2/sports/mma/ufc/scoreboard"
         }

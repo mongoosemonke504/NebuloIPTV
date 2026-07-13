@@ -262,6 +262,36 @@ extension View {
     }
 }
 
+struct PinnedHeaderGradient: View {
+    var body: some View {
+        LinearGradient(
+            colors: [Color.black.opacity(0.55), Color.black.opacity(0.3), .clear],
+            startPoint: .top, endPoint: .bottom
+        )
+        .frame(height: 200)
+        .offset(y: -120)
+        .allowsHitTesting(false)
+    }
+}
+
+struct ScrollProgressOffset: ViewModifier {
+    @ObservedObject var progress: ScrollProgress
+    func body(content: Content) -> some View {
+        content.offset(y: progress.value)
+    }
+}
+
+extension View {
+    func scrollProgressOffset(_ progress: ScrollProgress) -> some View {
+        modifier(ScrollProgressOffset(progress: progress))
+    }
+}
+
+final class ValueBox<Value> {
+    var value: Value
+    init(_ value: Value) { self.value = value }
+}
+
 struct GlassEffect: ViewModifier {
     let cornerRadius: CGFloat
     let isSelected: Bool

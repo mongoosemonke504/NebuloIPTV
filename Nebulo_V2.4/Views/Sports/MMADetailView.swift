@@ -266,7 +266,7 @@ struct MMADetailContentView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(.thinMaterial.opacity(0.6), ignoresSafeAreaEdges: .top)
+        .background(alignment: .top) { PinnedHeaderGradient() }
     }
 
     private var headerCard: some View {

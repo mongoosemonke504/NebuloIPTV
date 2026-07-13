@@ -303,6 +303,12 @@ struct SportsHubView: View {
             triggerPreResolution()
         }
         .sheet(isPresented: $viewModel.showSelectionSheet) { ManualSelectionSheet(viewModel: viewModel, accentColor: accentColor, playAction: playAction) }
+        // A sheet, not a fullScreenCover: the native slide-up/slide-down and
+        // the drag-anywhere dismissal (pulling past the scroll top hands the
+        // drag to the sheet) are the mechanics this screen is built around.
+        .sheet(item: $scoreViewModel.detailRequest) { request in
+            GameDetailView(request: request, viewModel: viewModel, scoreViewModel: scoreViewModel, accentColor: accentColor)
+        }
     }
     
     // MARK: - Pinned chip header
@@ -479,31 +485,49 @@ struct SportGamesListView: View {
                             .frame(maxWidth: .infinity, minHeight: 300)
                     } else {
                         ForEach(scoreViewModel.allPinnedGames) { game in
-                            scoreButton(game: game, sport: .nfl)
+                            // Resolve the real sport so pinned F1/MMA/tennis
+                            // rows render and tap correctly.
+                            scoreButton(game: game, sport: scoreViewModel.sportType(for: game))
                         }
                     }
-                } else if isSoccerCategory(sport) {
+                } else if usesSections(sport) {
                     if let sections = scoreViewModel.filteredSectionsMap[sport], !sections.isEmpty {
 
-                        let allSoccerGames = sections.flatMap { $0.games }
-                        let pinnedSoccer = allSoccerGames.filter { scoreViewModel.pinnedGameIDs.contains($0.id) }
+                        let allSectionGames = sections.flatMap { $0.games }
+                        let pinnedSectionGames = allSectionGames.filter { scoreViewModel.pinnedGameIDs.contains($0.id) }
 
-                        if !pinnedSoccer.isEmpty {
+                        if !pinnedSectionGames.isEmpty {
                             Section(header: subCategoryHeader("Pinned")) {
-                                ForEach(pinnedSoccer) { game in
-                                    scoreButton(game: game, sport: .soccerLeagues)
+                                ForEach(pinnedSectionGames) { game in
+                                    scoreButton(game: game, sport: sport)
                                 }
                             }
                         }
 
-                        let split = splitSections(sections)
-                        ForEach(split.eager, id: \.league) { s in
-                            soccerSection(s)
-                        }
-                        if !split.lazy.isEmpty {
-                            LazyVStack(spacing: 12) {
-                                ForEach(split.lazy, id: \.league) { s in
-                                    soccerSection(s)
+                        if sport == .tennis {
+                            // Tournament first, then its draws (singles
+                            // before doubles — the fetch orders them).
+                            let groups = tennisGroups(sections)
+                            if let first = groups.first {
+                                tennisTournamentSection(first)
+                            }
+                            if groups.count > 1 {
+                                LazyVStack(spacing: 12) {
+                                    ForEach(groups.dropFirst(), id: \.name) { group in
+                                        tennisTournamentSection(group)
+                                    }
+                                }
+                            }
+                        } else {
+                            let split = splitSections(sections)
+                            ForEach(split.eager, id: \.league) { s in
+                                soccerSection(s)
+                            }
+                            if !split.lazy.isEmpty {
+                                LazyVStack(spacing: 12) {
+                                    ForEach(split.lazy, id: \.league) { s in
+                                        soccerSection(s)
+                                    }
                                 }
                             }
                         }
@@ -547,6 +571,51 @@ struct SportGamesListView: View {
             .padding(.bottom, 120)
     }
 
+    /// Consecutive tennis sections ("Wimbledon — Men's Singles") bucketed by
+    /// tournament, preserving feed order (majors first, singles draws before
+    /// doubles within a tournament).
+    private func tennisGroups(_ sections: [SoccerGameSection]) -> [(name: String, draws: [SoccerGameSection])] {
+        var order: [String] = []
+        var buckets: [String: [SoccerGameSection]] = [:]
+        for section in sections {
+            let name = section.league.components(separatedBy: TennisFeed.labelSeparator).first ?? section.league
+            if buckets[name] == nil {
+                order.append(name)
+                buckets[name] = []
+            }
+            buckets[name]!.append(section)
+        }
+        return order.map { ($0, buckets[$0] ?? []) }
+    }
+
+    /// One tournament: prominent header, then each draw as a sub-section.
+    @ViewBuilder
+    private func tennisTournamentSection(_ group: (name: String, draws: [SoccerGameSection])) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(group.name)
+                .font(.system(size: 17, weight: .heavy))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 10)
+            ForEach(group.draws, id: \.league) { draw in
+                let remaining = draw.games.filter { !scoreViewModel.pinnedGameIDs.contains($0.id) }
+                if !remaining.isEmpty {
+                    subCategoryHeader(tennisDrawTitle(draw.league))
+                    ForEach(remaining) { game in
+                        scoreButton(game: game, sport: sport)
+                    }
+                }
+            }
+        }
+    }
+
+    private func tennisDrawTitle(_ league: String) -> String {
+        let parts = league.components(separatedBy: TennisFeed.labelSeparator)
+        return parts.count > 1 ? parts.dropFirst().joined(separator: TennisFeed.labelSeparator) : league
+    }
+
     /// Splits the league sections at the eager-row budget: sections up to
     /// the first screenful render eagerly, the rest lazily.
     private func splitSections(_ sections: [SoccerGameSection]) -> (eager: [SoccerGameSection], lazy: [SoccerGameSection]) {
@@ -570,7 +639,7 @@ struct SportGamesListView: View {
         if !remainingGames.isEmpty {
             Section(header: leagueHeader(s.league)) {
                 ForEach(remainingGames) { game in
-                    scoreButton(game: game, sport: .soccerLeagues)
+                    scoreButton(game: game, sport: sport)
                 }
             }
         }
@@ -584,10 +653,13 @@ struct SportGamesListView: View {
             .padding(.top, 8)
     }
     
-    private func isSoccerCategory(_ sport: SportType) -> Bool {
-        return sport == .soccerLeagues || sport == .domesticCups || sport == .continental || sport == .international
+    /// Sports whose scoreboard renders as titled sections instead of one
+    /// flat list — the soccer buckets (per-league sections) and tennis
+    /// (per-tournament-draw sections).
+    private func usesSections(_ sport: SportType) -> Bool {
+        return sport.isSoccer || sport == .tennis
     }
-    
+
     @ViewBuilder
     private var emptyState: some View {
         if scoreViewModel.isLoading {
@@ -605,7 +677,7 @@ struct SportGamesListView: View {
         ForEach(sections, id: \.league) { s in
             Section(header: leagueHeader(s.league)) {
                 ForEach(s.games) { game in
-                    scoreButton(game: game, sport: .soccerLeagues) 
+                    scoreButton(game: game, sport: sport)
                 }
             }
         }
@@ -651,18 +723,30 @@ private struct GameScoreButton: View {
         let isPinned     = scoreViewModel.pinnedGameIDs.contains(game.id)
         let isScoreHidden = scoreViewModel.hiddenScoreGameIDs.contains(game.id)
         let isReminderSet = scoreViewModel.reminderGameIDs.contains(game.id)
-        let h = game.homeCompetitor?.team?.shortDisplayName ?? game.homeCompetitor?.athlete?.shortName ?? ""
-        let a = game.awayCompetitor?.team?.shortDisplayName ?? game.awayCompetitor?.athlete?.shortName ?? ""
+        let (h, a) = game.searchTerms
 
         Button(action: {
             guard SwipeTapGuard.tapsAllowed else { return }
             ChannelViewModel.shared.triggerSelectionHaptic()
-            viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.broadcastName)
+            // Stats-first: tapping a game opens the match detail sheet,
+            // and the stream is one more tap (Watch Live) from there.
+            // F1 has no detail page, so it plays directly.
+            if sport == .f1 {
+                viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.broadcastName)
+            } else {
+                scoreViewModel.presentGameDetails(game, sport: sport)
+            }
         }) {
             ScoreRow(game: game, sport: sport, isScoreHidden: isScoreHidden, isReminderSet: isReminderSet)
         }
         .buttonStyle(.plain)
         .contextMenu(menuItems: {
+            Button {
+                viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.broadcastName)
+            } label: {
+                Label("Watch Stream", systemImage: "play.fill")
+            }
+
             Button {
                 viewModel.showStreamOptions(home: h, away: a, sport: sport, network: game.broadcastName)
             } label: {
@@ -890,7 +974,11 @@ struct AllLiveSportsView: View {
         Button(action: {
             guard SwipeTapGuard.tapsAllowed else { return }
             ChannelViewModel.shared.triggerSelectionHaptic()
-            playGame(game, sport: sport)
+            if sport == .f1 {
+                playGame(game, sport: sport)
+            } else {
+                scoreViewModel.presentGameDetails(game, sport: sport)
+            }
         }) {
             if hasLogos {
                 MatchupHeroContent(
@@ -1032,8 +1120,7 @@ struct AllLiveSportsView: View {
     }
 
     private func playGame(_ game: ESPNEvent, sport: SportType) {
-        let h = game.homeCompetitor?.team?.shortDisplayName ?? game.homeCompetitor?.athlete?.shortName ?? ""
-        let a = game.awayCompetitor?.team?.shortDisplayName ?? game.awayCompetitor?.athlete?.shortName ?? ""
+        let (h, a) = game.searchTerms
         viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.broadcastName)
     }
 }
@@ -1090,12 +1177,14 @@ struct ScoreRow: View {
     let game: ESPNEvent; let sport: SportType; var isScoreHidden: Bool = false; var isReminderSet: Bool = false
     var body: some View { 
         ZStack(alignment: .topTrailing) {
-            VStack(spacing: 0) { 
-                if sport == .f1 {  
-                    raceLayout 
-                } else { 
-                    teamLayout 
-                } 
+            VStack(spacing: 0) {
+                if sport == .f1 {
+                    raceLayout
+                } else if sport == .tennis {
+                    tennisLayout
+                } else {
+                    teamLayout
+                }
             }
             .padding(.vertical, 18).padding(.horizontal, 12)
             .frame(maxWidth: .infinity)
@@ -1114,6 +1203,123 @@ struct ScoreRow: View {
     private var teamLayout: some View { HStack(alignment: .center, spacing: 4) { if let away = game.awayCompetitor { TeamColumn(competitor: away, gameState: game.status.type.state, align: .trailing, isScoreHidden: isScoreHidden).frame(maxWidth: .infinity) }; VStack(spacing: 6) { Text(game.status.type.detail.uppercased()).font(.system(size: 11, weight: .bold)).foregroundStyle(game.status.type.state == "in" ? .red : .secondary).multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.8).frame(minWidth: 70, maxWidth: 100); if let cn = game.broadcastName { Text(cn).font(.system(size: 10, weight: .black)).foregroundStyle(.primary).padding(.horizontal, 6).padding(.vertical, 2).background(Color.white.opacity(0.15)).cornerRadius(4) }; Capsule().fill(Color.white.opacity(0.1)).frame(width: 1.5, height: 20) }; if let home = game.homeCompetitor { TeamColumn(competitor: home, gameState: game.status.type.state, align: .leading, isScoreHidden: isScoreHidden).frame(maxWidth: .infinity) } } }
     
     
+    /// Tennis scoreboard row: round + status header, then one line per
+    /// player — flag, name, and the per-set linescores on the right (sets
+    /// the player won render bold, the in-progress set stays live-white).
+    private var tennisLayout: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                if let round = game.tennisRound {
+                    Text(round.uppercased())
+                        .font(.system(size: 10, weight: .black))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+                Spacer()
+                Text(tennisStatusText.uppercased())
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(game.status.type.state == "in" ? .red : .secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                if let cn = game.broadcastName {
+                    Text(cn).font(.system(size: 10, weight: .black)).foregroundStyle(.primary).padding(.horizontal, 6).padding(.vertical, 2).background(Color.white.opacity(0.15)).cornerRadius(4)
+                }
+            }
+            VStack(spacing: 9) {
+                tennisPlayerRow(game.awayCompetitor)
+                tennisPlayerRow(game.homeCompetitor)
+            }
+        }
+        .padding(.horizontal, 4)
+    }
+
+    /// Scheduled matches show a compact local start time — ESPN's tennis
+    /// pre-game detail is a full sentence ("Sat, July 11th at 8:30 AM EDT")
+    /// that doesn't fit a row.
+    private var tennisStatusText: String {
+        guard game.status.type.state == "pre" else { return game.status.type.detail }
+        // Matches without a scheduled time carry ESPN's unfilled template
+        // ("M/d - 'TBD'") — formatting our parsed date would invent a time.
+        if game.status.type.detail.contains("TBD") { return "TBD" }
+        let date = game.gameDate
+        guard date != .distantFuture else { return game.status.type.detail }
+        let df = DateFormatter()
+        df.dateFormat = "E h:mm a"
+        return df.string(from: date)
+    }
+
+    @ViewBuilder
+    private func tennisPlayerRow(_ competitor: ESPNCompetitor?) -> some View {
+        if let competitor {
+            let name = TennisFeed.sideName(competitor)
+            let lost = game.status.type.state == "post" && competitor.winner != true
+            let sets = competitor.linescores ?? []
+            let pairFlags = (competitor.roster?.athletes ?? []).compactMap { $0.flag?.href }
+            HStack(spacing: 8) {
+                if pairFlags.count >= 2 {
+                    // Doubles: both partners' flags, slightly smaller.
+                    HStack(spacing: 3) {
+                        ForEach(pairFlags.prefix(2), id: \.self) { flag in
+                            CachedAsyncImage(urlString: flag, size: CGSize(width: 16, height: 16))
+                                .frame(width: 16, height: 16)
+                        }
+                    }
+                } else {
+                    CachedAsyncImage(urlString: competitor.athlete?.flag?.href ?? pairFlags.first ?? "", size: CGSize(width: 22, height: 22))
+                        .frame(width: 22, height: 22)
+                }
+                Text(name)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(lost ? .secondary : .primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                if game.status.type.state == "in" && competitor.possession == true {
+                    // Serving indicator — tennis-ball green.
+                    Circle()
+                        .fill(Color(red: 0.78, green: 0.92, blue: 0.25))
+                        .frame(width: 7, height: 7)
+                }
+                if competitor.winner == true {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 9, weight: .black))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if game.status.type.state != "pre" && !sets.isEmpty {
+                    HStack(spacing: 12) {
+                        ForEach(sets.indices, id: \.self) { i in
+                            let wonSet = sets[i].winner == true
+                            let isCurrentSet = game.status.type.state == "in" && i == sets.count - 1
+                            tennisSetScore(sets[i], emphasized: wonSet || isCurrentSet)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// One set's game count, with the tiebreak score as a superscript
+    /// ("7⁶") the way tennis scorelines are written.
+    private func tennisSetScore(_ line: ESPNLinescore, emphasized: Bool) -> some View {
+        HStack(alignment: .top, spacing: 1) {
+            Text(isScoreHidden ? "?" : tennisSetText(line))
+                .font(.system(size: 16, weight: emphasized ? .black : .semibold, design: .rounded))
+            if !isScoreHidden, let tiebreak = line.tiebreak {
+                Text("\(tiebreak)")
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .padding(.top, 1)
+            }
+        }
+        .foregroundStyle(emphasized ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+        .frame(minWidth: 12)
+    }
+
+    private func tennisSetText(_ line: ESPNLinescore) -> String {
+        guard let value = line.value else { return "–" }
+        return String(Int(value))
+    }
+
     private var raceLayout: some View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
@@ -1134,8 +1340,8 @@ struct ScoreRow: View {
 struct TeamColumn: View {
     let competitor: ESPNCompetitor; let gameState: String; let align: HorizontalAlignment; var isScoreHidden: Bool = false
     var body: some View { 
-        let name = competitor.team?.shortDisplayName ?? competitor.team?.abbreviation ?? competitor.athlete?.shortName ?? competitor.athlete?.displayName ?? "Unknown"
-        let logo = competitor.team?.logo ?? competitor.athlete?.flag?.href ?? competitor.athlete?.headshot ?? ""
+        let name = competitor.team?.shortDisplayName ?? competitor.team?.abbreviation ?? competitor.athlete?.shortName ?? competitor.athlete?.displayName ?? competitor.roster?.shortDisplayName ?? "Unknown"
+        let logo = competitor.team?.logo ?? competitor.athlete?.flag?.href ?? competitor.athlete?.headshot ?? competitor.roster?.athletes?.first?.flag?.href ?? ""
         let score = isScoreHidden ? "?" : (gameState == "pre" ? "" : (competitor.score ?? "0"))
         
         return HStack(spacing: 8) { if align == .trailing { teamInfoStack(n: name, l: logo); scoreText(s: score) } else { scoreText(s: score); teamInfoStack(n: name, l: logo) } } 

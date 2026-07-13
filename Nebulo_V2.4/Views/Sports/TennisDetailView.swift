@@ -255,7 +255,7 @@ struct TennisDetailContentView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background(.thinMaterial.opacity(0.6), ignoresSafeAreaEdges: .top)
+        .background(alignment: .top) { PinnedHeaderGradient() }
     }
 
     // MARK: Background
