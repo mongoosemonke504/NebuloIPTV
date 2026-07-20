@@ -181,7 +181,7 @@ struct MMADetailContentView: View {
     let accentColor: Color
 
     @StateObject private var detail: MMADetailViewModel
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.gameDetailDismiss) private var dismiss
     @State private var collapseProgress = ScrollProgress()
 
     init(request: GameDetailRequest, viewModel: ChannelViewModel, accentColor: Color) {

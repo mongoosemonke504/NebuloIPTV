@@ -41,14 +41,29 @@ struct ContentView: View {
                 scoreViewModel.openGameFromDeepLink(id: id)
             }
         }
-        .sheet(item: $scoreViewModel.deepLinkRequest) { request in
-            GameDetailView(
-                request: request,
-                viewModel: viewModel,
-                scoreViewModel: scoreViewModel,
-                accentColor: Color(hex: customAccentHex) ?? .white
-            )
+        // Game detail is a custom in-hierarchy overlay, not a sheet, so the
+        // Sports Hub renders live and undimmed behind the cards and they run
+        // flush to the screen edges. Both the hub tap (`detailRequest`) and
+        // the Live-Activity deep link (`deepLinkRequest`, which first
+        // dismisses any full-screen player) route through the one presenter.
+        .overlay {
+            if let request = scoreViewModel.detailRequest ?? scoreViewModel.deepLinkRequest {
+                GameDetailPresenter(
+                    request: request,
+                    viewModel: viewModel,
+                    scoreViewModel: scoreViewModel,
+                    accentColor: Color(hex: customAccentHex) ?? .white,
+                    onDismiss: {
+                        scoreViewModel.detailRequest = nil
+                        scoreViewModel.deepLinkRequest = nil
+                    }
+                )
+                .transition(.move(edge: .bottom))
+                .zIndex(50)
+            }
         }
+        .animation(.spring(response: 0.42, dampingFraction: 0.86), value: scoreViewModel.detailRequest)
+        .animation(.spring(response: 0.42, dampingFraction: 0.86), value: scoreViewModel.deepLinkRequest)
     }
 }
 

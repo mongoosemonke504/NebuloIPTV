@@ -298,12 +298,9 @@ struct SportsHubView: View {
             triggerPreResolution()
         }
         .sheet(isPresented: $viewModel.showSelectionSheet) { ManualSelectionSheet(viewModel: viewModel, accentColor: accentColor, playAction: playAction) }
-        // A sheet, not a fullScreenCover: the native slide-up/slide-down and
-        // the drag-anywhere dismissal (pulling past the scroll top hands the
-        // drag to the sheet) are the mechanics this screen is built around.
-        .sheet(item: $scoreViewModel.detailRequest) { request in
-            GameDetailView(request: request, viewModel: viewModel, scoreViewModel: scoreViewModel, accentColor: accentColor)
-        }
+        // The game detail is presented as a custom overlay from ContentView
+        // (see GameDetailPresenter) — driven by the same detailRequest
+        // binding a game tap sets here — so the hub renders live behind it.
     }
     
     // MARK: - Pinned chip header

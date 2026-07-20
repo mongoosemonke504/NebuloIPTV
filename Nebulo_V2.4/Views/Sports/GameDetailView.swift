@@ -1,11 +1,74 @@
 import SwiftUI
 
-/// Sheet-level carousel around the match detail page: each game in the list
-/// the user came from (Live Now order for live games, the sport's own
-/// scoreboard otherwise) is a full-height card, with the previous/next
-/// game's card peeking in from the screen edges — swipe on the header area
-/// or the peeking edges to page between games. The list is snapshotted when
-/// the sheet opens so score refreshes never shuffle pages mid-swipe.
+/// Closes the game-detail presentation. The detail is shown as a custom
+/// in-hierarchy overlay (not a system sheet), so `@Environment(\.dismiss)`
+/// no longer reaches it — the presenter injects this closure instead, and
+/// the content views call it exactly where they used to call `dismiss()`.
+private struct GameDetailDismissKey: EnvironmentKey {
+    static let defaultValue: () -> Void = {}
+}
+extension EnvironmentValues {
+    var gameDetailDismiss: () -> Void {
+        get { self[GameDetailDismissKey.self] }
+        set { self[GameDetailDismissKey.self] = newValue }
+    }
+}
+
+/// Presents `GameDetailView` as a full-screen overlay layered directly over
+/// the app, rather than as a system `.sheet`. A sheet at its full-height
+/// detent forces iOS's card-stack presentation — it scales the presenter
+/// down and darkens it, which no `presentationBackground`/`interaction`
+/// combination fully removes. Presenting in-hierarchy keeps the Sports Hub
+/// rendering live and undimmed behind the cards, lets the cards run flush to
+/// the screen's real bottom edge, and hands corner + dismiss control back to
+/// us. Drag down from the top of the card to dismiss.
+struct GameDetailPresenter: View {
+    let request: GameDetailRequest
+    @ObservedObject var viewModel: ChannelViewModel
+    @ObservedObject var scoreViewModel: ScoreViewModel
+    let accentColor: Color
+    let onDismiss: () -> Void
+
+    @State private var dragY: CGFloat = 0
+
+    var body: some View {
+        GameDetailView(request: request, viewModel: viewModel, scoreViewModel: scoreViewModel, accentColor: accentColor)
+            .environment(\.gameDetailDismiss, onDismiss)
+            .offset(y: dragY)
+            // Reveal the hub through the widening gap as the card is pulled
+            // down, so the dismiss reads as the card sliding off the hub.
+            .ignoresSafeArea(edges: .bottom)
+            .simultaneousGesture(dismissGesture)
+    }
+
+    /// Dismiss only on a downward drag that STARTS in the top strip (the
+    /// score/compact header) — the vertical stat lists scroll normally, and
+    /// the horizontal card-to-card paging is left alone by the
+    /// vertical-dominance guard.
+    private var dismissGesture: some Gesture {
+        DragGesture(minimumDistance: 14, coordinateSpace: .global)
+            .onChanged { v in
+                guard v.startLocation.y < 175,
+                      v.translation.height > 0,
+                      v.translation.height > abs(v.translation.width) * 1.3 else { return }
+                dragY = v.translation.height
+            }
+            .onEnded { v in
+                guard v.startLocation.y < 175 else { return }
+                if v.translation.height > 130 || v.predictedEndTranslation.height > 500 {
+                    onDismiss()
+                }
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.9)) { dragY = 0 }
+            }
+    }
+}
+
+/// Carousel around the match detail page: each game in the list the user
+/// came from (Live Now order for live games, the sport's own scoreboard
+/// otherwise) is a full-height card, with the previous/next game's card
+/// peeking in from the screen edges — swipe on the header area or the
+/// peeking edges to page between games. The list is snapshotted when the
+/// detail opens so score refreshes never shuffle pages mid-swipe.
 struct GameDetailView: View {
     @ObservedObject var viewModel: ChannelViewModel
     @ObservedObject var scoreViewModel: ScoreViewModel
@@ -49,7 +112,17 @@ struct GameDetailView: View {
                         }
                         .background(Color(white: 0.10))
                         .containerRelativeFrame(.horizontal)
-                        .clipShape(RoundedRectangle(cornerRadius: 24))
+                        // Round ONLY the top corners: the card runs flush
+                        // off the bottom of the phone, so a long stats/
+                        // events list scrolls all the way to the screen
+                        // edge instead of being clipped short by a rounded
+                        // bottom rectangle floating above it.
+                        .clipShape(
+                            UnevenRoundedRectangle(
+                                topLeadingRadius: 24, bottomLeadingRadius: 0,
+                                bottomTrailingRadius: 0, topTrailingRadius: 24
+                            )
+                        )
                         .allowsHitTesting(page.id == currentID)
                         .id(page.id)
                     }
@@ -69,13 +142,6 @@ struct GameDetailView: View {
             }
             .padding(.top, 16)
             .preferredColorScheme(.dark)
-            // Same treatment as the player-stats cards: the app shows
-            // through around and between the cards instead of a black frame.
-            // Background interaction keeps iOS from dimming and pushing back
-            // the screen underneath, so the gaps stay truly transparent even
-            // with the sheet at full height.
-            .presentationBackground(.clear)
-            .presentationBackgroundInteraction(.enabled)
         }
     }
 
@@ -116,7 +182,7 @@ struct GameDetailContentView: View {
 
     @StateObject private var detail: GameDetailViewModel
     @ObservedObject private var activityManager = GameActivityManager.shared
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.gameDetailDismiss) private var dismiss
     @State private var lineupSide = "home"
     @State private var boxSide = "home"
     /// Lineup player whose individual-stats sheet is up.
@@ -229,7 +295,9 @@ struct GameDetailContentView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 18)
-                .padding(.bottom, 40)
+                // Clears the home-indicator strip so the last stats row
+                // isn't tucked under it at the bottom of the scroll.
+                .padding(.bottom, 80)
             }
             .scrollPosition($scrollTarget)
             // Scroll-linked, not threshold + animation: the bar's opacity
@@ -456,8 +524,16 @@ struct GameDetailContentView: View {
                     .background(
                         GeometryReader { g in
                             Color.clear
-                                .onAppear { tabHeights[candidate] = g.size.height }
-                                .onChangeCompat(of: g.size.height) { tabHeights[candidate] = $0 }
+                                // +40 cushion: async sections (lineups,
+                                // events, momentum) can grow the real
+                                // content a beat after this first fires, and
+                                // the tabPager below is hard-.clipped() to
+                                // this height — a measurement that lands even
+                                // slightly short permanently chops the tab's
+                                // own bottom. A hair too tall just leaves a
+                                // few points of blank space, which is fine.
+                                .onAppear { tabHeights[candidate] = g.size.height + 40 }
+                                .onChangeCompat(of: g.size.height) { tabHeights[candidate] = $0 + 40 }
                         }
                     )
                     .containerRelativeFrame(.horizontal)
