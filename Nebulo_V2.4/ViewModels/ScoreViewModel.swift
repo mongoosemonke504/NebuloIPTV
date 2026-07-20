@@ -226,6 +226,8 @@ class ScoreViewModel: ObservableObject {
                 self.sportTabOrder.append(sport)
             }
         }
+        // Retired sports never surface, even from a saved order.
+        self.sportTabOrder.removeAll { SportType.retired.contains($0) }
         
         if let savedHidden = UserDefaults.standard.stringArray(forKey: "hiddenSportTabs") {
             self.hiddenSportTabs = Set(savedHidden.compactMap { SportType(rawValue: $0) })
@@ -627,6 +629,15 @@ class ScoreViewModel: ObservableObject {
         }
         // Fresh scores in hand — push them into any running Live Activities.
         GameActivityManager.shared.sync(pool: pool)
+
+        // Reminders for games that already kicked off are moot — clear the
+        // bell and any still-pending notification.
+        let stale = pool.filter { reminderGameIDs.contains($0.id) && $0.status.type.state != "pre" }.map(\.id)
+        if !stale.isEmpty {
+            for id in stale { reminderGameIDs.remove(id) }
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: stale.map { "game_\($0)" })
+            UserDefaults.standard.set(Array(reminderGameIDs), forKey: "reminderGameIDs")
+        }
 
         // A Live Activity tap can land before the first fetch on a cold
         // launch; open the game as soon as its scoreboard arrives.

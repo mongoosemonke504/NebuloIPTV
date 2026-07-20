@@ -602,6 +602,11 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         else if currentBackend == .ksplayer { ksPlayerView.pause(); ksPlayerView.removeFromSuperview() }
         currentBackend = .none
         isPlaying = false; isBuffering = false; stopTicker(); currentTime = 0; duration = 0
+        // A closed stream must not linger as "playing" on the Lock Screen /
+        // Control Center. An active PiP window is the one exception.
+        if !isPiPSessionActive {
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        }
     }
     
     public func seek(to time: Double) {

@@ -359,8 +359,23 @@ struct ChannelPreviewSheet: View {
         }
     }
 
-    private func record(_ prog: EPGProgram) {
-        guard !isScheduled(prog) else { return }
+    /// The scheduled (not yet finished) recording matching a guide row.
+    private func scheduledRecording(for prog: EPGProgram) -> Recording? {
+        recordingManager.recordings.first {
+            $0.channelName == channel.name
+                && abs($0.startTime.timeIntervalSince(prog.start)) < 60
+                && ($0.status == .scheduled || $0.status == .recording)
+        }
+    }
+
+    /// Tap = arm, tap again = undo — no trip to the Recordings screen to
+    /// cancel a bell you just set.
+    private func toggleRecord(_ prog: EPGProgram) {
+        if let existing = scheduledRecording(for: prog) {
+            ChannelViewModel.shared.triggerHaptic(.light)
+            recordingManager.deleteRecording(existing)
+            return
+        }
         ChannelViewModel.shared.triggerNotificationHaptic(.success)
         let streamCategory = ChannelViewModel.shared.categories.first { $0.id == channel.categoryID }
         recordingManager.scheduleRecording(
@@ -483,7 +498,7 @@ struct ChannelPreviewSheet: View {
                                         .lineLimit(1)
                                     Spacer(minLength: 8)
                                     Button {
-                                        record(prog)
+                                        toggleRecord(prog)
                                     } label: {
                                         Image(systemName: scheduled ? "checkmark.circle.fill" : "record.circle")
                                             .font(.system(size: 17, weight: .semibold))

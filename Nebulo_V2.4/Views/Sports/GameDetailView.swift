@@ -71,7 +71,11 @@ struct GameDetailView: View {
             .preferredColorScheme(.dark)
             // Same treatment as the player-stats cards: the app shows
             // through around and between the cards instead of a black frame.
+            // Background interaction keeps iOS from dimming and pushing back
+            // the screen underneath, so the gaps stay truly transparent even
+            // with the sheet at full height.
             .presentationBackground(.clear)
+            .presentationBackgroundInteraction(.enabled)
         }
     }
 
@@ -283,6 +287,7 @@ struct GameDetailContentView: View {
                 initialID: player.id,
                 side: lineupSide == "home" ? detail.homeSide : detail.awaySide,
                 showPhotos: true,
+                topRatedID: detail.topRatedPlayerID,
                 heatPoints: { detail.playerHeatPoints(athleteID: $0) }
             )
         }
@@ -293,7 +298,8 @@ struct GameDetailContentView: View {
                     ? [BoxSheetPlayer(id: row.athleteID, name: row.name, headshot: row.headshot, rating: row.rating, sections: [])]
                     : players,
                 initialID: row.athleteID,
-                side: boxSide == "home" ? detail.homeSide : detail.awaySide
+                side: boxSide == "home" ? detail.homeSide : detail.awaySide,
+                topRatedID: detail.topRatedPlayerID
             )
         }
         .task(id: request.id) {
@@ -1165,6 +1171,7 @@ struct GameDetailContentView: View {
                             rows: lineup.rows,
                             teamColor: side.color,
                             showPhotos: true,
+                            topRatedID: detail.topRatedPlayerID,
                             onSwipe: handleLineupSwipe
                         ) { tapped in
                             viewModel.triggerSelectionHaptic()
@@ -1232,7 +1239,7 @@ struct GameDetailContentView: View {
 
     private func lineupListRowContent(_ player: GDLineupPlayer) -> some View {
         HStack(spacing: 10) {
-            Text(player.jersey)
+            Text(player.age.map { "\($0)" } ?? "—")
                 .font(.system(size: 12, weight: .bold, design: .rounded))
                 .foregroundStyle(.secondary)
                 .frame(width: 24, alignment: .trailing)
@@ -1265,7 +1272,7 @@ struct GameDetailContentView: View {
                     .foregroundStyle(.green)
             }
             Spacer()
-            RatingBadge(rating: player.rating)
+            RatingBadge(rating: player.rating, isTop: player.id == detail.topRatedPlayerID)
         }
     }
 
@@ -1308,7 +1315,7 @@ struct GameDetailContentView: View {
                                 .frame(width: 22, height: 22)
                                 .background(Circle().fill(Color.white.opacity(0.08)))
                                 .clipShape(Circle())
-                            RatingBadge(rating: row.rating, compact: true)
+                            RatingBadge(rating: row.rating, compact: true, isTop: row.athleteID == detail.topRatedPlayerID)
                             Text(row.name)
                                 .font(.system(size: 13, weight: .semibold))
                                 .lineLimit(1)
@@ -1754,11 +1761,14 @@ struct BasesDiamondView: View {
 
 // MARK: - Rating badge
 
-/// FotMob-style colored rating chip: red < 5, orange 5–6.9, green 7–7.9,
-/// teal 8+. Hidden (dash) when no rating could be computed.
+/// FotMob-style colored rating chip: red < 5, orange 5–6.9, green 7+.
+/// Blue is reserved for the single best-rated player of the whole match
+/// (`isTop`) — everyone else caps at green no matter how high the number.
+/// Hidden (dash) when no rating could be computed.
 struct RatingBadge: View {
     let rating: Double?
     var compact: Bool = false
+    var isTop: Bool = false
 
     var body: some View {
         Group {
@@ -1781,11 +1791,11 @@ struct RatingBadge: View {
     }
 
     private func color(for rating: Double) -> Color {
+        if isTop { return Color(red: 0.1, green: 0.65, blue: 0.85) }
         switch rating {
         case ..<5.0: return Color(red: 0.85, green: 0.25, blue: 0.25)
         case ..<7.0: return Color(red: 0.95, green: 0.6, blue: 0.1)
-        case ..<8.0: return Color(red: 0.2, green: 0.7, blue: 0.35)
-        default: return Color(red: 0.1, green: 0.65, blue: 0.85)
+        default: return Color(red: 0.2, green: 0.7, blue: 0.35)
         }
     }
 }
@@ -1799,15 +1809,17 @@ struct PlayerStatsSheet: View {
     let initialID: String
     let side: GDTeamSide
     let showPhotos: Bool
+    let topRatedID: String?
     let heatPoints: (String) -> [GDHeatPoint]
 
     @State private var selection: String?
 
-    init(players: [GDLineupPlayer], initialID: String, side: GDTeamSide, showPhotos: Bool, heatPoints: @escaping (String) -> [GDHeatPoint]) {
+    init(players: [GDLineupPlayer], initialID: String, side: GDTeamSide, showPhotos: Bool, topRatedID: String?, heatPoints: @escaping (String) -> [GDHeatPoint]) {
         self.players = players
         self.initialID = initialID
         self.side = side
         self.showPhotos = showPhotos
+        self.topRatedID = topRatedID
         self.heatPoints = heatPoints
         _selection = State(initialValue: initialID)
     }
@@ -1819,7 +1831,7 @@ struct PlayerStatsSheet: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 14) {
                     ForEach(players) { player in
-                        PlayerStatsPage(player: player, side: side, showPhoto: showPhotos, points: heatPoints(player.id))
+                        PlayerStatsPage(player: player, side: side, showPhoto: showPhotos, isTopRated: player.id == topRatedID, points: heatPoints(player.id))
                             .background(Color(white: 0.10))
                             .containerRelativeFrame(.horizontal)
                             .clipShape(RoundedRectangle(cornerRadius: 24))
@@ -1846,8 +1858,10 @@ struct PlayerStatsSheet: View {
         .presentationDragIndicator(.visible)
         .presentationCornerRadius(30)
         // The game page shows through around the cards instead of a black
-        // frame.
+        // frame; background interaction stops iOS dimming/pushing back the
+        // screen underneath at the full-height detent.
         .presentationBackground(.clear)
+        .presentationBackgroundInteraction(.enabled(upThrough: .large))
     }
 }
 
@@ -1858,6 +1872,7 @@ private struct PlayerStatsPage: View {
     let player: GDLineupPlayer
     let side: GDTeamSide
     let showPhoto: Bool
+    let isTopRated: Bool
     let points: [GDHeatPoint]
 
     /// 0 while the big header is visible, 1 once it has scrolled past.
@@ -1906,7 +1921,7 @@ private struct PlayerStatsPage: View {
                 }
                 Text("·")
                 Text(side.name).lineLimit(1)
-                RatingBadge(rating: player.rating, compact: true)
+                RatingBadge(rating: player.rating, compact: true, isTop: isTopRated)
             }
             .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(.secondary)
@@ -1945,7 +1960,7 @@ private struct PlayerStatsPage: View {
                         }
                     )
                     .overlay(Circle().stroke(Color.white.opacity(0.15), lineWidth: 1))
-                RatingBadge(rating: player.rating)
+                RatingBadge(rating: player.rating, isTop: isTopRated)
                     .offset(x: 8, y: -2)
             }
             VStack(spacing: 4) {
@@ -1966,7 +1981,7 @@ private struct PlayerStatsPage: View {
                             .minimumScaleFactor(0.6)
                     }
                 }, label: "Team")
-                infoColumn(top: { Text(player.jersey.isEmpty ? "—" : "#\(player.jersey)").font(.system(size: 16, weight: .semibold)) }, label: "Jersey")
+                infoColumn(top: { Text(player.age.map { "\($0)" } ?? "—").font(.system(size: 16, weight: .semibold)) }, label: "Age")
             }
             .padding(.top, 6)
         }
@@ -1999,7 +2014,7 @@ private struct PlayerStatsPage: View {
     }
 
     private var sheetJerseyFallback: some View {
-        Text(player.jersey)
+        Text(player.jersey.isEmpty ? "—" : "#\(player.jersey)")
             .font(.system(size: 30, weight: .bold, design: .rounded))
             .foregroundStyle(.white.opacity(0.7))
     }
@@ -2088,13 +2103,15 @@ struct BoxPlayerStatsSheet: View {
     let players: [BoxSheetPlayer]
     let initialID: String
     let side: GDTeamSide
+    let topRatedID: String?
 
     @State private var selection: String?
 
-    init(players: [BoxSheetPlayer], initialID: String, side: GDTeamSide) {
+    init(players: [BoxSheetPlayer], initialID: String, side: GDTeamSide, topRatedID: String?) {
         self.players = players
         self.initialID = initialID
         self.side = side
+        self.topRatedID = topRatedID
         _selection = State(initialValue: initialID)
     }
 
@@ -2103,7 +2120,7 @@ struct BoxPlayerStatsSheet: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 14) {
                     ForEach(players) { player in
-                        BoxPlayerStatsPage(player: player, side: side)
+                        BoxPlayerStatsPage(player: player, side: side, isTopRated: player.id == topRatedID)
                             .background(Color(white: 0.10))
                             .containerRelativeFrame(.horizontal)
                             .clipShape(RoundedRectangle(cornerRadius: 24))
@@ -2128,14 +2145,17 @@ struct BoxPlayerStatsSheet: View {
         .presentationDragIndicator(.visible)
         .presentationCornerRadius(30)
         // The game page shows through around the cards instead of a black
-        // frame.
+        // frame; background interaction stops iOS dimming/pushing back the
+        // screen underneath at the full-height detent.
         .presentationBackground(.clear)
+        .presentationBackgroundInteraction(.enabled(upThrough: .large))
     }
 }
 
 private struct BoxPlayerStatsPage: View {
     let player: BoxSheetPlayer
     let side: GDTeamSide
+    let isTopRated: Bool
 
     @State private var collapse: CGFloat = 0
 
@@ -2182,7 +2202,7 @@ private struct BoxPlayerStatsPage: View {
                         }
                     )
                     .overlay(Circle().stroke(Color.white.opacity(0.15), lineWidth: 1))
-                RatingBadge(rating: player.rating)
+                RatingBadge(rating: player.rating, isTop: isTopRated)
                     .offset(x: 8, y: -2)
             }
             Text(player.name)
@@ -2213,7 +2233,7 @@ private struct BoxPlayerStatsPage: View {
                 .minimumScaleFactor(0.7)
             HStack(spacing: 5) {
                 Text(side.name).lineLimit(1)
-                RatingBadge(rating: player.rating, compact: true)
+                RatingBadge(rating: player.rating, compact: true, isTop: isTopRated)
             }
             .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(.secondary)
@@ -2256,6 +2276,8 @@ struct FormationPitchView: View {
     let teamColor: Color
     /// All-or-nothing: true only when every player's headshot resolved.
     var showPhotos: Bool = false
+    /// Match-best player — the only blue rating badge on the pitch.
+    var topRatedID: String? = nil
     /// Deliberate horizontal swipe over the pitch (raw translation).
     var onSwipe: (CGFloat) -> Void = { _ in }
     var onTapPlayer: (GDLineupPlayer) -> Void = { _ in }
@@ -2272,7 +2294,7 @@ struct FormationPitchView: View {
                     let y = rowHeight * (CGFloat(rowIndex) + 0.5)
                     let slotWidth = geo.size.width / CGFloat(row.count)
                     ForEach(row.indices, id: \.self) { colIndex in
-                        PitchPlayerChip(player: row[colIndex], teamColor: teamColor, showPhoto: showPhotos)
+                        PitchPlayerChip(player: row[colIndex], teamColor: teamColor, showPhoto: showPhotos, isTopRated: row[colIndex].id == topRatedID)
                             .position(x: slotWidth * (CGFloat(colIndex) + 0.5), y: y)
                     }
                 }
@@ -2325,6 +2347,7 @@ private struct PitchPlayerChip: View {
     let player: GDLineupPlayer
     let teamColor: Color
     var showPhoto: Bool = false
+    var isTopRated: Bool = false
 
     var body: some View {
         VStack(spacing: 3) {
@@ -2348,7 +2371,7 @@ private struct PitchPlayerChip: View {
                         }
                     )
                     .overlay(Circle().stroke(Color.white.opacity(0.35), lineWidth: 1))
-                RatingBadge(rating: player.rating, compact: true)
+                RatingBadge(rating: player.rating, compact: true, isTop: isTopRated)
                     .offset(x: 14, y: -6)
             }
             HStack(spacing: 2) {
@@ -2376,7 +2399,7 @@ private struct PitchPlayerChip: View {
     }
 
     private var jerseyFallback: some View {
-        Text(player.jersey)
+        Text(player.jersey.isEmpty ? "—" : player.jersey)
             .font(.system(size: 13, weight: .bold, design: .rounded))
             .foregroundStyle(.white)
     }

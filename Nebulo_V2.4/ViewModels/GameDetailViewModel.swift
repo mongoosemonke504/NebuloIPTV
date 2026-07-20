@@ -49,6 +49,7 @@ struct GDLineupPlayer: Identifiable {
     let subbedOnClock: String?
     let positionAbbrev: String?
     let headshot: String?
+    let age: Int?
     /// Match stat lines for the individual-stats sheet, in ESPN's order.
     let stats: [GDPlayerStatLine]
 }
@@ -245,10 +246,37 @@ final class GameDetailViewModel: ObservableObject {
             failed = false
             prefetchPlayerImages()
             resolveSoccerHeadshots()
+            recomputeTopRatedPlayer()
         } catch {
             if summary == nil { failed = true }
         }
         isLoading = false
+    }
+
+    /// The single best-rated player across BOTH teams — the only one whose
+    /// rating badge renders blue (FotMob's man-of-the-match treatment);
+    /// everyone else tops out at green. Recomputed on every score refresh.
+    @Published private(set) var topRatedPlayerID: String?
+
+    private func recomputeTopRatedPlayer() {
+        var best: (id: String, rating: Double)?
+        for homeAway in ["home", "away"] {
+            if let lineup = lineup(homeAway: homeAway) {
+                for player in lineup.starters + lineup.substitutes {
+                    if let rating = player.rating, rating > (best?.rating ?? -1) {
+                        best = (player.id, rating)
+                    }
+                }
+            }
+            for group in boxGroups(homeAway: homeAway) {
+                for row in group.rows where !row.athleteID.isEmpty {
+                    if let rating = row.rating, rating > (best?.rating ?? -1) {
+                        best = (row.athleteID, rating)
+                    }
+                }
+            }
+        }
+        topRatedPlayerID = best?.id
     }
 
     private var didPrefetchImages = false
@@ -600,25 +628,41 @@ final class GameDetailViewModel: ObservableObject {
         return "https://a.espncdn.com/combiner/i?img=/i/headshots/\(slug)/players/full/\(id).png&w=96&h=96&scale=crop"
     }
 
-    /// athleteID → photo URL found by name via TheSportsDB, for soccer
-    /// players ESPN has no image for.
+    /// athleteID → photo URL found by name via TheSportsDB/Wikipedia, for
+    /// soccer players ESPN has no image for.
     @Published var resolvedHeadshots: [String: String] = [:]
+    /// athleteID → age in years, from the same name lookups (ESPN's soccer
+    /// feed has no birth data at all).
+    @Published var resolvedAges: [String: Int] = [:]
     private var headshotResolveStarted = false
+    /// Athletes with a definitive lookup answer (even "no photo, no age") —
+    /// keeps the periodic re-sweep from re-targeting them forever.
+    private var lookupCompleted: Set<String> = []
 
     private func resolveSoccerHeadshots() {
         guard !headshotResolveStarted,
               request.leagueCode != nil || request.sport.isSoccer,
               let rosters = summary?.rosters else { return }
-        var targets: [(id: String, name: String)] = []
+        // Only players the UI can actually show: starters first (the pitch
+        // is what's on screen), then substitutes who came on. Unused bench
+        // players appear nowhere, so they'd just burn lookup budget.
+        // Players WITH an ESPN photo still get looked up — the age only
+        // comes from these lookups — but their ESPN image stays preferred.
+        var starters: [(id: String, name: String)] = []
+        var subs: [(id: String, name: String)] = []
         for roster in rosters {
             for player in roster.roster ?? [] {
-                guard let athlete = player.athlete, let id = athlete.id, !id.isEmpty,
-                      athlete.headshot?.href?.isEmpty != false,
-                      resolvedHeadshots[id] == nil else { continue }
+                let used = player.starter == true || player.subbedIn?.didSub == true
+                guard used,
+                      let athlete = player.athlete, let id = athlete.id, !id.isEmpty,
+                      !lookupCompleted.contains(id) else { continue }
                 let name = athlete.displayName ?? athlete.shortName ?? ""
-                if !name.isEmpty { targets.append((id, name)) }
+                guard !name.isEmpty else { continue }
+                if player.starter == true { starters.append((id, name)) }
+                else { subs.append((id, name)) }
             }
         }
+        let targets = starters + subs
         guard !targets.isEmpty else { return }
         headshotResolveStarted = true
         Task { [weak self] in
@@ -630,19 +674,25 @@ final class GameDetailViewModel: ObservableObject {
             while index < targets.count {
                 let batch = Array(targets[index..<min(index + 4, targets.count)])
                 index += 4
-                var found: [(String, String)] = []
-                await withTaskGroup(of: (String, String?).self) { group in
+                var found: [(String, SoccerHeadshotService.PlayerInfo)] = []
+                await withTaskGroup(of: (String, SoccerHeadshotService.PlayerInfo?).self) { group in
                     for target in batch {
-                        group.addTask { (target.id, await SoccerHeadshotService.shared.imageURL(for: target.name)) }
+                        group.addTask { (target.id, await SoccerHeadshotService.shared.info(for: target.name)) }
                     }
-                    for await (id, url) in group {
-                        if let url { found.append((id, url)) }
+                    for await (id, info) in group {
+                        if let info { found.append((id, info)) }
                     }
                 }
                 guard let self else { return }
-                for (id, url) in found {
-                    self.resolvedHeadshots[id] = url
-                    Task { _ = await ImageCache.shared.image(forKey: url) }
+                for (id, info) in found {
+                    self.lookupCompleted.insert(id)
+                    if !info.url.isEmpty {
+                        self.resolvedHeadshots[id] = info.url
+                        Task { _ = await ImageCache.shared.image(forKey: info.url) }
+                    }
+                    if let age = SoccerHeadshotService.age(fromBorn: info.born) {
+                        self.resolvedAges[id] = age
+                    }
                 }
                 if index < targets.count {
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
@@ -744,6 +794,7 @@ final class GameDetailViewModel: ObservableObject {
                 subbedOnClock: (p.subbedIn?.didSub == true) ? (p.subbedIn?.clock ?? "") : nil,
                 positionAbbrev: p.position?.abbreviation,
                 headshot: headshotURL(p.athlete) ?? resolvedHeadshots[p.athlete?.id ?? ""],
+                age: resolvedAges[p.athlete?.id ?? ""],
                 stats: statLines
             )
         }
@@ -969,7 +1020,7 @@ final class GameDetailViewModel: ObservableObject {
         var seen = Set<String>()
         var result: [GDShot] = []
         for play in plays {
-            guard let x = play.fieldPositionX, let y = play.fieldPositionY,
+            guard let rawX = play.fieldPositionX, let rawY = play.fieldPositionY,
                   let typeText = play.type?.type?.lowercased() ?? play.type?.text?.lowercased() else { continue }
             let isGoal = typeText.contains("goal")
                 && !typeText.contains("kick")
@@ -977,6 +1028,7 @@ final class GameDetailViewModel: ObservableObject {
                 && !typeText.contains("post")
             let isShot = typeText.contains("shot") || typeText.contains("attempt") || isGoal
             guard isShot, seen.insert(play.eventID).inserted else { continue }
+            let (x, y) = Self.normalizedShotXY(x: rawX, y: rawY)
             result.append(GDShot(
                 id: play.eventID,
                 x: x, y: y,
@@ -989,6 +1041,17 @@ final class GameDetailViewModel: ObservableObject {
         return result
     }
 
+    /// ESPN uses two coordinate dialects: live games send 0–100 with the
+    /// attacked goal at x = 100; archived games send 0–1 fractions with
+    /// the attacked goal at x = 0. Normalize both to the live convention —
+    /// without this, old games plotted every shot in one corner.
+    nonisolated private static func normalizedShotXY(x: Double, y: Double) -> (Double, Double) {
+        if x <= 1.0 && y <= 1.0 {
+            return ((1.0 - x) * 100.0, y * 100.0)
+        }
+        return (x, y)
+    }
+
     /// Every located play involving one athlete, for the player heatmap.
     /// ESPN only attaches pitch coordinates to shot-type plays, so this is
     /// effectively the player's shooting/chance map.
@@ -999,7 +1062,7 @@ final class GameDetailViewModel: ObservableObject {
         var seen = Set<String>()
         var out: [GDHeatPoint] = []
         for play in plays {
-            guard let x = play.fieldPositionX, let y = play.fieldPositionY,
+            guard let rawX = play.fieldPositionX, let rawY = play.fieldPositionY,
                   play.participants?.first?.athlete?.id == athleteID,
                   seen.insert(play.eventID).inserted else { continue }
             let typeText = (play.type?.type ?? play.type?.text ?? "").lowercased()
@@ -1008,6 +1071,7 @@ final class GameDetailViewModel: ObservableObject {
                 && !typeText.contains("goalkeeper")
                 && !typeText.contains("post")
             let isShot = typeText.contains("shot") || typeText.contains("attempt") || isGoal
+            let (x, y) = Self.normalizedShotXY(x: rawX, y: rawY)
             out.append(GDHeatPoint(id: play.eventID, x: x, y: y, isShot: isShot, isGoal: isGoal))
         }
         return out
@@ -1132,7 +1196,7 @@ final class GameDetailViewModel: ObservableObject {
                     category: category.displayName ?? category.name ?? "",
                     name: athlete.compactName,
                     statLine: entry.displayValue ?? "",
-                    headshot: athlete.headshot?.href,
+                    headshot: headshotURL(athlete) ?? resolvedHeadshots[athlete.id ?? ""],
                     isHome: isHome
                 ))
             }

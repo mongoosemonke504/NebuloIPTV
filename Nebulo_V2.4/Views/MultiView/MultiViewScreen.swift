@@ -218,11 +218,11 @@ struct MultiViewScreen: View {
                     layoutMode = defaultLayout(forStreamCount: activeIndices.count)
                     didApplyDefaultLayout = true
                 }
-                PlayerOrientationManager.shared.allowsLandscape = true
+                PlayerOrientationManager.shared.enableLandscape("multiview")
                 showChromeAndArmTimer()
             }
             .onDisappear {
-                PlayerOrientationManager.shared.allowsLandscape = false
+                PlayerOrientationManager.shared.disableLandscape("multiview")
                 MultiViewPlayerPool.shared.releaseAll()
                 chromeHideTask?.cancel()
             }

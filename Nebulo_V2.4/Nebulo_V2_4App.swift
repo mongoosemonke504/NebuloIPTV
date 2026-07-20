@@ -14,15 +14,31 @@ final class PlayerOrientationManager {
     static let shared = PlayerOrientationManager()
     private init() {}
 
-    var allowsLandscape = false {
-        didSet {
-            // UIKit ignores orientation invalidation that lands mid-transition
-            // (e.g. while a fullScreenCover is still presenting), so re-assert
-            // once more after the presentation has settled.
-            notifyWindows()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                self.notifyWindows()
-            }
+    /// Screens that currently want landscape available. Ownership instead
+    /// of one shared bool: opening Multi-View from the video player had the
+    /// player's dismissal land AFTER Multi-View's appearance, yanking
+    /// landscape straight back off.
+    private var owners = Set<String>()
+
+    var allowsLandscape: Bool { !owners.isEmpty }
+
+    func enableLandscape(_ owner: String) {
+        owners.insert(owner)
+        invalidate()
+    }
+
+    func disableLandscape(_ owner: String) {
+        owners.remove(owner)
+        invalidate()
+    }
+
+    private func invalidate() {
+        // UIKit ignores orientation invalidation that lands mid-transition
+        // (e.g. while a fullScreenCover is still presenting), so re-assert
+        // once more after the presentation has settled.
+        notifyWindows()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            self.notifyWindows()
         }
     }
 

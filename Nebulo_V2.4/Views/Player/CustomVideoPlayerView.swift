@@ -197,7 +197,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
         .simultaneousGesture(playerSwipeGesture)
         .onAppear {
             // Unlock landscape so the player can rotate while watching.
-            PlayerOrientationManager.shared.allowsLandscape = true
+            PlayerOrientationManager.shared.enableLandscape("player")
 
             setupPlayer()
             if showQuickSwitcher {
@@ -214,7 +214,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
             dismissalTask?.cancel()
 
             // Re-lock to portrait now that the player is gone.
-            PlayerOrientationManager.shared.allowsLandscape = false
+            PlayerOrientationManager.shared.disableLandscape("player")
             lockToPortrait()
 
             if scenePhase == .active && viewModel?.miniPlayerChannel == nil && viewModel?.triggerMultiView != true {

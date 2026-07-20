@@ -528,8 +528,7 @@ struct ContentManagementCard: View {
 
 struct SupportCard: View {
     @AppStorage("showSupportPopup") private var showSupportPopup = true
-    @State private var snapshotCopied = false
-    
+
     var body: some View {
         SettingsCard {
             VStack(spacing: 0) {
@@ -547,22 +546,6 @@ struct SupportCard: View {
 
                 Button(action: { UIApplication.shared.open(URL(string: "https://buymeacoffee.com/mongoosemonke")!) }) {
                     SettingsRow(icon: "cup.and.saucer.fill", title: "Buy Me a Coffee", iconColor: .yellow)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.primary)
-
-                Button(action: {
-                    UIPasteboard.general.string = AppDefaults.snapshotJSON()
-                    snapshotCopied = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { snapshotCopied = false }
-                }) {
-                    SettingsRow(
-                        icon: snapshotCopied ? "checkmark.circle.fill" : "doc.on.doc.fill",
-                        title: snapshotCopied ? "Copied!" : "Copy Settings Snapshot",
-                        subtitle: snapshotCopied ? nil : "Export appearance & playback prefs as JSON",
-                        iconColor: snapshotCopied ? .green : .gray,
-                        showChevron: false
-                    )
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.primary)

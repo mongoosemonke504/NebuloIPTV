@@ -27,7 +27,14 @@ enum SportType: String, CaseIterable, Identifiable, Sendable {
     case mVolleyball = "NCAA M-Volleyball"
     case wVolleyball = "NCAA W-Volleyball"
     case mma = "MMA"
-    
+
+    /// Sports pulled from the hub's chip row. The cases stay (saved
+    /// preferences, recordings and old orders still decode), they just
+    /// never surface as tabs.
+    nonisolated static let retired: Set<SportType> = [
+        .collegeHockey, .softball, .mLacrosse, .wLacrosse, .mVolleyball, .wVolleyball
+    ]
+
     var id: String { rawValue }
     nonisolated var endpoint: String {
         switch self {
