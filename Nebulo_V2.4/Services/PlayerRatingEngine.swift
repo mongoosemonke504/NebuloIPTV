@@ -17,6 +17,12 @@ nonisolated enum PlayerRatingEngine {
 
     /// Rates a soccer lineup player from the roster stat list. Returns nil
     /// for players who never entered the match.
+    /// FotMob-style: 6.0 is a quiet-but-clean game, end product (goals,
+    /// assists) moves the needle most, sustained involvement (passing,
+    /// defending) accumulates, mistakes and cards subtract, and short
+    /// cameos are damped toward average because a 10-minute sub simply
+    /// hasn't produced enough evidence either way. Every stat ESPN sends
+    /// for a soccer player feeds in.
     static func soccerRating(stats: [GSPlayerStat], isGoalkeeper: Bool) -> Double? {
         var v: [String: Double] = [:]
         for s in stats {
@@ -29,41 +35,56 @@ nonisolated enum PlayerRatingEngine {
         guard (v["APP"] ?? 0) > 0 else { return nil }
 
         var r = 6.0
-        r += (v["G"] ?? 0) * 1.15          // goals
-        r += (v["A"] ?? 0) * 0.85          // assists
-        r += (v["SOG"] ?? 0) * 0.20        // shots on target
-        r += max(0, (v["SHOT"] ?? 0) - (v["SOG"] ?? 0)) * 0.03
-        r += (v["FA"] ?? 0) * 0.06         // fouls drawn
-        r -= (v["FC"] ?? 0) * 0.10         // fouls committed
-        r -= (v["OF"] ?? 0) * 0.08         // offsides
-        r -= (v["YC"] ?? 0) * 0.45
-        r -= (v["RC"] ?? 0) * 1.80
-        r -= (v["OG"] ?? 0) * 1.30
 
-        // Ball progression / retention. ESPN has no dribble or duel data,
-        // so passing volume + accuracy, crosses and long balls are the
-        // closest proxies for on-ball quality.
+        // End product. A keeper or defender scoring is a bigger event.
+        let goals = v["G"] ?? 0
+        r += goals * (isGoalkeeper ? 1.60 : 1.10)
+        r += (v["A"] ?? 0) * 0.80
+        let onTarget = v["SOG"] ?? 0
+        r += max(0, onTarget - goals) * 0.16   // kept the keeper working
+        r -= max(0, (v["SHOT"] ?? 0) - onTarget) * 0.02  // wayward shooting
+
+        // Ball use. ESPN has no dribble or duel data, so passing volume ×
+        // accuracy, crosses and long balls are the on-ball proxies. ~72%
+        // is average completion; credit scales with volume but caps so a
+        // metronome center-back can't outscore a match-winner.
         let passes = v["totalPasses"] ?? 0
         if passes >= 5 {
             let accuracy = (v["accuratePasses"] ?? 0) / passes
-            // ~72% is league-average completion; ±credit scales with volume
-            // but caps so a metronome CB can't outscore a match-winner.
-            r += (accuracy - 0.72) * min(passes, 60) * 0.045
+            r += (accuracy - 0.72) * min(passes, 70) * 0.05
         }
-        r += (v["accurateCrosses"] ?? 0) * 0.10
+        r += (v["accurateCrosses"] ?? 0) * 0.09
         r += (v["accurateLongBalls"] ?? 0) * 0.03
+        r -= (v["OF"] ?? 0) * 0.06             // offsides
 
-        // Defensive actions.
-        r += (v["effectiveTackles"] ?? 0) * 0.15
-        r += (v["interceptions"] ?? 0) * 0.12
-        r += (v["effectiveClearance"] ?? 0) * 0.05
-        r += (v["blockedShots"] ?? 0) * 0.10
+        // Defensive work rate.
+        r += (v["effectiveTackles"] ?? 0) * 0.14
+        r += (v["interceptions"] ?? 0) * 0.11
+        r += (v["effectiveClearance"] ?? 0) * 0.04
+        r += (v["blockedShots"] ?? 0) * 0.09
 
+        // Duels won/lost show up as fouls drawn/committed.
+        r += (v["FA"] ?? 0) * 0.05
+        r -= (v["FC"] ?? 0) * 0.08
+
+        // Discipline and catastrophes.
+        r -= (v["YC"] ?? 0) * 0.40
+        r -= (v["RC"] ?? 0) * 1.75
+        r -= (v["OG"] ?? 0) * 1.25
+
+        let minutes = v["minutes"] ?? 90
         if isGoalkeeper {
-            r += (v["SV"] ?? 0) * 0.28     // saves
-            r -= (v["GA"] ?? 0) * 0.40     // goals conceded
-            r += (v["crossesCaught"] ?? 0) * 0.08
-            r += (v["punches"] ?? 0) * 0.04
+            let conceded = v["GA"] ?? 0
+            r += (v["SV"] ?? 0) * 0.26
+            r -= conceded * 0.45
+            r += (v["crossesCaught"] ?? 0) * 0.07
+            r += (v["punches"] ?? 0) * 0.03
+            if conceded == 0 && minutes >= 45 { r += 0.45 }  // clean sheet
+        }
+
+        // Low-minute damping: pull short cameos toward 6.0.
+        if minutes > 0 && minutes < 30 {
+            r = 6.0 + (r - 6.0) * (0.4 + 0.6 * minutes / 30)
         }
         return clampRating(r)
     }

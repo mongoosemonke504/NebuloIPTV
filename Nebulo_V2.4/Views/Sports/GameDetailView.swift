@@ -47,8 +47,9 @@ struct GameDetailView: View {
                                 GameDetailContentView(request: page, viewModel: viewModel, scoreViewModel: scoreViewModel, accentColor: accentColor, onPageGame: pageGame)
                             }
                         }
+                        .background(Color(white: 0.10))
                         .containerRelativeFrame(.horizontal)
-                        .clipShape(RoundedRectangle(cornerRadius: 28))
+                        .clipShape(RoundedRectangle(cornerRadius: 24))
                         .allowsHitTesting(page.id == currentID)
                         .id(page.id)
                     }
@@ -58,7 +59,6 @@ struct GameDetailView: View {
             .scrollTargetBehavior(.viewAligned)
             .safeAreaPadding(.horizontal, 24)
             .scrollPosition(id: $currentID)
-            .background(Color(red: 0.03, green: 0.03, blue: 0.05).ignoresSafeArea())
             .onAppear {
                 // The scrollPosition binding's initial value alone lands on
                 // the wrong page in a lazy carousel — anchor it explicitly.
@@ -67,7 +67,11 @@ struct GameDetailView: View {
             .onChange(of: currentID) { _, _ in
                 ChannelViewModel.shared.triggerSelectionHaptic()
             }
+            .padding(.top, 16)
             .preferredColorScheme(.dark)
+            // Same treatment as the player-stats cards: the app shows
+            // through around and between the cards instead of a black frame.
+            .presentationBackground(.clear)
         }
     }
 
@@ -554,7 +558,8 @@ struct GameDetailContentView: View {
 
     private var backgroundLayer: some View {
         ZStack {
-            Color(red: 0.05, green: 0.05, blue: 0.08).ignoresSafeArea()
+            // Same card base as the player-stats pages.
+            Color(white: 0.10).ignoresSafeArea()
             // Strong team-color wash, Apple Sports-style: away team floods
             // in from the top-left, home from the top-right, both fading
             // into the dark base toward the bottom.
@@ -1836,15 +1841,17 @@ struct PlayerStatsSheet: View {
             }
         }
         .padding(.top, 16)
-        .background(Color(white: 0.06).ignoresSafeArea())
         .preferredColorScheme(.dark)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .presentationCornerRadius(30)
+        // The game page shows through around the cards instead of a black
+        // frame.
+        .presentationBackground(.clear)
     }
 }
 
-/// One player's page: header, heatmap of located events, grouped stat rows.
+/// One player's page: header, then grouped stat rows.
 /// The name/position strip pins to the top once the header scrolls away —
 /// same behavior as the game page's compact score bar.
 private struct PlayerStatsPage: View {
@@ -1865,7 +1872,6 @@ private struct PlayerStatsPage: View {
         ScrollView(showsIndicators: false) {
             VStack(spacing: 26) {
                 header
-                heatmapSection
                 statSection("Top stats", keys: Self.topKeys, extraRows: xgRows)
                 statSection("Attack", keys: Self.attackKeys)
                 statSection("Defense", keys: Self.defenseKeys)
@@ -1909,29 +1915,6 @@ private struct PlayerStatsPage: View {
         .padding(.vertical, 10)
         // Same translucent fade as the game page's pinned score bar.
         .background(alignment: .top) { PinnedHeaderGradient() }
-    }
-
-    /// FotMob-style heat blobs from the player's located plays. ESPN only
-    /// attaches coordinates to shots/chances, so the map covers those.
-    @ViewBuilder private var heatmapSection: some View {
-        if !points.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text("Heatmap")
-                        .font(.system(size: 20, weight: .bold))
-                    Spacer()
-                    Text("Shots")
-                        .font(.system(size: 15))
-                        .foregroundStyle(.secondary)
-                    Text("\(points.filter { $0.isShot }.count)")
-                        .font(.system(size: 17, weight: .bold))
-                }
-                PlayerHeatmapView(points: points)
-                    .aspectRatio(105.0 / 68.0, contentMode: .fit)
-                    .frame(maxWidth: .infinity)
-            }
-            .frame(maxWidth: .infinity)
-        }
     }
 
     /// Estimated xG row appended to Top stats when the player took a shot.
@@ -2140,11 +2123,13 @@ struct BoxPlayerStatsSheet: View {
             }
         }
         .padding(.top, 16)
-        .background(Color(white: 0.06).ignoresSafeArea())
         .preferredColorScheme(.dark)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .presentationCornerRadius(30)
+        // The game page shows through around the cards instead of a black
+        // frame.
+        .presentationBackground(.clear)
     }
 }
 
@@ -2256,83 +2241,6 @@ private struct BoxPlayerStatsPage: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-// MARK: - Player heatmap
-
-/// FotMob-style heat blobs on a full pitch, attacking left → right. Blob
-/// color scales with local density (green → yellow → red where the
-/// player's actions cluster).
-struct PlayerHeatmapView: View {
-    let points: [GDHeatPoint]
-
-    var body: some View {
-        GeometryReader { geo in
-            let size = geo.size
-            ZStack {
-                pitchLines(in: size)
-                Canvas { context, _ in
-                    context.addFilter(.blur(radius: 9))
-                    context.blendMode = .plusLighter
-                    for point in points {
-                        let center = position(for: point, in: size)
-                        let density = points.filter {
-                            abs($0.x - point.x) < 14 && abs($0.y - point.y) < 14
-                        }.count
-                        let heat: Color = density >= 3 ? Color(red: 0.95, green: 0.35, blue: 0.15)
-                            : density == 2 ? Color(red: 0.95, green: 0.75, blue: 0.15)
-                            : Color(red: 0.25, green: 0.75, blue: 0.35)
-                        let radius: CGFloat = 26
-                        let rect = CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
-                        context.fill(
-                            Path(ellipseIn: rect),
-                            with: .radialGradient(
-                                Gradient(colors: [heat.opacity(0.55), heat.opacity(0.0)]),
-                                center: center,
-                                startRadius: 0,
-                                endRadius: radius
-                            )
-                        )
-                    }
-                }
-                // Attack-direction marker, FotMob's "»" at the halfway line.
-                Image(systemName: "chevron.right.2")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.45))
-                    .position(x: size.width / 2, y: 10)
-            }
-        }
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.04)))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.12), lineWidth: 1))
-    }
-
-    private func position(for point: GDHeatPoint, in size: CGSize) -> CGPoint {
-        CGPoint(
-            x: min(max(size.width * CGFloat(point.x / 100.0), 6), size.width - 6),
-            y: min(max(size.height * CGFloat(point.y / 100.0), 6), size.height - 6)
-        )
-    }
-
-    private func pitchLines(in size: CGSize) -> some View {
-        Canvas { context, _ in
-            let line = Color.white.opacity(0.10)
-            var mid = Path()
-            mid.move(to: CGPoint(x: size.width / 2, y: 0))
-            mid.addLine(to: CGPoint(x: size.width / 2, y: size.height))
-            context.stroke(mid, with: .color(line), lineWidth: 1)
-            let circle = CGRect(x: size.width / 2 - 28, y: size.height / 2 - 28, width: 56, height: 56)
-            context.stroke(Path(ellipseIn: circle), with: .color(line), lineWidth: 1)
-            let boxHeight = size.height * 0.56
-            let boxWidth = size.width * 0.16
-            context.stroke(Path(CGRect(x: 0, y: (size.height - boxHeight) / 2, width: boxWidth, height: boxHeight)), with: .color(line), lineWidth: 1)
-            context.stroke(Path(CGRect(x: size.width - boxWidth, y: (size.height - boxHeight) / 2, width: boxWidth, height: boxHeight)), with: .color(line), lineWidth: 1)
-            let smallHeight = size.height * 0.26
-            let smallWidth = size.width * 0.06
-            context.stroke(Path(CGRect(x: 0, y: (size.height - smallHeight) / 2, width: smallWidth, height: smallHeight)), with: .color(line), lineWidth: 1)
-            context.stroke(Path(CGRect(x: size.width - smallWidth, y: (size.height - smallHeight) / 2, width: smallWidth, height: smallHeight)), with: .color(line), lineWidth: 1)
-        }
     }
 }
 

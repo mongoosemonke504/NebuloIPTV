@@ -244,6 +244,7 @@ final class GameDetailViewModel: ObservableObject {
             summary = fetched
             failed = false
             prefetchPlayerImages()
+            resolveSoccerHeadshots()
         } catch {
             if summary == nil { failed = true }
         }
@@ -591,15 +592,67 @@ final class GameDetailViewModel: ObservableObject {
     private func headshotURL(_ athlete: GSAthlete?) -> String? {
         if let href = athlete?.headshot?.href, !href.isEmpty { return href }
         guard let id = athlete?.id, !id.isEmpty else { return nil }
-        let league: String
-        if request.leagueCode != nil || request.sport.isSoccer {
-            league = "soccer"
-        } else if let path = request.sport.apiPath, let slug = path.split(separator: "/").last {
-            league = String(slug)
-        } else {
-            return nil
+        // Soccer: no CDN guess — ESPN's soccer headshot path 404s for all
+        // but a handful of players. Missing ones resolve by name through
+        // SoccerHeadshotService instead (see resolvedHeadshots).
+        if request.leagueCode != nil || request.sport.isSoccer { return nil }
+        guard let path = request.sport.apiPath, let slug = path.split(separator: "/").last else { return nil }
+        return "https://a.espncdn.com/combiner/i?img=/i/headshots/\(slug)/players/full/\(id).png&w=96&h=96&scale=crop"
+    }
+
+    /// athleteID → photo URL found by name via TheSportsDB, for soccer
+    /// players ESPN has no image for.
+    @Published var resolvedHeadshots: [String: String] = [:]
+    private var headshotResolveStarted = false
+
+    private func resolveSoccerHeadshots() {
+        guard !headshotResolveStarted,
+              request.leagueCode != nil || request.sport.isSoccer,
+              let rosters = summary?.rosters else { return }
+        var targets: [(id: String, name: String)] = []
+        for roster in rosters {
+            for player in roster.roster ?? [] {
+                guard let athlete = player.athlete, let id = athlete.id, !id.isEmpty,
+                      athlete.headshot?.href?.isEmpty != false,
+                      resolvedHeadshots[id] == nil else { continue }
+                let name = athlete.displayName ?? athlete.shortName ?? ""
+                if !name.isEmpty { targets.append((id, name)) }
+            }
         }
-        return "https://a.espncdn.com/combiner/i?img=/i/headshots/\(league)/players/full/\(id).png&w=96&h=96&scale=crop"
+        guard !targets.isEmpty else { return }
+        headshotResolveStarted = true
+        Task { [weak self] in
+            // Small batches with a breather between them — the free API
+            // tier rate-limits bursts, and a full two-squad burst is what
+            // left the second team photo-less. Cached names cost nothing,
+            // so only the first-ever look at each player pays this pace.
+            var index = 0
+            while index < targets.count {
+                let batch = Array(targets[index..<min(index + 4, targets.count)])
+                index += 4
+                var found: [(String, String)] = []
+                await withTaskGroup(of: (String, String?).self) { group in
+                    for target in batch {
+                        group.addTask { (target.id, await SoccerHeadshotService.shared.imageURL(for: target.name)) }
+                    }
+                    for await (id, url) in group {
+                        if let url { found.append((id, url)) }
+                    }
+                }
+                guard let self else { return }
+                for (id, url) in found {
+                    self.resolvedHeadshots[id] = url
+                    Task { _ = await ImageCache.shared.image(forKey: url) }
+                }
+                if index < targets.count {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                }
+            }
+            // Rate-limited lookups aren't cached, so let the next live-poll
+            // cycle sweep up anything still missing (cached answers make a
+            // re-sweep nearly free).
+            self?.headshotResolveStarted = false
+        }
     }
 
     // MARK: Soccer lineups
@@ -690,7 +743,7 @@ final class GameDetailViewModel: ObservableObject {
                 subbedOffClock: (p.subbedOut?.didSub == true) ? (p.subbedOut?.clock ?? "") : nil,
                 subbedOnClock: (p.subbedIn?.didSub == true) ? (p.subbedIn?.clock ?? "") : nil,
                 positionAbbrev: p.position?.abbreviation,
-                headshot: headshotURL(p.athlete),
+                headshot: headshotURL(p.athlete) ?? resolvedHeadshots[p.athlete?.id ?? ""],
                 stats: statLines
             )
         }
@@ -735,10 +788,11 @@ final class GameDetailViewModel: ObservableObject {
             let abbrev = player.position?.abbreviation?.uppercased()
             return (player, bandRank(abbrev, backRowCount: backRowCount), sideRank(abbrev))
         }
-        // Need nearly every player labeled for the band sort to mean
-        // anything; otherwise skip the pitch (the view shows the list
-        // instead) — place-order chunking would scramble the rows.
-        guard ranked.filter({ $0.band == nil }).count <= 1 else { return [] }
+        // Tolerate a few unlabeled players (they slot in as midfielders in
+        // the sort below) — bail to the list only when the labels are so
+        // sparse the layout would be a guess. Bailing on a single odd
+        // abbreviation put one team on the pitch and the other in a line.
+        guard ranked.filter({ $0.band == nil }).count <= 3 else { return [] }
         let ordered = ranked.sorted { a, b in
             let ab = a.band ?? 3, bb = b.band ?? 3
             if ab != bb { return ab < bb }
@@ -774,7 +828,13 @@ final class GameDetailViewModel: ObservableObject {
         if a.hasPrefix("DM") { return 2 }
         if a.hasPrefix("CM") || a == "RM" || a == "LM" || a == "M" { return 3 }
         if a.hasPrefix("AM") { return 4 }
-        if a.hasPrefix("F") || a.hasPrefix("CF") || a == "ST" || a == "RW" || a == "LW" { return 5 }
+        if a.hasPrefix("F") || a.hasPrefix("CF") || a == "ST" || a == "SS" || a == "RW" || a == "LW" { return 5 }
+        // Catch-alls for the abbreviation variants ESPN mixes in ("CB",
+        // "RCB", "RCM", "W"…) — an unrecognized label was tanking the whole
+        // pitch layout for that team.
+        if a.hasSuffix("B") { return 1 }
+        if a.hasSuffix("M") { return 3 }
+        if a.hasSuffix("W") { return 5 }
         return nil
     }
 
