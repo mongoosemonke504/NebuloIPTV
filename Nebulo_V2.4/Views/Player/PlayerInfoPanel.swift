@@ -560,13 +560,15 @@ struct PlayerInfoPanel: View {
                             // No record bell during recording playback
                             onRecord: isRecordingPlayback ? nil : {
                                 guard !alreadyScheduled else { return }
-                                ChannelViewModel.shared.triggerSelectionHaptic()
+                                ChannelViewModel.shared.triggerNotificationHaptic(.success)
+                                let streamCategory = ChannelViewModel.shared.categories.first { $0.id == channel.categoryID }
                                 recordingManager.scheduleRecording(
                                     channel: channel,
                                     startTime: max(prog.start, Date()),
                                     endTime: prog.stop,
                                     programTitle: prog.title,
-                                    programDescription: prog.description
+                                    programDescription: prog.description,
+                                    category: .guess(channel: channel, category: streamCategory, program: prog)
                                 )
                             }
                         )
@@ -772,13 +774,12 @@ struct PlayerInfoPanel: View {
                 withAnimation { showAudioPanel.toggle() }
             }
             pill(icon: "captions.bubble.fill", label: subtitlePillLabel,
-                 isEnabled: !playerManager.availableSubtitles.isEmpty) {
+                 isEnabled: playerManager.hasSelectableSubtitles) {
                 ChannelViewModel.shared.triggerSelectionHaptic()
                 withAnimation { showSubtitlePanel.toggle() }
             }
             pill(icon: isFavorited ? "star.fill" : "star", label: "Favorite",
                  isEnabled: true, tinted: isFavorited) {
-                ChannelViewModel.shared.triggerSelectionHaptic()
                 viewModel.toggleFavorite(channel.id)
             }
         }
@@ -790,7 +791,7 @@ struct PlayerInfoPanel: View {
         return "Audio"
     }
     private var subtitlePillLabel: String {
-        if playerManager.availableSubtitles.isEmpty { return "Subtitles" }
+        if !playerManager.hasSelectableSubtitles { return "Subtitles" }
         return playerManager.currentSubtitle?.name ?? "Subtitles"
     }
 

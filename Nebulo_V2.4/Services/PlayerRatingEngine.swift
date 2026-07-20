@@ -20,7 +20,11 @@ nonisolated enum PlayerRatingEngine {
     static func soccerRating(stats: [GSPlayerStat], isGoalkeeper: Bool) -> Double? {
         var v: [String: Double] = [:]
         for s in stats {
-            if let key = s.abbreviation ?? s.name { v[key] = s.value ?? 0 }
+            // Keyed by BOTH forms — scoring stats read best by abbreviation
+            // ("G", "SOG"), the passing/defending extras only exist under
+            // their full names ("accuratePasses", "effectiveTackles").
+            if let key = s.abbreviation { v[key] = s.value ?? 0 }
+            if let key = s.name { v[key] = s.value ?? 0 }
         }
         guard (v["APP"] ?? 0) > 0 else { return nil }
 
@@ -35,9 +39,31 @@ nonisolated enum PlayerRatingEngine {
         r -= (v["YC"] ?? 0) * 0.45
         r -= (v["RC"] ?? 0) * 1.80
         r -= (v["OG"] ?? 0) * 1.30
+
+        // Ball progression / retention. ESPN has no dribble or duel data,
+        // so passing volume + accuracy, crosses and long balls are the
+        // closest proxies for on-ball quality.
+        let passes = v["totalPasses"] ?? 0
+        if passes >= 5 {
+            let accuracy = (v["accuratePasses"] ?? 0) / passes
+            // ~72% is league-average completion; ±credit scales with volume
+            // but caps so a metronome CB can't outscore a match-winner.
+            r += (accuracy - 0.72) * min(passes, 60) * 0.045
+        }
+        r += (v["accurateCrosses"] ?? 0) * 0.10
+        r += (v["accurateLongBalls"] ?? 0) * 0.03
+
+        // Defensive actions.
+        r += (v["effectiveTackles"] ?? 0) * 0.15
+        r += (v["interceptions"] ?? 0) * 0.12
+        r += (v["effectiveClearance"] ?? 0) * 0.05
+        r += (v["blockedShots"] ?? 0) * 0.10
+
         if isGoalkeeper {
             r += (v["SV"] ?? 0) * 0.28     // saves
             r -= (v["GA"] ?? 0) * 0.40     // goals conceded
+            r += (v["crossesCaught"] ?? 0) * 0.08
+            r += (v["punches"] ?? 0) * 0.04
         }
         return clampRating(r)
     }

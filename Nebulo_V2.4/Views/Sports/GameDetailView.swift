@@ -44,7 +44,7 @@ struct GameDetailView: View {
                             } else if page.sport == .mma {
                                 MMADetailContentView(request: page, viewModel: viewModel, accentColor: accentColor)
                             } else {
-                                GameDetailContentView(request: page, viewModel: viewModel, accentColor: accentColor, onPageGame: pageGame)
+                                GameDetailContentView(request: page, viewModel: viewModel, scoreViewModel: scoreViewModel, accentColor: accentColor, onPageGame: pageGame)
                             }
                         }
                         .containerRelativeFrame(.horizontal)
@@ -102,13 +102,19 @@ private struct GDScrollMetrics: Equatable {
 struct GameDetailContentView: View {
     let request: GameDetailRequest
     @ObservedObject var viewModel: ChannelViewModel
+    @ObservedObject var scoreViewModel: ScoreViewModel
     let accentColor: Color
     let onPageGame: (Int) -> Void
 
     @StateObject private var detail: GameDetailViewModel
+    @ObservedObject private var activityManager = GameActivityManager.shared
     @Environment(\.dismiss) private var dismiss
     @State private var lineupSide = "home"
     @State private var boxSide = "home"
+    /// Lineup player whose individual-stats sheet is up.
+    @State private var lineupStatsPlayer: GDLineupPlayer?
+    /// Box-score player (US sports) whose individual-stats sheet is up.
+    @State private var boxStatsPlayer: GDBoxRow?
     @State private var scrolledTab: GDTab? = .overview
     /// 0 at rest, 1 once the big header has scrolled past. Tracks the live
     /// scroll offset directly (no withAnimation) so the compact score bar
@@ -143,9 +149,10 @@ struct GameDetailContentView: View {
         case table = "Table"
     }
 
-    init(request: GameDetailRequest, viewModel: ChannelViewModel, accentColor: Color, onPageGame: @escaping (Int) -> Void = { _ in }) {
+    init(request: GameDetailRequest, viewModel: ChannelViewModel, scoreViewModel: ScoreViewModel, accentColor: Color, onPageGame: @escaping (Int) -> Void = { _ in }) {
         self.request = request
         self.viewModel = viewModel
+        self.scoreViewModel = scoreViewModel
         self.accentColor = accentColor
         self.onPageGame = onPageGame
         _detail = StateObject(wrappedValue: GameDetailViewModel(request: request))
@@ -256,13 +263,66 @@ struct GameDetailContentView: View {
             }
         }
         .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
+            // A player sheet expanding to full screen pushes this whole page
+            // back — the probes report the transformed frames and the chips
+            // would slide around behind the sheet. Freeze them while it's up.
+            guard lineupStatsPlayer == nil && boxStatsPlayer == nil else { return }
             guard let containerTop = offsets["gdContainer"], let chipsTop = offsets["gdChips"] else { return }
             chipStick.set(max(0, containerTop + barHeight - chipsTop))
         }
         .preferredColorScheme(.dark)
+        .sheet(item: $lineupStatsPlayer) { player in
+            let lineup = detail.lineup(homeAway: lineupSide)
+            let roster = (lineup?.starters ?? []) + (lineup?.substitutes ?? [])
+            PlayerStatsSheet(
+                players: roster.isEmpty ? [player] : roster,
+                initialID: player.id,
+                side: lineupSide == "home" ? detail.homeSide : detail.awaySide,
+                showPhotos: true,
+                heatPoints: { detail.playerHeatPoints(athleteID: $0) }
+            )
+        }
+        .sheet(item: $boxStatsPlayer) { row in
+            let players = boxSheetPlayers()
+            BoxPlayerStatsSheet(
+                players: players.isEmpty
+                    ? [BoxSheetPlayer(id: row.athleteID, name: row.name, headshot: row.headshot, rating: row.rating, sections: [])]
+                    : players,
+                initialID: row.athleteID,
+                side: boxSide == "home" ? detail.homeSide : detail.awaySide
+            )
+        }
         .task(id: request.id) {
             await detail.refreshLoop()
         }
+    }
+
+    /// One entry per athlete on the current box-score side, their rows from
+    /// every stat group merged into sections (a two-way player shows both).
+    private func boxSheetPlayers() -> [BoxSheetPlayer] {
+        let groups = detail.boxGroups(homeAway: boxSide)
+        var order: [String] = []
+        var byID: [String: BoxSheetPlayer] = [:]
+        for group in groups {
+            for row in group.rows where !row.athleteID.isEmpty {
+                let lines = zip(group.columns, row.values).map { column, value in
+                    GDPlayerStatLine(key: "\(group.title)-\(column)", label: column, value: value)
+                }
+                let section = BoxSheetSection(title: group.title, lines: lines)
+                if var existing = byID[row.athleteID] {
+                    existing.sections.append(section)
+                    if existing.rating == nil { existing.rating = row.rating }
+                    byID[row.athleteID] = existing
+                } else {
+                    order.append(row.athleteID)
+                    byID[row.athleteID] = BoxSheetPlayer(
+                        id: row.athleteID, name: row.name, headshot: row.headshot,
+                        rating: row.rating, sections: [section]
+                    )
+                }
+            }
+        }
+        return order.compactMap { byID[$0] }
     }
 
     /// Apple Sports-style pinned bar once the big header scrolls away: each
@@ -583,37 +643,90 @@ struct GameDetailContentView: View {
     // MARK: Watch
 
     private var watchButton: some View {
-        Button {
-            let home = detail.homeSide.name
-            let away = detail.awaySide.name
-            dismiss()
-            viewModel.runSmartSearch(
-                gameID: request.game.id,
-                home: home,
-                away: away,
-                sport: request.sport,
-                network: request.game.broadcastName
-            )
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "play.fill")
-                Text(detail.statusState == "in" ? "Watch Live" : "Find Stream")
-                if let network = request.game.broadcastName {
-                    Text(network)
-                        .font(.system(size: 11, weight: .black))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.white.opacity(0.15))
-                        .cornerRadius(4)
+        HStack(spacing: 10) {
+            Button {
+                ChannelViewModel.shared.triggerHaptic(.medium)
+                let home = detail.homeSide.name
+                let away = detail.awaySide.name
+                dismiss()
+                viewModel.runSmartSearch(
+                    gameID: request.game.id,
+                    home: home,
+                    away: away,
+                    sport: request.sport,
+                    network: request.game.broadcastName
+                )
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "play.fill")
+                    Text(detail.statusState == "in" ? "Watch Live" : "Find Stream")
+                    if let network = request.game.broadcastName {
+                        Text(network)
+                            .font(.system(size: 11, weight: .black))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.white.opacity(0.15))
+                            .cornerRadius(4)
+                    }
+                }
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 13)
+                .modifier(WatchButtonGlass())
+            }
+            .buttonStyle(.plain)
+
+            if detail.statusState == "pre" {
+                // Reminder toggle — mirrors the app's chip language: glass
+                // at rest, solid white with black glyph once armed.
+                let isReminderSet = scoreViewModel.reminderGameIDs.contains(request.game.id)
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+                        scoreViewModel.toggleReminder(request.game)
+                    }
+                } label: {
+                    detailPillIcon(
+                        systemName: isReminderSet ? "bell.fill" : "bell",
+                        active: isReminderSet,
+                        fill: .white,
+                        activeGlyph: .black
+                    )
+                }
+                .buttonStyle(.plain)
+            } else if detail.statusState == "in" {
+                LiveActivityPillButton(
+                    game: request.game,
+                    leagueName: request.game.leagueLabel ?? request.sport.rawValue,
+                    sport: request.leagueCode != nil ? .soccerLeagues : request.sport
+                )
+            }
+        }
+    }
+
+    /// Circular-pill icon button beside the watch button. At rest it's the
+    /// same glass as the watch pill; active, it fills solid with the state
+    /// color so the toggle reads at a glance — the same idle/selected
+    /// treatment the app's chips use.
+    private func detailPillIcon(systemName: String, active: Bool, fill: Color, activeGlyph: Color) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 16, weight: .bold))
+            .foregroundStyle(active ? activeGlyph : .white)
+            .contentTransition(.symbolEffect(.replace))
+            .frame(width: 52, height: 22)
+            .padding(.vertical, 13)
+            .background {
+                if active {
+                    Capsule().fill(fill)
                 }
             }
-            .font(.system(size: 16, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 13)
-            .modifier(WatchButtonGlass())
-        }
-        .buttonStyle(.plain)
+            .modifier(ConditionalWatchGlass(showGlass: !active))
+            .overlay {
+                if active {
+                    Capsule().stroke(Color.white.opacity(0.25), lineWidth: 0.5)
+                }
+            }
+            .shadow(color: active ? fill.opacity(0.45) : .clear, radius: 10, y: 2)
     }
 
     // MARK: Live situation
@@ -770,7 +883,7 @@ struct GameDetailContentView: View {
                 HStack {
                     momentumLegend(detail.awaySide, percent: 100 - Int((last * 100).rounded()))
                     Spacer()
-                    Text(detail.statusState == "in" ? "LIVE · SLIDE TO SCRUB" : "SLIDE TO SCRUB")
+                    Text(detail.statusState == "in" ? "LIVE · HOLD TO SCRUB" : "HOLD TO SCRUB")
                         .font(.system(size: 9, weight: .black))
                         .foregroundStyle(.tertiary)
                     Spacer()
@@ -1043,7 +1156,15 @@ struct GameDetailContentView: View {
                             .foregroundStyle(.white.opacity(0.8))
                     }
                     if !lineup.rows.isEmpty {
-                        FormationPitchView(rows: lineup.rows, teamColor: side.color)
+                        FormationPitchView(
+                            rows: lineup.rows,
+                            teamColor: side.color,
+                            showPhotos: true,
+                            onSwipe: handleLineupSwipe
+                        ) { tapped in
+                            viewModel.triggerSelectionHaptic()
+                            lineupStatsPlayer = tapped
+                        }
                     } else {
                         VStack(spacing: 6) {
                             ForEach(lineup.starters) { player in
@@ -1070,17 +1191,58 @@ struct GameDetailContentView: View {
                         .padding(.vertical, 12)
                 }
             }
-            .contentShape(Rectangle())
-            .simultaneousGesture(sideSwipeGesture($lineupSide))
+        }
+    }
+
+    /// Direction-aware swipe over the formation pitch. Priority per
+    /// direction: the other team's lineup, then the neighboring tab, then
+    /// the neighboring game.
+    private func handleLineupSwipe(_ h: CGFloat) {
+        if h < 0 && lineupSide == "away" {
+            ChannelViewModel.shared.triggerSelectionHaptic()
+            withAnimation(.easeOut(duration: 0.15)) { lineupSide = "home" }
+        } else if h > 0 && lineupSide == "home" {
+            ChannelViewModel.shared.triggerSelectionHaptic()
+            withAnimation(.easeOut(duration: 0.15)) { lineupSide = "away" }
+        } else {
+            let delta = h < 0 ? 1 : -1
+            if let index = availableTabs.firstIndex(of: tab), availableTabs.indices.contains(index + delta) {
+                switchTab(to: availableTabs[index + delta])
+            } else {
+                onPageGame(delta)
+            }
         }
     }
 
     private func lineupListRow(_ player: GDLineupPlayer) -> some View {
+        Button {
+            viewModel.triggerSelectionHaptic()
+            lineupStatsPlayer = player
+        } label: {
+            lineupListRowContent(player)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func lineupListRowContent(_ player: GDLineupPlayer) -> some View {
         HStack(spacing: 10) {
             Text(player.jersey)
                 .font(.system(size: 12, weight: .bold, design: .rounded))
                 .foregroundStyle(.secondary)
                 .frame(width: 24, alignment: .trailing)
+            CachedAsyncImage(
+                urlString: player.headshot ?? "",
+                size: CGSize(width: 26, height: 26),
+                failurePlaceholder: AnyView(
+                    Image(systemName: "person.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.4))
+                )
+            )
+            .frame(width: 26, height: 26)
+            .background(Circle().fill(Color.white.opacity(0.08)))
+            .clipShape(Circle())
             Text(player.name)
                 .font(.system(size: 14, weight: .semibold))
                 .lineLimit(1)
@@ -1136,18 +1298,22 @@ struct GameDetailContentView: View {
                         .foregroundStyle(.secondary)
                         .frame(height: 22)
                     ForEach(group.rows) { row in
-                        HStack(spacing: 6) {
+                        HStack(spacing: 5) {
+                            CachedAsyncImage(urlString: row.headshot ?? "", size: CGSize(width: 22, height: 22))
+                                .frame(width: 22, height: 22)
+                                .background(Circle().fill(Color.white.opacity(0.08)))
+                                .clipShape(Circle())
                             RatingBadge(rating: row.rating, compact: true)
                             Text(row.name)
                                 .font(.system(size: 13, weight: .semibold))
                                 .lineLimit(1)
-                                .minimumScaleFactor(0.85)
+                                .minimumScaleFactor(0.75)
                         }
                         .frame(height: 27)
                     }
                 }
-                .frame(width: 140, alignment: .leading)
-                .overlay(HorizontalPanOverlay { translation in
+                .frame(width: 150, alignment: .leading)
+                .overlay(HorizontalPanOverlay(onSwipe: { translation in
                     if translation < 0 && boxSide == "away" {
                         ChannelViewModel.shared.triggerSelectionHaptic()
                         withAnimation(.easeOut(duration: 0.15)) { boxSide = "home" }
@@ -1157,7 +1323,13 @@ struct GameDetailContentView: View {
                     } else {
                         onPageGame(translation < 0 ? 1 : -1)
                     }
-                })
+                }, onTap: { location in
+                    // Fixed row metrics (22pt header, 27pt rows) → row index.
+                    let index = Int((location.y - 22) / 27)
+                    guard index >= 0, group.rows.indices.contains(index) else { return }
+                    viewModel.triggerSelectionHaptic()
+                    boxStatsPlayer = group.rows[index]
+                }))
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 0) {
@@ -1198,7 +1370,8 @@ struct GameDetailContentView: View {
         DragGesture(minimumDistance: 12)
             .onEnded { value in
                 let h = value.translation.width
-                guard abs(h) > abs(value.translation.height) else { return }
+                // Same deliberate-swipe bar as the box score's pan overlay.
+                guard abs(h) >= 55, abs(h) > abs(value.translation.height) * 1.5 else { return }
                 if h < 0 && selection.wrappedValue == "away" {
                     ChannelViewModel.shared.triggerSelectionHaptic()
                     withAnimation(.easeOut(duration: 0.15)) { selection.wrappedValue = "home" }
@@ -1489,6 +1662,60 @@ struct WatchButtonGlass: ViewModifier {
     }
 }
 
+/// WatchButtonGlass that can stand down: the detail page's pill toggles
+/// swap their glass for a solid state-color fill while active, and glass
+/// layered over the fill would wash it out.
+struct ConditionalWatchGlass: ViewModifier {
+    let showGlass: Bool
+    func body(content: Content) -> some View {
+        if showGlass {
+            AnyView(content.modifier(WatchButtonGlass()))
+        } else {
+            AnyView(content)
+        }
+    }
+}
+
+/// Live Activity toggle pill for any live game — glass at rest, solid red
+/// with a glow while the game is on the Lock Screen. Shared across the
+/// team-sport, tennis, and MMA detail pages so every sport gets the same
+/// control next to its watch button.
+struct LiveActivityPillButton: View {
+    let game: ESPNEvent
+    let leagueName: String
+    var sport: SportType? = nil
+    @ObservedObject private var activityManager = GameActivityManager.shared
+
+    var body: some View {
+        let isTracking = activityManager.trackedGameIDs.contains(game.id)
+        Button {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+                activityManager.toggle(game: game, leagueName: leagueName, sport: sport)
+            }
+        } label: {
+            Image(systemName: isTracking ? "bell.badge.fill" : "bell.badge")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(.white)
+                .contentTransition(.symbolEffect(.replace))
+                .frame(width: 52, height: 22)
+                .padding(.vertical, 13)
+                .background {
+                    if isTracking {
+                        Capsule().fill(Color.red)
+                    }
+                }
+                .modifier(ConditionalWatchGlass(showGlass: !isTracking))
+                .overlay {
+                    if isTracking {
+                        Capsule().stroke(Color.white.opacity(0.25), lineWidth: 0.5)
+                    }
+                }
+                .shadow(color: isTracking ? Color.red.opacity(0.45) : .clear, radius: 10, y: 2)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 // MARK: - Bases diamond
 
 /// Scoreboard-style base indicator: second base on top, third left, first
@@ -1558,6 +1785,557 @@ struct RatingBadge: View {
     }
 }
 
+// MARK: - Player stats sheet
+
+/// Individual match stats, one page per lineup player — swipe sideways to
+/// move through the whole roster, same paging feel as the games pager.
+struct PlayerStatsSheet: View {
+    let players: [GDLineupPlayer]
+    let initialID: String
+    let side: GDTeamSide
+    let showPhotos: Bool
+    let heatPoints: (String) -> [GDHeatPoint]
+
+    @State private var selection: String?
+
+    init(players: [GDLineupPlayer], initialID: String, side: GDTeamSide, showPhotos: Bool, heatPoints: @escaping (String) -> [GDHeatPoint]) {
+        self.players = players
+        self.initialID = initialID
+        self.side = side
+        self.showPhotos = showPhotos
+        self.heatPoints = heatPoints
+        _selection = State(initialValue: initialID)
+    }
+
+    var body: some View {
+        // Same card carousel as the games pager: full-width pages with the
+        // neighbors peeking in from the screen edges.
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 14) {
+                    ForEach(players) { player in
+                        PlayerStatsPage(player: player, side: side, showPhoto: showPhotos, points: heatPoints(player.id))
+                            .background(Color(white: 0.10))
+                            .containerRelativeFrame(.horizontal)
+                            .clipShape(RoundedRectangle(cornerRadius: 24))
+                            .id(player.id)
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollTargetBehavior(.viewAligned)
+            .safeAreaPadding(.horizontal, 24)
+            .scrollPosition(id: $selection)
+            .onAppear {
+                // The binding's initial value alone lands unreliably in a
+                // lazy carousel — anchor the opening page explicitly.
+                proxy.scrollTo(selection, anchor: .center)
+            }
+            .onChange(of: selection) { _, _ in
+                ChannelViewModel.shared.triggerSelectionHaptic()
+            }
+        }
+        .padding(.top, 16)
+        .background(Color(white: 0.06).ignoresSafeArea())
+        .preferredColorScheme(.dark)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .presentationCornerRadius(30)
+    }
+}
+
+/// One player's page: header, heatmap of located events, grouped stat rows.
+/// The name/position strip pins to the top once the header scrolls away —
+/// same behavior as the game page's compact score bar.
+private struct PlayerStatsPage: View {
+    let player: GDLineupPlayer
+    let side: GDTeamSide
+    let showPhoto: Bool
+    let points: [GDHeatPoint]
+
+    /// 0 while the big header is visible, 1 once it has scrolled past.
+    @State private var collapse: CGFloat = 0
+
+    private static let topKeys = ["minutes", "totalGoals", "goalAssists", "totalShots", "shotsOnTarget", "accuratePasses", "saves", "goalsConceded"]
+    private static let attackKeys = ["totalPasses", "totalCrosses", "accurateCrosses", "totalLongBalls", "accurateLongBalls", "blockedShots", "offsides", "ownGoals"]
+    private static let defenseKeys = ["totalTackles", "effectiveTackles", "totalClearance", "effectiveClearance", "interceptions", "shotsFaced", "punches", "crossesCaught"]
+    private static let disciplineKeys = ["foulsCommitted", "foulsSuffered", "yellowCards", "redCards"]
+
+    var body: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 26) {
+                header
+                heatmapSection
+                statSection("Top stats", keys: Self.topKeys, extraRows: xgRows)
+                statSection("Attack", keys: Self.attackKeys)
+                statSection("Defense", keys: Self.defenseKeys)
+                statSection("Discipline", keys: Self.disciplineKeys)
+                otherSection
+            }
+            .padding(.horizontal, 22)
+            .padding(.top, 28)
+            .padding(.bottom, 44)
+        }
+        .onScrollGeometryChange(for: CGFloat.self) { geometry in
+            geometry.contentOffset.y + geometry.contentInsets.top
+        } action: { _, scrolled in
+            // The avatar + name block is ~150pt tall; crossfade the pinned
+            // strip in over the stretch where it slides out.
+            collapse = min(max((scrolled - 110) / 45, 0), 1)
+        }
+        .background(alignment: .top) { TeamGlow(color: side.color) }
+        .overlay(alignment: .top) { compactBar.opacity(collapse) }
+    }
+
+    /// Pinned name strip once the header scrolls away.
+    private var compactBar: some View {
+        VStack(spacing: 2) {
+            Text(player.fullName)
+                .font(.system(size: 17, weight: .bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            HStack(spacing: 5) {
+                if let pos = player.positionAbbrev {
+                    Text(pos)
+                }
+                Text("·")
+                Text(side.name).lineLimit(1)
+                RatingBadge(rating: player.rating, compact: true)
+            }
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        // Same translucent fade as the game page's pinned score bar.
+        .background(alignment: .top) { PinnedHeaderGradient() }
+    }
+
+    /// FotMob-style heat blobs from the player's located plays. ESPN only
+    /// attaches coordinates to shots/chances, so the map covers those.
+    @ViewBuilder private var heatmapSection: some View {
+        if !points.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Heatmap")
+                        .font(.system(size: 20, weight: .bold))
+                    Spacer()
+                    Text("Shots")
+                        .font(.system(size: 15))
+                        .foregroundStyle(.secondary)
+                    Text("\(points.filter { $0.isShot }.count)")
+                        .font(.system(size: 17, weight: .bold))
+                }
+                PlayerHeatmapView(points: points)
+                    .aspectRatio(105.0 / 68.0, contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    /// Estimated xG row appended to Top stats when the player took a shot.
+    private var xgRows: [GDPlayerStatLine] {
+        guard let xg = GameDetailViewModel.estimatedXG(points: points) else { return [] }
+        return [GDPlayerStatLine(key: "xgEstimate", label: "Expected goals (est.)", value: String(format: "%.2f", xg))]
+    }
+
+    private var header: some View {
+        VStack(spacing: 12) {
+            ZStack(alignment: .topTrailing) {
+                Circle()
+                    .fill(Color.white.opacity(0.08))
+                    .frame(width: 92, height: 92)
+                    .overlay(
+                        Group {
+                            if showPhoto, let headshot = player.headshot, !headshot.isEmpty {
+                                CachedAsyncImage(
+                                    urlString: headshot,
+                                    size: CGSize(width: 92, height: 92),
+                                    failurePlaceholder: AnyView(sheetJerseyFallback)
+                                )
+                                .frame(width: 92, height: 92)
+                                .clipShape(Circle())
+                            } else {
+                                sheetJerseyFallback
+                            }
+                        }
+                    )
+                    .overlay(Circle().stroke(Color.white.opacity(0.15), lineWidth: 1))
+                RatingBadge(rating: player.rating)
+                    .offset(x: 8, y: -2)
+            }
+            VStack(spacing: 4) {
+                Text(player.fullName)
+                    .font(.system(size: 23, weight: .bold))
+                statusLine
+            }
+
+            HStack(spacing: 0) {
+                infoColumn(top: { Text(player.positionAbbrev ?? "—").font(.system(size: 16, weight: .semibold)) }, label: "Position")
+                infoColumn(top: {
+                    HStack(spacing: 6) {
+                        CachedAsyncImage(urlString: side.logo ?? "", size: CGSize(width: 18, height: 18))
+                            .frame(width: 18, height: 18)
+                        Text(side.name)
+                            .font(.system(size: 16, weight: .semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                    }
+                }, label: "Team")
+                infoColumn(top: { Text(player.jersey.isEmpty ? "—" : "#\(player.jersey)").font(.system(size: 16, weight: .semibold)) }, label: "Jersey")
+            }
+            .padding(.top, 6)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// Goals / cards / sub markers under the name, only when present.
+    @ViewBuilder private var statusLine: some View {
+        let hasAny = player.goals > 0 || player.yellow || player.red || player.subbedOffClock != nil || player.subbedOnClock != nil
+        if hasAny {
+            HStack(spacing: 8) {
+                if player.goals > 0 {
+                    Label("\(player.goals)", systemImage: "soccerball.inverse")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                if player.red {
+                    RoundedRectangle(cornerRadius: 1.5).fill(.red).frame(width: 9, height: 12)
+                } else if player.yellow {
+                    RoundedRectangle(cornerRadius: 1.5).fill(.yellow).frame(width: 9, height: 12)
+                }
+                if let off = player.subbedOffClock {
+                    Text("▼ \(off)").font(.system(size: 12, weight: .semibold)).foregroundStyle(.red)
+                }
+                if let on = player.subbedOnClock, !on.isEmpty {
+                    Text("▲ \(on)").font(.system(size: 12, weight: .semibold)).foregroundStyle(.green)
+                }
+            }
+            .foregroundStyle(.white.opacity(0.85))
+        }
+    }
+
+    private var sheetJerseyFallback: some View {
+        Text(player.jersey)
+            .font(.system(size: 30, weight: .bold, design: .rounded))
+            .foregroundStyle(.white.opacity(0.7))
+    }
+
+    private func infoColumn(@ViewBuilder top: () -> some View, label: String) -> some View {
+        VStack(spacing: 3) {
+            top()
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func lines(for keys: [String]) -> [GDPlayerStatLine] {
+        keys.compactMap { key in player.stats.first(where: { $0.key == key }) }
+    }
+
+    @ViewBuilder private func statSection(_ title: String, keys: [String], extraRows: [GDPlayerStatLine] = []) -> some View {
+        let rows = lines(for: keys) + extraRows
+        if !rows.isEmpty { statList(title, rows: rows) }
+    }
+
+    /// Whatever ESPN sent that isn't already shown above.
+    @ViewBuilder private var otherSection: some View {
+        let known = Set(Self.topKeys + Self.attackKeys + Self.defenseKeys + Self.disciplineKeys)
+        let rows = player.stats.filter { !known.contains($0.key) }
+        if !rows.isEmpty { statList("Other", rows: rows) }
+    }
+
+    private func statList(_ title: String, rows: [GDPlayerStatLine]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(title)
+                .font(.system(size: 20, weight: .bold))
+                .padding(.bottom, 6)
+            ForEach(rows) { line in
+                HStack {
+                    Text(line.label)
+                        .font(.system(size: 15))
+                        .foregroundStyle(.white.opacity(0.85))
+                    Spacer()
+                    Text(line.value)
+                        .font(.system(size: 16, weight: .semibold))
+                }
+                .padding(.vertical, 8)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - Box-score player sheet (US sports)
+
+struct BoxSheetPlayer: Identifiable {
+    let id: String
+    let name: String
+    let headshot: String?
+    var rating: Double?
+    var sections: [BoxSheetSection]
+}
+
+struct BoxSheetSection: Identifiable {
+    let title: String
+    let lines: [GDPlayerStatLine]
+    var id: String { title }
+}
+
+/// Soft team-color wash bleeding down from the top of a player page.
+struct TeamGlow: View {
+    let color: Color
+    var body: some View {
+        Ellipse()
+            .fill(color.opacity(0.45))
+            .frame(height: 260)
+            .padding(.horizontal, -60)
+            .blur(radius: 70)
+            .offset(y: -120)
+            .allowsHitTesting(false)
+    }
+}
+
+/// Individual stats for a box-score athlete — same card carousel, header
+/// and pinned-strip treatment as the soccer player sheet, with one section
+/// per stat group the player appears in.
+struct BoxPlayerStatsSheet: View {
+    let players: [BoxSheetPlayer]
+    let initialID: String
+    let side: GDTeamSide
+
+    @State private var selection: String?
+
+    init(players: [BoxSheetPlayer], initialID: String, side: GDTeamSide) {
+        self.players = players
+        self.initialID = initialID
+        self.side = side
+        _selection = State(initialValue: initialID)
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 14) {
+                    ForEach(players) { player in
+                        BoxPlayerStatsPage(player: player, side: side)
+                            .background(Color(white: 0.10))
+                            .containerRelativeFrame(.horizontal)
+                            .clipShape(RoundedRectangle(cornerRadius: 24))
+                            .id(player.id)
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollTargetBehavior(.viewAligned)
+            .safeAreaPadding(.horizontal, 24)
+            .scrollPosition(id: $selection)
+            .onAppear {
+                proxy.scrollTo(selection, anchor: .center)
+            }
+            .onChange(of: selection) { _, _ in
+                ChannelViewModel.shared.triggerSelectionHaptic()
+            }
+        }
+        .padding(.top, 16)
+        .background(Color(white: 0.06).ignoresSafeArea())
+        .preferredColorScheme(.dark)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .presentationCornerRadius(30)
+    }
+}
+
+private struct BoxPlayerStatsPage: View {
+    let player: BoxSheetPlayer
+    let side: GDTeamSide
+
+    @State private var collapse: CGFloat = 0
+
+    var body: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 26) {
+                header
+                ForEach(player.sections) { section in
+                    statList(section)
+                }
+            }
+            .padding(.horizontal, 22)
+            .padding(.top, 28)
+            .padding(.bottom, 44)
+        }
+        .onScrollGeometryChange(for: CGFloat.self) { geometry in
+            geometry.contentOffset.y + geometry.contentInsets.top
+        } action: { _, scrolled in
+            collapse = min(max((scrolled - 110) / 45, 0), 1)
+        }
+        .background(alignment: .top) { TeamGlow(color: side.color) }
+        .overlay(alignment: .top) { compactBar.opacity(collapse) }
+    }
+
+    private var header: some View {
+        VStack(spacing: 12) {
+            ZStack(alignment: .topTrailing) {
+                Circle()
+                    .fill(Color.white.opacity(0.08))
+                    .frame(width: 92, height: 92)
+                    .overlay(
+                        Group {
+                            if let headshot = player.headshot, !headshot.isEmpty {
+                                CachedAsyncImage(
+                                    urlString: headshot,
+                                    size: CGSize(width: 92, height: 92),
+                                    failurePlaceholder: AnyView(personFallback)
+                                )
+                                .frame(width: 92, height: 92)
+                                .clipShape(Circle())
+                            } else {
+                                personFallback
+                            }
+                        }
+                    )
+                    .overlay(Circle().stroke(Color.white.opacity(0.15), lineWidth: 1))
+                RatingBadge(rating: player.rating)
+                    .offset(x: 8, y: -2)
+            }
+            Text(player.name)
+                .font(.system(size: 23, weight: .bold))
+            HStack(spacing: 6) {
+                CachedAsyncImage(urlString: side.logo ?? "", size: CGSize(width: 18, height: 18))
+                    .frame(width: 18, height: 18)
+                Text(side.name)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var personFallback: some View {
+        Image(systemName: "person.fill")
+            .font(.system(size: 34))
+            .foregroundStyle(.white.opacity(0.4))
+    }
+
+    private var compactBar: some View {
+        VStack(spacing: 2) {
+            Text(player.name)
+                .font(.system(size: 17, weight: .bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            HStack(spacing: 5) {
+                Text(side.name).lineLimit(1)
+                RatingBadge(rating: player.rating, compact: true)
+            }
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .background(alignment: .top) { PinnedHeaderGradient() }
+    }
+
+    private func statList(_ section: BoxSheetSection) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(section.title)
+                .font(.system(size: 20, weight: .bold))
+                .padding(.bottom, 6)
+            ForEach(section.lines) { line in
+                HStack {
+                    Text(line.label)
+                        .font(.system(size: 15))
+                        .foregroundStyle(.white.opacity(0.85))
+                    Spacer()
+                    Text(line.value)
+                        .font(.system(size: 16, weight: .semibold))
+                }
+                .padding(.vertical, 8)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - Player heatmap
+
+/// FotMob-style heat blobs on a full pitch, attacking left → right. Blob
+/// color scales with local density (green → yellow → red where the
+/// player's actions cluster).
+struct PlayerHeatmapView: View {
+    let points: [GDHeatPoint]
+
+    var body: some View {
+        GeometryReader { geo in
+            let size = geo.size
+            ZStack {
+                pitchLines(in: size)
+                Canvas { context, _ in
+                    context.addFilter(.blur(radius: 9))
+                    context.blendMode = .plusLighter
+                    for point in points {
+                        let center = position(for: point, in: size)
+                        let density = points.filter {
+                            abs($0.x - point.x) < 14 && abs($0.y - point.y) < 14
+                        }.count
+                        let heat: Color = density >= 3 ? Color(red: 0.95, green: 0.35, blue: 0.15)
+                            : density == 2 ? Color(red: 0.95, green: 0.75, blue: 0.15)
+                            : Color(red: 0.25, green: 0.75, blue: 0.35)
+                        let radius: CGFloat = 26
+                        let rect = CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
+                        context.fill(
+                            Path(ellipseIn: rect),
+                            with: .radialGradient(
+                                Gradient(colors: [heat.opacity(0.55), heat.opacity(0.0)]),
+                                center: center,
+                                startRadius: 0,
+                                endRadius: radius
+                            )
+                        )
+                    }
+                }
+                // Attack-direction marker, FotMob's "»" at the halfway line.
+                Image(systemName: "chevron.right.2")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .position(x: size.width / 2, y: 10)
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.04)))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.12), lineWidth: 1))
+    }
+
+    private func position(for point: GDHeatPoint, in size: CGSize) -> CGPoint {
+        CGPoint(
+            x: min(max(size.width * CGFloat(point.x / 100.0), 6), size.width - 6),
+            y: min(max(size.height * CGFloat(point.y / 100.0), 6), size.height - 6)
+        )
+    }
+
+    private func pitchLines(in size: CGSize) -> some View {
+        Canvas { context, _ in
+            let line = Color.white.opacity(0.10)
+            var mid = Path()
+            mid.move(to: CGPoint(x: size.width / 2, y: 0))
+            mid.addLine(to: CGPoint(x: size.width / 2, y: size.height))
+            context.stroke(mid, with: .color(line), lineWidth: 1)
+            let circle = CGRect(x: size.width / 2 - 28, y: size.height / 2 - 28, width: 56, height: 56)
+            context.stroke(Path(ellipseIn: circle), with: .color(line), lineWidth: 1)
+            let boxHeight = size.height * 0.56
+            let boxWidth = size.width * 0.16
+            context.stroke(Path(CGRect(x: 0, y: (size.height - boxHeight) / 2, width: boxWidth, height: boxHeight)), with: .color(line), lineWidth: 1)
+            context.stroke(Path(CGRect(x: size.width - boxWidth, y: (size.height - boxHeight) / 2, width: boxWidth, height: boxHeight)), with: .color(line), lineWidth: 1)
+            let smallHeight = size.height * 0.26
+            let smallWidth = size.width * 0.06
+            context.stroke(Path(CGRect(x: 0, y: (size.height - smallHeight) / 2, width: smallWidth, height: smallHeight)), with: .color(line), lineWidth: 1)
+            context.stroke(Path(CGRect(x: size.width - smallWidth, y: (size.height - smallHeight) / 2, width: smallWidth, height: smallHeight)), with: .color(line), lineWidth: 1)
+        }
+    }
+}
+
 // MARK: - Formation pitch
 
 /// Draws a soccer half-pitch with the team laid out by formation rows,
@@ -1568,6 +2346,11 @@ struct FormationPitchView: View {
     /// Rows from the goalkeeper outward.
     let rows: [[GDLineupPlayer]]
     let teamColor: Color
+    /// All-or-nothing: true only when every player's headshot resolved.
+    var showPhotos: Bool = false
+    /// Deliberate horizontal swipe over the pitch (raw translation).
+    var onSwipe: (CGFloat) -> Void = { _ in }
+    var onTapPlayer: (GDLineupPlayer) -> Void = { _ in }
 
     var body: some View {
         // Attack at the top: last formation row first, GK last.
@@ -1581,13 +2364,28 @@ struct FormationPitchView: View {
                     let y = rowHeight * (CGFloat(rowIndex) + 0.5)
                     let slotWidth = geo.size.width / CGFloat(row.count)
                     ForEach(row.indices, id: \.self) { colIndex in
-                        PitchPlayerChip(player: row[colIndex], teamColor: teamColor)
+                        PitchPlayerChip(player: row[colIndex], teamColor: teamColor, showPhoto: showPhotos)
                             .position(x: slotWidth * (CGFloat(colIndex) + 0.5), y: y)
                     }
                 }
+                // UIKit pan, not a SwiftUI drag: it only claims clearly
+                // horizontal gestures, so vertical swipes over the pitch
+                // scroll the page normally. It swallows taps, so player
+                // taps are mapped back through the slot grid.
+                HorizontalPanOverlay(onSwipe: onSwipe, onTap: { location in
+                    guard rowHeight > 0, !displayRows.isEmpty else { return }
+                    let rowIndex = min(max(Int(location.y / rowHeight), 0), displayRows.count - 1)
+                    let row = displayRows[rowIndex]
+                    guard !row.isEmpty else { return }
+                    let slotWidth = geo.size.width / CGFloat(row.count)
+                    let colIndex = min(max(Int(location.x / slotWidth), 0), row.count - 1)
+                    onTapPlayer(row[colIndex])
+                })
             }
         }
-        .frame(height: CGFloat(rows.count) * 76)
+        // Fixed height regardless of formation — a 3-row 4-4-2 and a 5-row
+        // 4-2-3-1 draw the same pitch, the rows just space out differently.
+        .frame(height: 400)
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(Color.white.opacity(0.04))
@@ -1618,19 +2416,30 @@ struct FormationPitchView: View {
 private struct PitchPlayerChip: View {
     let player: GDLineupPlayer
     let teamColor: Color
+    var showPhoto: Bool = false
 
     var body: some View {
         VStack(spacing: 3) {
             ZStack(alignment: .topTrailing) {
                 Circle()
                     .fill(teamColor.opacity(0.9))
-                    .frame(width: 34, height: 34)
-                    .overlay(Circle().stroke(Color.white.opacity(0.35), lineWidth: 1))
+                    .frame(width: 38, height: 38)
                     .overlay(
-                        Text(player.jersey)
-                            .font(.system(size: 13, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
+                        Group {
+                            if showPhoto, let headshot = player.headshot, !headshot.isEmpty {
+                                CachedAsyncImage(
+                                    urlString: headshot,
+                                    size: CGSize(width: 38, height: 38),
+                                    failurePlaceholder: AnyView(jerseyFallback)
+                                )
+                                .frame(width: 38, height: 38)
+                                .clipShape(Circle())
+                            } else {
+                                jerseyFallback
+                            }
+                        }
                     )
+                    .overlay(Circle().stroke(Color.white.opacity(0.35), lineWidth: 1))
                 RatingBadge(rating: player.rating, compact: true)
                     .offset(x: 14, y: -6)
             }
@@ -1656,6 +2465,12 @@ private struct PitchPlayerChip: View {
             }
             .frame(maxWidth: 80)
         }
+    }
+
+    private var jerseyFallback: some View {
+        Text(player.jersey)
+            .font(.system(size: 13, weight: .bold, design: .rounded))
+            .foregroundStyle(.white)
     }
 }
 
@@ -1745,6 +2560,9 @@ struct ShotMapView: View {
 
 private struct HorizontalPanOverlay: UIViewRepresentable {
     let onSwipe: (CGFloat) -> Void
+    /// The overlay's UIView swallows every touch over the column, so taps
+    /// must come through it too — reported in the overlay's coordinates.
+    var onTap: ((CGPoint) -> Void)? = nil
 
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
@@ -1752,28 +2570,41 @@ private struct HorizontalPanOverlay: UIViewRepresentable {
         let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.panned(_:)))
         pan.delegate = context.coordinator
         view.addGestureRecognizer(pan)
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tapped(_:)))
+        view.addGestureRecognizer(tap)
         return view
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {
         context.coordinator.onSwipe = onSwipe
+        context.coordinator.onTap = onTap
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator(onSwipe: onSwipe) }
+    func makeCoordinator() -> Coordinator { Coordinator(onSwipe: onSwipe, onTap: onTap) }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var onSwipe: (CGFloat) -> Void
-        init(onSwipe: @escaping (CGFloat) -> Void) { self.onSwipe = onSwipe }
+        var onTap: ((CGPoint) -> Void)?
+        init(onSwipe: @escaping (CGFloat) -> Void, onTap: ((CGPoint) -> Void)?) {
+            self.onSwipe = onSwipe
+            self.onTap = onTap
+        }
 
         @objc func panned(_ pan: UIPanGestureRecognizer) {
             guard pan.state == .ended else { return }
             let t = pan.translation(in: pan.view)
-            guard abs(t.x) > abs(t.y) else { return }
+            // A deliberate swipe, not a nudge: at least 55 pts of travel,
+            // clearly more sideways than vertical.
+            guard abs(t.x) >= 55, abs(t.x) > abs(t.y) * 1.5 else { return }
             onSwipe(t.x)
         }
 
+        @objc func tapped(_ tap: UITapGestureRecognizer) {
+            onTap?(tap.location(in: tap.view))
+        }
+
         func gestureRecognizerShouldBegin(_ r: UIGestureRecognizer) -> Bool {
-            guard let pan = r as? UIPanGestureRecognizer else { return false }
+            guard let pan = r as? UIPanGestureRecognizer else { return true }
             let v = pan.velocity(in: pan.view)
             return abs(v.x) > abs(v.y)
         }
@@ -1841,15 +2672,22 @@ struct MomentumChart: View {
 
     // MARK: Scrubbing
 
+    /// Hold-then-drag: the chart only takes the touch after a short press
+    /// with the finger essentially still. A vertical swipe moves past the
+    /// hold's distance limit almost immediately, so page scrolling and
+    /// sheet dismissal keep working when the gesture starts on the chart.
     private func scrubGesture(in size: CGSize) -> some Gesture {
-        DragGesture(minimumDistance: 15, coordinateSpace: .local)
+        LongPressGesture(minimumDuration: 0.25, maximumDistance: 8)
+            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
             .onChanged { value in
-                guard abs(value.translation.width) > abs(value.translation.height) else {
-                    if scrubFraction != nil { scrubFraction = nil }
-                    return
+                switch value {
+                case .second(true, let drag):
+                    if scrubFraction == nil { ChannelViewModel.shared.triggerSelectionHaptic() }
+                    let x = drag?.location.x ?? size.width * span
+                    scrubFraction = min(max(x / max(size.width, 1), 0), span)
+                default:
+                    break
                 }
-                if scrubFraction == nil { ChannelViewModel.shared.triggerSelectionHaptic() }
-                scrubFraction = min(max(value.location.x / max(size.width, 1), 0), span)
             }
             .onEnded { _ in scrubFraction = nil }
     }

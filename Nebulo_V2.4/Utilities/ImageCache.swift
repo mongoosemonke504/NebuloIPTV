@@ -204,6 +204,10 @@ final class ImageCache: @unchecked Sendable {
 @MainActor
 class ImageLoader: ObservableObject {
     @Published var image: UIImage?
+    /// The last requested URL fetched and came back empty (404, bad data).
+    /// Views use this to swap the spinner for a static fallback instead of
+    /// spinning forever — player headshots 404 constantly on ESPN's CDN.
+    @Published var failed = false
     let urlString: String
     private var loadedURL: String? = nil
 
@@ -226,7 +230,8 @@ class ImageLoader: ObservableObject {
     // loader instance across channel changes.
     func loadAsync(targetURL: String? = nil) async {
         let url = targetURL ?? urlString
-        guard !url.isEmpty else { return }
+        // No URL at all is a failure too — otherwise the view spins forever.
+        guard !url.isEmpty else { failed = true; return }
 
         // Already showing the right image — nothing to do.
         if loadedURL == url { return }
@@ -247,6 +252,9 @@ class ImageLoader: ObservableObject {
         if let loaded {
             image = loaded
             loadedURL = url
+            failed = false
+        } else {
+            failed = true
         }
     }
 }
@@ -255,11 +263,16 @@ struct CachedAsyncImage: View {
     @StateObject private var loader: ImageLoader
     private let urlString: String
     let size: CGSize?
+    /// Shown instead of the spinner once the fetch has definitively failed
+    /// (missing headshots, dead logo URLs) — a spinner that never resolves
+    /// reads as broken.
+    let failurePlaceholder: AnyView?
 
-    init(urlString: String, size: CGSize? = nil) {
+    init(urlString: String, size: CGSize? = nil, failurePlaceholder: AnyView? = nil) {
         self.urlString = urlString
         _loader = StateObject(wrappedValue: ImageLoader(urlString: urlString))
         self.size = size
+        self.failurePlaceholder = failurePlaceholder
     }
 
     var body: some View {
@@ -268,6 +281,19 @@ struct CachedAsyncImage: View {
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
+            } else if loader.failed {
+                if let failurePlaceholder {
+                    failurePlaceholder
+                } else {
+                    ZStack {
+                        Color.white.opacity(0.08)
+                        if size != nil {
+                            Image(systemName: "photo")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.white.opacity(0.35))
+                        }
+                    }
+                }
             } else {
                 ZStack {
                     Color.white.opacity(0.1)

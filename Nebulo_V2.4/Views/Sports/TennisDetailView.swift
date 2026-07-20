@@ -241,7 +241,7 @@ struct TennisDetailContentView: View {
                 Text(detail.awaySide?.score ?? "0")
                     .font(.system(size: 20, weight: .bold, design: .rounded))
                 Spacer()
-                Text(detail.game.status.type.detail)
+                Text(detail.game.scheduleAwareDetail)
                     .font(.system(size: 12, weight: .bold))
                     .foregroundStyle(isLive ? .red : .secondary)
                     .lineLimit(1)
@@ -379,37 +379,48 @@ struct TennisDetailContentView: View {
     // MARK: Watch
 
     private var watchButton: some View {
-        Button {
-            let game = detail.game
-            let (home, away) = game.searchTerms
-            dismiss()
-            viewModel.runSmartSearch(
-                gameID: game.id,
-                home: home,
-                away: away,
-                sport: .tennis,
-                network: game.broadcastName
-            )
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "play.fill")
-                Text(isLive ? "Watch Live" : "Find Stream")
-                if let network = detail.game.broadcastName {
-                    Text(network)
-                        .font(.system(size: 11, weight: .black))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.white.opacity(0.15))
-                        .cornerRadius(4)
+        HStack(spacing: 10) {
+            Button {
+                ChannelViewModel.shared.triggerHaptic(.medium)
+                let game = detail.game
+                let (home, away) = game.searchTerms
+                dismiss()
+                viewModel.runSmartSearch(
+                    gameID: game.id,
+                    home: home,
+                    away: away,
+                    sport: .tennis,
+                    network: game.broadcastName
+                )
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "play.fill")
+                    Text(isLive ? "Watch Live" : "Find Stream")
+                    if let network = detail.game.broadcastName {
+                        Text(network)
+                            .font(.system(size: 11, weight: .black))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.white.opacity(0.15))
+                            .cornerRadius(4)
+                    }
                 }
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 13)
+                .modifier(WatchButtonGlass())
             }
-            .font(.system(size: 16, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 13)
-            .modifier(WatchButtonGlass())
+            .buttonStyle(.plain)
+
+            if isLive {
+                LiveActivityPillButton(
+                    game: detail.game,
+                    leagueName: detail.game.leagueLabel ?? "Tennis",
+                    sport: .tennis
+                )
+            }
         }
-        .buttonStyle(.plain)
     }
 
     // MARK: Line score

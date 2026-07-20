@@ -73,3 +73,36 @@ struct Recording: Identifiable, Codable, Hashable {
         }
     }
 }
+
+extension Recording.RecordingCategory {
+    /// Best-guess category for a recording, pre-selected in the setup sheet
+    /// (the user can still override). Program title wins when it clearly
+    /// reads as a matchup; otherwise the channel's category (and finally its
+    /// name) run through the home screen's genre classifier.
+    static func guess(channel: StreamChannel, category: StreamCategory?, program: EPGProgram?) -> Recording.RecordingCategory {
+        let title = (program?.title ?? "").lowercased()
+        let sportsHints = [
+            " vs ", " vs. ", " v ", " @ ", "matchday", "match day",
+            "nba", "nfl", "mlb", "nhl", "ufc", "wwe", "boxing",
+            "premier league", "champions league", "la liga", "serie a",
+            "bundesliga", "grand prix", "motogp", "nascar", "postgame", "pregame"
+        ]
+        if sportsHints.contains(where: { title.contains($0) }) { return .sports }
+
+        func map(_ group: HomeCategoryGroup) -> Recording.RecordingCategory? {
+            switch group {
+            case .sports: return .sports
+            case .movies: return .movies
+            case .news, .kids, .documentary, .lifestyle: return .tvShows
+            case .international, .other: return nil
+            }
+        }
+
+        if let category, let mapped = map(HomeCategoryGroup.classify(category)) {
+            return mapped
+        }
+        // No usable category — classify the channel NAME the same way.
+        let nameOnly = StreamCategory(id: -1, name: channel.name)
+        return map(HomeCategoryGroup.classify(nameOnly)) ?? .other
+    }
+}

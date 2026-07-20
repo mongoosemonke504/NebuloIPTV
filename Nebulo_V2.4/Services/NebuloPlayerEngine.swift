@@ -106,12 +106,33 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     public var externalTimeOffset: Double = 0
     @Published public var availableSubtitles: [VideoSubtitle] = []
     @Published public var currentSubtitle: VideoSubtitle? = nil
+    /// True when at least one REAL track exists — VLC's list always carries
+    /// a "Disable" entry (index -1), which alone shouldn't light up the
+    /// subtitles button.
+    public var hasSelectableSubtitles: Bool {
+        availableSubtitles.contains { $0.index >= 0 }
+    }
     @Published public var activeCaption: String? = nil
     @Published public var currentResolution: String = ""
     @Published public var activeBackendName: String = "None" 
     @Published public var playbackFailed: Bool = false
     
-    public let renderView = UIView()
+    /// Layout-aware container: Fill/Stretch depend on the screen's current
+    /// shape, so a size change (rotation, split-mode toggle) re-applies the
+    /// active aspect mode instead of leaving a stale crop.
+    public final class PlayerRenderView: UIView {
+        var onLayoutSizeChange: (() -> Void)?
+        private var lastSize: CGSize = .zero
+        public override func layoutSubviews() {
+            super.layoutSubviews()
+            if bounds.size != lastSize {
+                lastSize = bounds.size
+                onLayoutSizeChange?()
+            }
+        }
+    }
+
+    public let renderView = PlayerRenderView()
     public let useNativeBridge = false
     
     public var multiViewPlayers: [NebuloKSVideoPlayerView] = []
@@ -193,8 +214,11 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         case auto = "Auto", high = "1080p", medium = "720p", low = "480p"
         public var id: String { rawValue }
     }
+    /// Fit letterboxes at the source ratio; Fill crops to cover the whole
+    /// screen; Stretch distorts to cover it; 16:9 / 4:3 force the video
+    /// into that shape.
     public enum VideoAspectRatio: String, CaseIterable, Identifiable {
-        case `default` = "Default", fill = "Fill", twentyOneNine = "21:9", oneEightFive = "1.85:1", sixteenNine = "16:9", fourThree = "4:3"
+        case `default` = "Fit", fill = "Fill", stretch = "Stretch", sixteenNine = "16:9", fourThree = "4:3"
         public var id: String { rawValue }
     }
     public struct VideoSubtitle: Identifiable, Hashable {
@@ -213,11 +237,63 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         super.init()
         renderView.insetsLayoutMarginsFromSafeArea = false
         renderView.preservesSuperviewLayoutMargins = false
+        // Fill overflows the container by design — never paint outside it.
+        renderView.clipsToBounds = true
         setupKSPlayer()
         setupMultiViewPlayers()
         setupVLC()
         setupAudioSession()
         setupRemoteTransportControls()
+        renderView.onLayoutSizeChange = { [weak self] in
+            guard let self else { return }
+            // VLC's fill/stretch bake the container's shape into a crop or
+            // aspect string — recompute for the new shape. (KSPlayer's
+            // constraints adapt on their own.)
+            if self.currentBackend == .vlc,
+               self.currentAspectRatio == .fill || self.currentAspectRatio == .stretch {
+                self.applyAspectRatio(self.currentAspectRatio)
+            }
+            self.pipAVLayer?.frame = self.renderView.bounds
+        }
+        setupPiPLifecycleObservers()
+    }
+
+    /// iOS only auto-starts PiP if the side player is actually PLAYING at
+    /// the instant the app backgrounds — a quietly-stalled one means the
+    /// float never appears. These hooks keep the handoff honest at the
+    /// moments that matter.
+    private func setupPiPLifecycleObservers() {
+        NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self, let side = self.pipAVPlayer, !self.isPiPSessionActive else { return }
+            if self.currentBackend == .vlc && self.isPlaying {
+                // Last chance before the auto-PiP eligibility check.
+                if side.timeControlStatus != .playing { side.play() }
+            } else {
+                // The user paused (or playback is gone) — a surprise PiP
+                // window would be wrong, and a playing side player is
+                // exactly what would summon one.
+                side.pause()
+            }
+        }
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            if self.vlcSuspendedForPiP && !self.isPiPSessionActive && self.currentBackend == .vlc {
+                // PiP was closed while backgrounded; the on-screen player
+                // is still up, so reconnect VLC now that we're visible.
+                self.vlcSuspendedForPiP = false
+                self.vlcMediaPlayer.play()
+                if self.pipAVPlayer == nil {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+                        self?.armAutoPiP()
+                    }
+                }
+            } else if let side = self.pipAVPlayer, !self.isPiPSessionActive,
+                      self.currentBackend == .vlc, self.isPlaying,
+                      side.timeControlStatus != .playing {
+                // Re-arm the hidden channel paused on the way out.
+                side.play()
+            }
+        }
     }
     
     private func setupMultiViewPlayers() {
@@ -517,6 +593,11 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         // Never carry a startup mute into the next stream.
         localStartUnmuteTimer?.invalidate(); localStartUnmuteTimer = nil
         vlcMediaPlayer.audio?.isMuted = false
+        // An active floating window outlives the on-screen player; its side
+        // player is the one thing playback teardown must not touch. With the
+        // player UI gone there's also no VLC session left to resume later.
+        vlcSuspendedForPiP = false
+        if !isPiPSessionActive { teardownPiPPlayer() }
         if currentBackend == .vlc { vlcMediaPlayer.stop(); vlcMediaPlayer.drawable = nil }
         else if currentBackend == .ksplayer { ksPlayerView.pause(); ksPlayerView.removeFromSuperview() }
         currentBackend = .none
@@ -650,6 +731,16 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                 self.startLocalUnmutePoll()
             }
             self.vlcMediaPlayer.play()
+
+            // Arm the auto-PiP side channel a few seconds in, once VLC has
+            // its own buffers — closing the app then floats the video
+            // automatically (live streams only, not recordings).
+            if !url.isFileURL {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+                    guard let self, self.currentBackend == .vlc, self.currentURL == url else { return }
+                    self.armAutoPiP()
+                }
+            }
         }
     }
 
@@ -723,11 +814,24 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             }
             self.isPlaying = vlcMediaPlayer.isPlaying
             self.updatePlaybackState()
-            if availableSubtitles.isEmpty, let tracks = vlcMediaPlayer.videoSubTitlesNames as? [String] {
-                if let indexes = vlcMediaPlayer.videoSubTitlesIndexes as? [Int], tracks.count == indexes.count {
+            // Refresh on every count change, NOT just once: live TS streams
+            // announce their closed-caption/teletext tracks seconds or
+            // minutes into playback, and the old fill-once guard locked the
+            // list before they ever appeared — which is why most streams
+            // showed no subtitles.
+            if let tracks = vlcMediaPlayer.videoSubTitlesNames as? [String],
+               let indexes = vlcMediaPlayer.videoSubTitlesIndexes as? [Int],
+               tracks.count == indexes.count {
+                if availableSubtitles.count != tracks.count {
                     var subs: [VideoSubtitle] = []
                     for (i, name) in tracks.enumerated() { subs.append(VideoSubtitle(id: "vlc_\(indexes[i])", name: name, index: indexes[i])) }
                     self.availableSubtitles = subs
+                }
+                // Mirror VLC's actual selection so the UI never lies about
+                // which track (or Disable) is active.
+                let current = Int(vlcMediaPlayer.currentVideoSubTitleIndex)
+                if currentSubtitle?.index != current {
+                    self.currentSubtitle = availableSubtitles.first { $0.index == current }
                 }
             }
             // Audio tracks (VLC)
@@ -796,12 +900,12 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                     self.isPlaying = false
                     self.unexpectedPauseCount = 0
                 }
-            case .readyToPlay: 
+            case .readyToPlay:
                 self.isBuffering = false
                 self.isPlaying = true
-                self.ksPlayerRetryCount = 0 
+                self.ksPlayerRetryCount = 0
                 self.unexpectedPauseCount = 0
-                
+
                 self.applyAspectRatio(self.currentAspectRatio)
             default: self.isBuffering = false; self.isPlaying = true
             }
@@ -860,7 +964,16 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     public func setQuality(_ quality: VideoQuality) { currentQuality = quality }
     
     public func setAspectRatio(_ ratio: VideoAspectRatio) {
-        currentAspectRatio = ratio; applyAspectRatio(ratio)
+        currentAspectRatio = ratio
+        applyAspectRatio(ratio)
+        // Re-assert once the current render pass has settled: VLC's video
+        // output occasionally eats a geometry change applied mid-frame
+        // (which is why a mode sometimes needed a second tap), and
+        // KSPlayer's constraint swap can land before its layer exists.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+            guard let self, self.currentAspectRatio == ratio else { return }
+            self.applyAspectRatio(ratio)
+        }
     }
     
     public func toggleAspectRatio() {
@@ -870,79 +983,294 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         setAspectRatio(next)
     }
 
-    /// Enable Picture-in-Picture (PiP) mode for video playback
-    public func enablePictureInPicture() {
-        if currentBackend == .ksplayer {
-            // KSPlayer uses AVPlayer internally, try to enable PiP
-            // Access the AVPlayer through KSPlayer's layer
-            if let avPlayerLayer = ksPlayerView.layer as? AVPlayerLayer {
-                // Enable PiP if supported
-                if AVPictureInPictureController.isPictureInPictureSupported() {
-                    // Stop any existing PiP session first
-                    if pipController?.isPictureInPictureActive ?? false {
-                        pipController?.stopPictureInPicture()
+    /// Dedicated AVPlayer used ONLY for the system PiP window — VLC stays
+    /// the playback engine, but its renderer can't feed PiP. While VLC
+    /// plays a compatible (HLS) stream, this side player runs MUTED behind
+    /// VLC's view with `canStartPictureInPictureAutomaticallyFromInline`
+    /// set, so iOS floats the video automatically when the app closes.
+    private var pipAVPlayer: AVPlayer?
+    private var pipAVLayer: AVPlayerLayer?
+    private var pipStatusObservation: NSKeyValueObservation?
+    private var pipTimeControlObservation: NSKeyValueObservation?
+    private var pipItemNotifTokens: [NSObjectProtocol] = []
+    /// The stream the side player carries. Captured at arm time because the
+    /// engine's currentURL is cleared when the on-screen player is dismissed,
+    /// but a detached floating window still needs to reconnect after stalls.
+    private var pipStreamURL: URL?
+    private var lastPiPRecovery = Date.distantPast
+    /// VLC was stopped (not paused) to hand its stream connection to the
+    /// PiP player — most IPTV servers allow one connection per stream, so
+    /// both can't run at once. Survives teardown so returning to the app
+    /// knows to restart VLC.
+    private var vlcSuspendedForPiP = false
+    /// While hidden behind VLC the side player only needs to stay alive,
+    /// not look good — cap it so it doesn't fight VLC for bandwidth.
+    private let pipHiddenBitrateCap: Double = 1_200_000
+    /// True from PiP start until it ends — dismissal paths check this so
+    /// closing the player screen doesn't kill an active floating window.
+    public private(set) var isPiPSessionActive = false
+    /// A manual PiP-button tap arrived before the side player was ready.
+    private var startPiPWhenReady = false
+
+    /// Arms the auto-PiP side-channel for the current VLC stream. Safe to
+    /// call repeatedly; no-ops when already armed or unsupported.
+    public func armAutoPiP() {
+        guard AVPictureInPictureController.isPictureInPictureSupported(),
+              currentBackend == .vlc,
+              let url = currentURL,
+              pipAVPlayer == nil else { return }
+
+        let item = AVPlayerItem(url: url)
+        item.preferredPeakBitRate = pipHiddenBitrateCap
+        let player = AVPlayer(playerItem: item)
+        player.isMuted = true
+        let layer = AVPlayerLayer(player: player)
+        layer.videoGravity = .resizeAspect
+        layer.frame = renderView.bounds
+        // Behind VLC's drawable — rendering (required for auto-PiP) but
+        // never visible.
+        renderView.layer.insertSublayer(layer, at: 0)
+        pipAVPlayer = player
+        pipAVLayer = layer
+        pipStreamURL = url
+        attachPiPItemObservers(item)
+        watchPiPTimeControl(player)
+
+        pipStatusObservation = player.currentItem?.observe(\.status, options: [.new]) { [weak self] item, _ in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch item.status {
+                case .readyToPlay:
+                    self.pipStatusObservation = nil
+                    player.play()
+                    let controller = AVPictureInPictureController(playerLayer: layer)
+                    controller?.canStartPictureInPictureAutomaticallyFromInline = true
+                    controller?.delegate = self
+                    self.pipController = controller
+                    if self.startPiPWhenReady {
+                        self.startPiPWhenReady = false
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                            controller?.startPictureInPicture()
+                        }
                     }
-
-                    // Create new PiP controller
-                    let newPipController = AVPictureInPictureController(playerLayer: avPlayerLayer)
-                    newPipController?.delegate = self
-                    self.pipController = newPipController
-
-                    // Start PiP
-                    newPipController?.startPictureInPicture()
+                case .failed:
+                    // Raw TS/unsupported container — AVPlayer can't carry
+                    // this stream; PiP simply stays unavailable for it.
+                    print("⚠️ [NebuloEngine] PiP side-player failed: \(item.error?.localizedDescription ?? "unknown")")
+                    self.teardownPiPPlayer()
+                default:
+                    break
                 }
             }
         }
-        // Note: VLC backend does not natively support PiP in iOS
+    }
+
+    /// A stalled live stream never comes back with a plain play() — the
+    /// server has dropped the connection. Reconnect by swapping in a fresh
+    /// item at the live edge; the layer (and any active PiP window bound to
+    /// it) carries straight on.
+    private func recoverPiPSidePlayer() {
+        guard let player = pipAVPlayer, let url = pipStreamURL else { return }
+        guard Date().timeIntervalSince(lastPiPRecovery) > 3 else { return }
+        lastPiPRecovery = Date()
+        print("🔄 [NebuloEngine] PiP side-player reconnecting")
+        let item = AVPlayerItem(url: url)
+        item.preferredPeakBitRate = isPiPSessionActive ? 0 : pipHiddenBitrateCap
+        attachPiPItemObservers(item)
+        player.replaceCurrentItem(with: item)
+        player.play()
+    }
+
+    private func attachPiPItemObservers(_ item: AVPlayerItem) {
+        pipItemNotifTokens.forEach { NotificationCenter.default.removeObserver($0) }
+        pipItemNotifTokens = [
+            // Momentary stalls at the live edge are routine and AVPlayer
+            // digs itself out — reloading on every one is what made the
+            // window flash grey. Only a stall that DOESN'T clear is a
+            // dead connection.
+            NotificationCenter.default.addObserver(forName: AVPlayerItem.playbackStalledNotification, object: item, queue: .main) { [weak self] _ in
+                self?.verifyThenRecoverPiP()
+            },
+            NotificationCenter.default.addObserver(forName: AVPlayerItem.failedToPlayToEndTimeNotification, object: item, queue: .main) { [weak self] _ in
+                self?.recoverPiPSidePlayer()
+            },
+            // A live stream "ending" means the playlist stopped updating —
+            // nudge it first; reconnect only if it stays down.
+            NotificationCenter.default.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification, object: item, queue: .main) { [weak self] _ in
+                self?.pipAVPlayer?.play()
+                self?.verifyThenRecoverPiP(treatPausedAsDead: true)
+            }
+        ]
+    }
+
+    /// Waits a beat after a trouble signal, then reconnects only if the
+    /// player genuinely isn't making progress. A deliberately-paused but
+    /// healthy player is left alone (unless the caller says paused = dead,
+    /// as after a live stream "ended").
+    private func verifyThenRecoverPiP(treatPausedAsDead: Bool = false) {
+        guard let player = pipAVPlayer else { return }
+        let mark = player.currentTime()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in
+            guard let self, let player = self.pipAVPlayer else { return }
+            let advanced = CMTimeGetSeconds(CMTimeSubtract(player.currentTime(), mark))
+            let item = player.currentItem
+            let itemDead = item == nil || item?.status == .failed || item?.error != nil
+            switch player.timeControlStatus {
+            case .playing where advanced > 0.5:
+                return
+            case .paused where !treatPausedAsDead && !itemDead:
+                return
+            default:
+                self.recoverPiPSidePlayer()
+            }
+        }
+    }
+
+    private func watchPiPTimeControl(_ player: AVPlayer) {
+        pipTimeControlObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] p, _ in
+            DispatchQueue.main.async {
+                guard let self, self.pipAVPlayer === p else { return }
+                switch p.timeControlStatus {
+                case .waitingToPlayAtSpecifiedRate:
+                    // Buffering is normal; buffering that never ends is a
+                    // dead connection. Give it 5s, then reconnect.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+                        guard let self, let player = self.pipAVPlayer, player === p,
+                              player.timeControlStatus == .waitingToPlayAtSpecifiedRate else { return }
+                        self.recoverPiPSidePlayer()
+                    }
+                case .paused:
+                    // Respect a deliberate pause from the PiP window's own
+                    // button — only step in when the item itself is dead,
+                    // which is why "play" appears to do nothing.
+                    if self.isPiPSessionActive,
+                       p.currentItem == nil || p.currentItem?.status == .failed || p.currentItem?.error != nil {
+                        self.recoverPiPSidePlayer()
+                    }
+                default:
+                    break
+                }
+            }
+        }
+    }
+
+    /// Manual PiP trigger (the player's PiP button). Uses the pre-armed
+    /// side player when it's ready; otherwise arms it and starts as soon
+    /// as it is.
+    public func enablePictureInPicture() {
+        guard AVPictureInPictureController.isPictureInPictureSupported() else { return }
+
+        if currentBackend == .ksplayer {
+            startSystemPiP()
+            return
+        }
+        guard currentBackend == .vlc else { return }
+
+        if let controller = pipController, let side = pipAVPlayer, pipStatusObservation == nil {
+            // Hand the window a healthy, playing player — a stalled one
+            // opens paused with a play button that does nothing.
+            if side.currentItem == nil || side.currentItem?.status == .failed || side.currentItem?.error != nil {
+                recoverPiPSidePlayer()
+            } else if side.timeControlStatus != .playing {
+                side.play()
+            }
+            controller.startPictureInPicture()
+        } else {
+            startPiPWhenReady = true
+            armAutoPiP()
+        }
+    }
+
+    /// Tears down the PiP side-player. Deliberately leaves
+    /// `vlcSuspendedForPiP` alone — returning to the foreground uses it to
+    /// know VLC still needs restarting.
+    private func teardownPiPPlayer() {
+        pipStatusObservation = nil
+        pipTimeControlObservation = nil
+        pipItemNotifTokens.forEach { NotificationCenter.default.removeObserver($0) }
+        pipItemNotifTokens = []
+        startPiPWhenReady = false
+        isPiPSessionActive = false
+        pipAVPlayer?.pause()
+        pipAVLayer?.removeFromSuperlayer()
+        pipAVPlayer = nil
+        pipAVLayer = nil
+        pipStreamURL = nil
+        pipController = nil
+    }
+
+    /// Finds the AVPlayerLayer inside KSPlayer's view tree (it's nested a
+    /// few layers deep, never the root layer) and starts PiP on it.
+    private func startSystemPiP() {
+        func findPlayerLayer(_ layer: CALayer) -> AVPlayerLayer? {
+            if let player = layer as? AVPlayerLayer { return player }
+            for sub in layer.sublayers ?? [] {
+                if let found = findPlayerLayer(sub) { return found }
+            }
+            return nil
+        }
+        guard let avPlayerLayer = findPlayerLayer(ksPlayerView.layer) else {
+            print("⚠️ [NebuloEngine] No AVPlayerLayer available for PiP (non-AVPlayer track).")
+            return
+        }
+        if pipController?.isPictureInPictureActive ?? false {
+            pipController?.stopPictureInPicture()
+        }
+        let controller = AVPictureInPictureController(playerLayer: avPlayerLayer)
+        controller?.delegate = self
+        self.pipController = controller
+        controller?.startPictureInPicture()
     }
 
     private func applyAspectRatio(_ ratio: VideoAspectRatio) {
+        // Fill/Stretch read the container's live bounds — main thread only.
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in self?.applyAspectRatio(ratio) }
+            return
+        }
         if currentBackend == .vlc {
-            
+
             vlcMediaPlayer.scaleFactor = 0
             vlcMediaPlayer.videoCropGeometry = nil
             vlcMediaPlayer.videoAspectRatio = nil
-            
-            var ratioString: String? = nil
-            
+
+            // The container's current shape as a VLC geometry string.
+            let bounds = renderView.bounds.size
+            let screenAspect: String? = (bounds.width > 0 && bounds.height > 0)
+                ? "\(Int(bounds.width)):\(Int(bounds.height))"
+                : nil
+
+            var aspectString: String? = nil
+            var cropString: String? = nil
+
             switch ratio {
-            case .sixteenNine: ratioString = "16:9"
-            case .fourThree: ratioString = "4:3"
-            case .twentyOneNine: ratioString = "21:9"
-            case .oneEightFive: ratioString = "185:100"
-            case .fill:
-                
-                let vSize = vlcMediaPlayer.videoSize
-                let rSize = renderView.bounds.size
-                
-                if vSize.width > 0 && vSize.height > 0 && rSize.width > 0 && rSize.height > 0 {
-                    let widthScale = rSize.width / vSize.width
-                    let heightScale = rSize.height / vSize.height
-                    let targetScale = max(widthScale, heightScale)
-                    vlcMediaPlayer.scaleFactor = Float(targetScale)
-                } else {
-                    
-                    if Thread.isMainThread {
-                        let w = Int(renderView.bounds.width)
-                        let h = Int(renderView.bounds.height)
-                        if h > 0 { ratioString = "\(w):\(h)" }
-                    } else {
-                        DispatchQueue.main.sync {
-                            let w = Int(renderView.bounds.width)
-                            let h = Int(renderView.bounds.height)
-                            if h > 0 { ratioString = "\(w):\(h)" }
-                        }
-                    }
-                }
             case .default:
                 break
+            case .sixteenNine:
+                aspectString = "16:9"
+            case .fourThree:
+                aspectString = "4:3"
+            case .stretch:
+                // Distort the frame to the screen's exact shape.
+                aspectString = screenAspect
+            case .fill:
+                // Crop to the screen's shape — VLC scales the remainder
+                // edge-to-edge with no distortion. Re-applied on every
+                // container size change (see onLayoutSizeChange), so it
+                // covers the screen in portrait AND landscape.
+                cropString = screenAspect
             }
-            
-            if let s = ratioString {
-                
-                let charArray = s.cString(using: .utf8)!
-                charArray.withUnsafeBufferPointer { ptr in
-                   vlcMediaPlayer.videoAspectRatio = UnsafeMutablePointer<Int8>(mutating: ptr.baseAddress)
+
+            if let s = aspectString {
+                let chars = s.cString(using: .utf8)!
+                chars.withUnsafeBufferPointer { ptr in
+                    vlcMediaPlayer.videoAspectRatio = UnsafeMutablePointer<Int8>(mutating: ptr.baseAddress)
+                }
+            }
+            if let s = cropString {
+                let chars = s.cString(using: .utf8)!
+                chars.withUnsafeBufferPointer { ptr in
+                    vlcMediaPlayer.videoCropGeometry = UnsafeMutablePointer<Int8>(mutating: ptr.baseAddress)
                 }
             }
         } else if currentBackend == .ksplayer {
@@ -1011,39 +1339,16 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                     let hMax = view.heightAnchor.constraint(equalTo: container.heightAnchor); hMax.priority = .defaultHigh
                     newConstraints.append(contentsOf: [wMax, hMax])
 
-                case .twentyOneNine:
+                case .stretch:
+                     // Full-bleed with distortion: pin every edge and let
+                     // the layer resize the frame into the container.
                      gravityString = .resize
-                     let aspect = view.widthAnchor.constraint(equalTo: view.heightAnchor, multiplier: 21/9)
-                     aspect.priority = .required
-                     
                      newConstraints = [
-                         view.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-                         view.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-                         view.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor),
-                         view.heightAnchor.constraint(lessThanOrEqualTo: container.heightAnchor),
-                         aspect
+                         view.topAnchor.constraint(equalTo: container.topAnchor),
+                         view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+                         view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                         view.trailingAnchor.constraint(equalTo: container.trailingAnchor)
                      ]
-                     
-                     let wMax = view.widthAnchor.constraint(equalTo: container.widthAnchor); wMax.priority = .defaultHigh
-                     let hMax = view.heightAnchor.constraint(equalTo: container.heightAnchor); hMax.priority = .defaultHigh
-                     newConstraints.append(contentsOf: [wMax, hMax])
-
-                case .oneEightFive:
-                     gravityString = .resize
-                     let aspect = view.widthAnchor.constraint(equalTo: view.heightAnchor, multiplier: 1.85)
-                     aspect.priority = .required
-                     
-                     newConstraints = [
-                         view.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-                         view.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-                         view.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor),
-                         view.heightAnchor.constraint(lessThanOrEqualTo: container.heightAnchor),
-                         aspect
-                     ]
-                     
-                     let wMax = view.widthAnchor.constraint(equalTo: container.widthAnchor); wMax.priority = .defaultHigh
-                     let hMax = view.heightAnchor.constraint(equalTo: container.heightAnchor); hMax.priority = .defaultHigh
-                     newConstraints.append(contentsOf: [wMax, hMax])
                 }
                 
                 
@@ -1108,13 +1413,54 @@ extension NebuloPlayerEngine: VLCMediaPlayerDelegate {
 extension NebuloPlayerEngine: AVPictureInPictureControllerDelegate {
     public func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
         print("📱 [NebuloEngine] PiP started")
+        isPiPSessionActive = true
+        // The floating window takes over. VLC is STOPPED, not paused —
+        // a paused VLC still holds its stream connection, and single-
+        // connection IPTV servers would starve the PiP player of the
+        // very stream it's showing.
+        if currentBackend == .vlc {
+            vlcSuspendedForPiP = true
+            vlcMediaPlayer.stop()
+            // VLC tearing down its audio unit must not take the shared
+            // session down with it.
+            try? AVAudioSession.sharedInstance().setActive(true)
+            pipAVPlayer?.currentItem?.preferredPeakBitRate = 0
+            pipAVPlayer?.isMuted = false
+            if pipAVPlayer?.timeControlStatus != .playing { pipAVPlayer?.play() }
+        }
     }
 
     public func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
         print("📱 [NebuloEngine] PiP stopped")
+        isPiPSessionActive = false
+        if currentBackend == .vlc {
+            if UIApplication.shared.applicationState != .active {
+                // The user closed the window from the background — that
+                // means "stop", not "keep streaming invisibly".
+                teardownPiPPlayer()
+                return
+            }
+            // Back inline: side player re-mutes and keeps rendering (armed
+            // for the next auto-PiP), VLC reconnects and takes the screen.
+            pipAVPlayer?.isMuted = true
+            pipAVPlayer?.currentItem?.preferredPeakBitRate = pipHiddenBitrateCap
+            vlcSuspendedForPiP = false
+            vlcMediaPlayer.play()
+        } else {
+            // The on-screen player is already gone — the floating window
+            // was the last piece, so tear everything down.
+            teardownPiPPlayer()
+        }
     }
 
     public func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
         print("⚠️ [NebuloEngine] PiP failed to start: \(error.localizedDescription)")
+    }
+
+    public func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void) {
+        // The window's "back to full screen" button — MainView re-presents
+        // the full player if it was dismissed behind the float.
+        NotificationCenter.default.post(name: .nebuloPiPRestore, object: nil)
+        completionHandler(true)
     }
 }

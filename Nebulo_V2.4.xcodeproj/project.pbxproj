@@ -7,15 +7,59 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A1B2C3D4000000000000000C /* NebuloWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000001 /* NebuloWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		E165D43E2F1070EA00037231 /* VLCKitSPM in Frameworks */ = {isa = PBXBuildFile; productRef = E165D43D2F1070EA00037231 /* VLCKitSPM */; };
 		E165D4412F1070FE00037231 /* KSPlayer in Frameworks */ = {isa = PBXBuildFile; productRef = E165D4402F1070FE00037231 /* KSPlayer */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		A1B2C3D4000000000000000A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E1F2B4372F0B9631004D9D5D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A1B2C3D40000000000000003;
+			remoteInfo = NebuloWidgetExtension;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A1B2C3D4000000000000000D /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				A1B2C3D4000000000000000C /* NebuloWidgetExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		A1B2C3D40000000000000001 /* NebuloWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = NebuloWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		E1F2B43F2F0B9631004D9D5D /* Nebulo_V2.4.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nebulo_V2.4.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		A1B2C3D4000000000000000E /* Exceptions for "NebuloWidgetExtension" folder in "NebuloWidgetExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = A1B2C3D40000000000000003 /* NebuloWidgetExtension */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		A1B2C3D40000000000000002 /* NebuloWidgetExtension */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				A1B2C3D4000000000000000E /* Exceptions for "NebuloWidgetExtension" folder in "NebuloWidgetExtension" target */,
+			);
+			path = NebuloWidgetExtension;
+			sourceTree = "<group>";
+		};
 		E1F2B4412F0B9631004D9D5D /* Nebulo_V2.4 */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = Nebulo_V2.4;
@@ -24,6 +68,13 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		A1B2C3D40000000000000005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		E1F2B43C2F0B9631004D9D5D /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -40,6 +91,7 @@
 			isa = PBXGroup;
 			children = (
 				E1F2B4412F0B9631004D9D5D /* Nebulo_V2.4 */,
+				A1B2C3D40000000000000002 /* NebuloWidgetExtension */,
 				E1F2B4402F0B9631004D9D5D /* Products */,
 			);
 			sourceTree = "<group>";
@@ -48,6 +100,7 @@
 			isa = PBXGroup;
 			children = (
 				E1F2B43F2F0B9631004D9D5D /* Nebulo_V2.4.app */,
+				A1B2C3D40000000000000001 /* NebuloWidgetExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -55,6 +108,28 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		A1B2C3D40000000000000003 /* NebuloWidgetExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A1B2C3D40000000000000007 /* Build configuration list for PBXNativeTarget "NebuloWidgetExtension" */;
+			buildPhases = (
+				A1B2C3D40000000000000004 /* Sources */,
+				A1B2C3D40000000000000005 /* Frameworks */,
+				A1B2C3D40000000000000006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A1B2C3D40000000000000002 /* NebuloWidgetExtension */,
+			);
+			name = NebuloWidgetExtension;
+			packageProductDependencies = (
+			);
+			productName = NebuloWidgetExtension;
+			productReference = A1B2C3D40000000000000001 /* NebuloWidgetExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		E1F2B43E2F0B9631004D9D5D /* Nebulo_V2.4 */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = E1F2B44A2F0B9633004D9D5D /* Build configuration list for PBXNativeTarget "Nebulo_V2.4" */;
@@ -63,10 +138,12 @@
 				E1F2B43C2F0B9631004D9D5D /* Frameworks */,
 				E1F2B44D2F0B9633004D9D5D /* Fix libshaderc_combined Bundle Identifier */,
 				E1F2B43D2F0B9631004D9D5D /* Resources */,
+				A1B2C3D4000000000000000D /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				A1B2C3D4000000000000000B /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				E1F2B4412F0B9631004D9D5D /* Nebulo_V2.4 */,
@@ -90,6 +167,11 @@
 				LastSwiftUpdateCheck = 2600;
 				LastUpgradeCheck = 2600;
 				TargetAttributes = {
+					A1B2C3D40000000000000003 = {
+						CreatedOnToolsVersion = 26.0.1;
+						DevelopmentTeam = EL9V67G3NB;
+						ProvisioningStyle = Automatic;
+					};
 					E1F2B43E2F0B9631004D9D5D = {
 						CreatedOnToolsVersion = 26.0.1;
 						DevelopmentTeam = EL9V67G3NB;
@@ -116,11 +198,19 @@
 			projectRoot = "";
 			targets = (
 				E1F2B43E2F0B9631004D9D5D /* Nebulo_V2.4 */,
+				A1B2C3D40000000000000003 /* NebuloWidgetExtension */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		A1B2C3D40000000000000006 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		E1F2B43D2F0B9631004D9D5D /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -153,6 +243,13 @@
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		A1B2C3D40000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		E1F2B43B2F0B9631004D9D5D /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -162,7 +259,65 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		A1B2C3D4000000000000000B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A1B2C3D40000000000000003 /* NebuloWidgetExtension */;
+			targetProxy = A1B2C3D4000000000000000A /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		A1B2C3D40000000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = NebuloWidgetExtension/NebuloWidgetExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = EL9V67G3NB;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = NebuloWidgetExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = NebuloWidgetExtension;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 3.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "personal.Nebulo-V2-4.NebuloWidgetExtension";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A1B2C3D40000000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = NebuloWidgetExtension/NebuloWidgetExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = EL9V67G3NB;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = NebuloWidgetExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = NebuloWidgetExtension;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 3.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "personal.Nebulo-V2-4.NebuloWidgetExtension";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		E1F2B4482F0B9633004D9D5D /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -292,6 +447,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_MODULE_VERIFIER_KIND = none;
+				CODE_SIGN_ENTITLEMENTS = "Nebulo_V2.4/Nebulo_V2.4.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = EL9V67G3NB;
@@ -309,7 +465,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.3;
+				MARKETING_VERSION = 3.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "personal.Nebulo-V2-4";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -328,6 +484,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_MODULE_VERIFIER_KIND = none;
+				CODE_SIGN_ENTITLEMENTS = "Nebulo_V2.4/Nebulo_V2.4.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = EL9V67G3NB;
@@ -345,7 +502,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.3;
+				MARKETING_VERSION = 3.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "personal.Nebulo-V2-4";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -361,6 +518,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		A1B2C3D40000000000000007 /* Build configuration list for PBXNativeTarget "NebuloWidgetExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1B2C3D40000000000000008 /* Debug */,
+				A1B2C3D40000000000000009 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		E1F2B43A2F0B9631004D9D5D /* Build configuration list for PBXProject "Nebulo_V2.4" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

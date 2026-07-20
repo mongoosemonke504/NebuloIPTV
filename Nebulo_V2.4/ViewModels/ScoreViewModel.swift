@@ -35,7 +35,50 @@ class ScoreViewModel: ObservableObject {
     @Published private(set) var teamCatalog: [TeamCatalogService.Entry] = []
     /// When set, the sports hub presents the match detail sheet for this game.
     @Published var detailRequest: GameDetailRequest?
+    /// Deep-link presentation (Live Activity tap): separate from
+    /// `detailRequest` because the hub's sheet only exists while the Sports
+    /// section is on screen — this one presents from the app root over
+    /// whatever is showing.
+    @Published var deepLinkRequest: GameDetailRequest?
+    /// Deep link that arrived before the scoreboards finished loading
+    /// (cold launch from a Live Activity tap) — resolved after the next
+    /// score fetch lands.
+    private var pendingDeepLinkGameID: String?
     private var currentSearchText = ""
+
+    /// Live Activity tap → open this game's detail page. Falls back to a
+    /// pending slot when the game isn't in memory yet.
+    func openGameFromDeepLink(id: String) {
+        // This game's stats are already on screen (hub sheet or an earlier
+        // deep link) — re-presenting would just stack a second copy that
+        // reappears after the user closes the first.
+        guard detailRequest?.game.id != id, deepLinkRequest?.game.id != id else {
+            pendingDeepLinkGameID = nil
+            return
+        }
+        if let hit = findGame(id: id) {
+            pendingDeepLinkGameID = nil
+            deepLinkRequest = makeDetailRequest(for: hit.game, sport: hit.sport)
+        } else {
+            pendingDeepLinkGameID = id
+        }
+    }
+
+    private func findGame(id: String) -> (game: ESPNEvent, sport: SportType)? {
+        for (sport, games) in filteredGames {
+            if let game = games.first(where: { $0.id == id }) {
+                return (game, sport == .pinned ? sportType(for: game) : sport)
+            }
+        }
+        for (sport, sections) in filteredSectionsMap {
+            for section in sections {
+                if let game = section.games.first(where: { $0.id == id }) {
+                    return (game, sport)
+                }
+            }
+        }
+        return nil
+    }
 
     /// Opens the FotMob-style match detail sheet, resolving the aggregate
     /// tabs (Pinned, the soccer buckets) to a concrete sport and mapping a
@@ -234,6 +277,7 @@ class ScoreViewModel: ObservableObject {
     func toggleSportTabVisibility(_ sport: SportType) {
         if hiddenSportTabs.contains(sport) { hiddenSportTabs.remove(sport) } else { hiddenSportTabs.insert(sport) }
         saveToCache()
+        recomputeLiveGames()
     }
     
     func renameSportTab(_ sport: SportType, to newName: String) {
@@ -246,22 +290,33 @@ class ScoreViewModel: ObservableObject {
     }
     
     func togglePin(_ id: String) {
-        if pinnedGameIDs.contains(id) { pinnedGameIDs.remove(id) } else { pinnedGameIDs.insert(id) }
+        if pinnedGameIDs.contains(id) {
+            ChannelViewModel.shared.triggerHaptic(.light)
+            pinnedGameIDs.remove(id)
+        } else {
+            ChannelViewModel.shared.triggerHaptic(.medium)
+            pinnedGameIDs.insert(id)
+        }
         updatePinnedGames()
         saveToCache()
         applyFilter(text: currentSearchText)
     }
     
     func toggleHideScore(_ id: String) {
+        ChannelViewModel.shared.triggerSelectionHaptic()
         if hiddenScoreGameIDs.contains(id) { hiddenScoreGameIDs.remove(id) } else { hiddenScoreGameIDs.insert(id) }
         saveToCache()
     }
     
     func toggleReminder(_ game: ESPNEvent) {
+        // Arm = medium impact, disarm = light — the same weight pairing
+        // every state toggle in the app uses.
         if reminderGameIDs.contains(game.id) {
+            ChannelViewModel.shared.triggerHaptic(.light)
             reminderGameIDs.remove(game.id)
             UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["game_\(game.id)"])
         } else {
+            ChannelViewModel.shared.triggerHaptic(.medium)
             reminderGameIDs.insert(game.id)
             let secondsUntilStart = game.gameDate.timeIntervalSinceNow
             guard secondsUntilStart > 0 else { return }
@@ -564,10 +619,24 @@ class ScoreViewModel: ObservableObject {
     /// `filteredSectionsMap`. Call after either of those publishes.
     private func recomputeLiveGames() {
         var pool: [ESPNEvent] = []
-        for games in filteredGames.values { pool.append(contentsOf: games) }
-        for sections in filteredSectionsMap.values {
+        for (sport, games) in filteredGames where !hiddenSportTabs.contains(sport) {
+            pool.append(contentsOf: games)
+        }
+        for (sport, sections) in filteredSectionsMap where !hiddenSportTabs.contains(sport) {
             for section in sections { pool.append(contentsOf: section.games) }
         }
+        // Fresh scores in hand — push them into any running Live Activities.
+        GameActivityManager.shared.sync(pool: pool)
+
+        // A Live Activity tap can land before the first fetch on a cold
+        // launch; open the game as soon as its scoreboard arrives.
+        if let pending = pendingDeepLinkGameID, let hit = findGame(id: pending) {
+            pendingDeepLinkGameID = nil
+            if detailRequest?.game.id != pending, deepLinkRequest?.game.id != pending {
+                deepLinkRequest = makeDetailRequest(for: hit.game, sport: hit.sport)
+            }
+        }
+
         var seen = Set<String>()
         var result: [ESPNEvent] = []
         for game in pool where game.status.type.state == "in" {
@@ -594,7 +663,7 @@ class ScoreViewModel: ObservableObject {
         guard !favoriteTeamIDs.isEmpty || !favoriteLeagueKeys.isEmpty else { return [] }
         var result: [ESPNEvent] = []
         var seen = Set<String>()
-        for (sport, games) in masterGames {
+        for (sport, games) in masterGames where !hiddenSportTabs.contains(sport) {
             let leagueIsFav = isFavoriteLeague(sport: sport, leagueLabel: nil)
             for game in games where game.status.type.state == "in" {
                 guard seen.insert(game.id).inserted else { continue }
@@ -606,7 +675,7 @@ class ScoreViewModel: ObservableObject {
                 }
             }
         }
-        for (sport, sections) in masterSectionsMap {
+        for (sport, sections) in masterSectionsMap where !hiddenSportTabs.contains(sport) {
             for section in sections {
                 let leagueIsFav = isFavoriteLeague(sport: sport, leagueLabel: section.league)
                 for game in section.games where game.status.type.state == "in" {
@@ -716,24 +785,18 @@ class ScoreViewModel: ObservableObject {
             let lower = text.lowercased()
             var newFiltered: [SportType: [ESPNEvent]] = [:]
             for (sport, games) in masterGames {
-                let matches = games.filter { game in
-                    game.shortName.lowercased().contains(lower) ||
-                    (game.homeCompetitor?.team?.displayName ?? "").lowercased().contains(lower) ||
-                    (game.awayCompetitor?.team?.displayName ?? "").lowercased().contains(lower)
-                }
+                let matches = games.filter { Self.gameMatchesSearch($0, lower) }
                 newFiltered[sport] = sortGames(matches)
             }
             self.filteredGames = newFiltered
             self.filteredGames[.pinned] = allPinnedGames
-            
+
             var newFilteredMap: [SportType: [SoccerGameSection]] = [:]
             for (sport, sections) in masterSectionsMap {
-                let filteredSections = sections.compactMap { sec in
-                    let matchingGames = sec.games.filter { game in
-                        game.shortName.lowercased().contains(lower) ||
-                        (game.homeCompetitor?.team?.displayName ?? "").lowercased().contains(lower) ||
-                        (game.awayCompetitor?.team?.displayName ?? "").lowercased().contains(lower)
-                    }
+                let filteredSections = sections.compactMap { sec -> SoccerGameSection? in
+                    let matchingGames = sec.league.lowercased().contains(lower)
+                        ? sec.games
+                        : sec.games.filter { Self.gameMatchesSearch($0, lower) }
                     return matchingGames.isEmpty ? nil : SoccerGameSection(league: sec.league, games: sortGames(matchingGames))
                 }
                 if !filteredSections.isEmpty { newFilteredMap[sport] = filteredSections }
@@ -742,6 +805,28 @@ class ScoreViewModel: ObservableObject {
         }
         // Filtered maps changed → refresh the live games snapshot once.
         recomputeLiveGames()
+    }
+
+    /// Search hit test for one game: event name, every team-name variant
+    /// (full name, short name, nickname, city, abbreviation), athlete names
+    /// (tennis/MMA), league label, and broadcast network.
+    nonisolated private static func gameMatchesSearch(_ game: ESPNEvent, _ lower: String) -> Bool {
+        if game.shortName.lowercased().contains(lower) { return true }
+        if game.leagueLabel?.lowercased().contains(lower) == true { return true }
+        if game.broadcastName?.lowercased().contains(lower) == true { return true }
+        for comp in [game.homeCompetitor, game.awayCompetitor] {
+            if let team = comp?.team {
+                for field in [team.displayName, team.shortDisplayName, team.abbreviation] {
+                    if field?.lowercased().contains(lower) == true { return true }
+                }
+            }
+            if let athlete = comp?.athlete {
+                for field in [athlete.displayName, athlete.fullName, athlete.shortName] {
+                    if field?.lowercased().contains(lower) == true { return true }
+                }
+            }
+        }
+        return false
     }
 
     // MARK: - Favorite teams & leagues
@@ -794,13 +879,16 @@ class ScoreViewModel: ObservableObject {
     func toggleFavoriteTeam(_ team: ESPNTeam, sport: SportType?) {
         let key = Self.teamKey(sport: sport, teamID: team.id)
         if favoriteTeamIDs.contains(key) {
+            ChannelViewModel.shared.triggerHaptic(.light)
             favoriteTeamIDs.remove(key)
             favoriteTeamOrder.removeAll { $0 == key }
         } else if key != team.id, favoriteTeamIDs.contains(team.id) {
             // Legacy bare-id favorite — this toggle is an unfavorite.
+            ChannelViewModel.shared.triggerHaptic(.light)
             favoriteTeamIDs.remove(team.id)
             favoriteTeamOrder.removeAll { $0 == team.id }
         } else {
+            ChannelViewModel.shared.triggerHaptic(.medium)
             favoriteTeamIDs.insert(key)
             if !favoriteTeamOrder.contains(key) { favoriteTeamOrder.append(key) }
         }
@@ -837,9 +925,11 @@ class ScoreViewModel: ObservableObject {
     func toggleFavoriteLeague(sport: SportType, leagueLabel: String?) {
         let key = Self.leagueKey(sport: sport, leagueLabel: leagueLabel)
         if favoriteLeagueKeys.contains(key) {
+            ChannelViewModel.shared.triggerHaptic(.light)
             favoriteLeagueKeys.remove(key)
             favoriteLeagueOrder.removeAll { $0 == key }
         } else {
+            ChannelViewModel.shared.triggerHaptic(.medium)
             favoriteLeagueKeys.insert(key)
             if !favoriteLeagueOrder.contains(key) { favoriteLeagueOrder.append(key) }
         }

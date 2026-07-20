@@ -135,6 +135,31 @@ struct ESPNEvent: Codable, Identifiable, Hashable, Sendable {
         // minute", which is exactly the false-positive we were seeing.
         return _dateParsed ?? .distantFuture
     }
+
+    /// Pre-game status line in the app's own format, replacing whatever
+    /// shape each ESPN feed uses (MLB's bare "Scheduled", other sports'
+    /// full timestamps): "Today at 7:05 PM", "Tomorrow at 1:10 PM", then
+    /// "Sat, 7/19 at 4:05 PM" from two days out. Non-schedule statuses
+    /// (postponed, delayed, TBD) pass through untouched.
+    nonisolated var scheduleAwareDetail: String {
+        let detail = status.type.detail
+        guard status.type.state == "pre" else { return detail }
+        let date = gameDate
+        guard date != .distantFuture else { return detail }
+        let lower = detail.lowercased()
+        for keyword in ["postpon", "delay", "tbd", "cancel", "suspend"] where lower.contains(keyword) {
+            return detail
+        }
+        let time = DateFormatter()
+        time.dateFormat = "h:mm a"
+        let timeText = time.string(from: date)
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) { return "Today at \(timeText)" }
+        if calendar.isDateInTomorrow(date) { return "Tomorrow at \(timeText)" }
+        let day = DateFormatter()
+        day.dateFormat = "EEE, M/d"
+        return "\(day.string(from: date)) at \(timeText)"
+    }
 }
 
 nonisolated struct ESPNEventSeason: Codable, Hashable, Sendable { let slug: String? }
@@ -148,7 +173,28 @@ struct ESPNStatusType: Codable, Hashable, Sendable {
     var name: String? = nil
     var completed: Bool? = nil
 }
-struct ESPNCompetition: Codable, Hashable, Sendable { let competitors: [ESPNCompetitor]?; let broadcasts: [ESPNBroadcast]?; let leaders: [ESPNLeader]? }
+struct ESPNCompetition: Codable, Hashable, Sendable {
+    let competitors: [ESPNCompetitor]?
+    let broadcasts: [ESPNBroadcast]?
+    let leaders: [ESPNLeader]?
+    /// Live in-game situation from the scoreboard feed — bases/count/outs
+    /// for baseball, down & distance for football. Nil for other sports
+    /// and finished games.
+    var situation: ESPNSituation? = nil
+}
+
+/// Only the fields the Live Activity's situation line uses.
+nonisolated struct ESPNSituation: Codable, Hashable, Sendable {
+    let balls: Int?
+    let strikes: Int?
+    let outs: Int?
+    let onFirst: Bool?
+    let onSecond: Bool?
+    let onThird: Bool?
+    let downDistanceText: String?
+    let shortDownDistanceText: String?
+    let possessionText: String?
+}
 struct ESPNBroadcast: Codable, Hashable, Sendable { let names: [String] }
 struct ESPNCompetitor: Codable, Identifiable, Hashable, Sendable {
     private let _id: String?

@@ -6,7 +6,5 @@
 	<array>
 		<string>group.personal.Nebulo-V2-4</string>
 	</array>
-	<key>get-task-allow</key>
-	<true/>
 </dict>
 </plist>

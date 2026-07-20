@@ -7,7 +7,7 @@ class UpdateService: ObservableObject {
     @Published var isUpdating: Bool = false
     @Published var updateProgress: Double = 0.0
     
-    @Published var currentVersion: String = "V2.4.0"
+    @Published var currentVersion: String = "V3.0.0"
     @Published var checkingForUpdate: Bool = false
     @Published var isUpdateAvailable: Bool = false
     @Published var showUpToDate: Bool = false

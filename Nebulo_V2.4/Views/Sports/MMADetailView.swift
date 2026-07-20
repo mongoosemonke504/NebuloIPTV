@@ -298,37 +298,44 @@ struct MMADetailContentView: View {
     }
 
     private var watchButton: some View {
-        Button {
-            let terms = detail.searchTerms
-            let game = request.game
-            dismiss()
-            viewModel.runSmartSearch(
-                gameID: game.id,
-                home: terms.home,
-                away: terms.away,
-                sport: .mma,
-                network: game.broadcastName
-            )
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "play.fill")
-                Text(isLive ? "Watch Live" : "Find Stream")
-                if let network = request.game.broadcastName {
-                    Text(network)
-                        .font(.system(size: 11, weight: .black))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.white.opacity(0.15))
-                        .cornerRadius(4)
+        HStack(spacing: 10) {
+            Button {
+                ChannelViewModel.shared.triggerHaptic(.medium)
+                let terms = detail.searchTerms
+                let game = request.game
+                dismiss()
+                viewModel.runSmartSearch(
+                    gameID: game.id,
+                    home: terms.home,
+                    away: terms.away,
+                    sport: .mma,
+                    network: game.broadcastName
+                )
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "play.fill")
+                    Text(isLive ? "Watch Live" : "Find Stream")
+                    if let network = request.game.broadcastName {
+                        Text(network)
+                            .font(.system(size: 11, weight: .black))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.white.opacity(0.15))
+                            .cornerRadius(4)
+                    }
                 }
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 13)
+                .modifier(WatchButtonGlass())
             }
-            .font(.system(size: 16, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 13)
-            .modifier(WatchButtonGlass())
+            .buttonStyle(.plain)
+
+            if isLive {
+                LiveActivityPillButton(game: request.game, leagueName: "UFC", sport: .mma)
+            }
         }
-        .buttonStyle(.plain)
     }
 
     // MARK: Fight card

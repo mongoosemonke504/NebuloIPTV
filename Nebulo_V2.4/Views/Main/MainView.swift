@@ -48,7 +48,7 @@ extension View {
 struct MainView: SwiftUI.View {
     @ObservedObject var viewModel: ChannelViewModel
     @ObservedObject var scoreViewModel: ScoreViewModel
-    @AppStorage("xstreamURL") private var xstreamURL = ""; @AppStorage("username") private var username = ""; @AppStorage("password") private var password = ""; @AppStorage("loginTypeRaw") private var loginTypeRaw = LoginType.xtream.rawValue; @AppStorage("viewMode") private var viewMode = ViewMode.automatic.rawValue; @AppStorage("customAccentHex") private var customAccentHex = "#007AFF"; @AppStorage("nebColor1") private var nebColor1 = "#1A2538"; @AppStorage("nebColor2") private var nebColor2 = "#11101A"; @AppStorage("nebColor3") private var nebColor3 = "#1F1A24"; @AppStorage("nebX1") private var nebX1 = 0.5; @AppStorage("nebY1") private var nebY1 = 0.0; @AppStorage("nebX2") private var nebX2 = 0.5; @AppStorage("nebY2") private var nebY2 = 0.5; @AppStorage("nebX3") private var nebX3 = 0.5; @AppStorage("nebY3") private var nebY3 = 1.0
+    @AppStorage("xstreamURL") private var xstreamURL = ""; @AppStorage("username") private var username = ""; @AppStorage("password") private var password = ""; @AppStorage("loginTypeRaw") private var loginTypeRaw = LoginType.xtream.rawValue; @AppStorage("viewMode") private var viewMode = ViewMode.automatic.rawValue; @AppStorage("customAccentHex") private var customAccentHex = "#FFFFFF"; @AppStorage("nebColor1") private var nebColor1 = "#1A2538"; @AppStorage("nebColor2") private var nebColor2 = "#11101A"; @AppStorage("nebColor3") private var nebColor3 = "#1F1A24"; @AppStorage("nebX1") private var nebX1 = 0.5; @AppStorage("nebY1") private var nebY1 = 0.0; @AppStorage("nebX2") private var nebX2 = 0.5; @AppStorage("nebY2") private var nebY2 = 0.5; @AppStorage("nebX3") private var nebX3 = 0.5; @AppStorage("nebY3") private var nebY3 = 1.0
     @AppStorage("showSupportPopup") private var showSupportPopup = true
     @AppStorage("lastSupportPopupTime") private var lastSupportPopupTime: Double = 0
     
@@ -110,11 +110,15 @@ struct MainView: SwiftUI.View {
                 await viewModel.loadData(url: xstreamURL, user: username, pass: password, type: LoginType(rawValue: loginTypeRaw) ?? .xtream, silent: true) 
             } 
         }
-        .onChangeCompat(of: viewModel.channelToAutoPlay) { nc in 
-            if let c = nc { 
+        .onChangeCompat(of: viewModel.channelToAutoPlay) { nc in
+            if let c = nc {
+                // Same bookkeeping as playChannel — a stream found via a
+                // game tap belongs in Continue Watching too.
+                viewModel.addToRecent(c.id)
+                viewModel.lastPlayedChannelID = c.id
                 withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { selectedChannel = c }
-                viewModel.channelToAutoPlay = nil 
-            } 
+                viewModel.channelToAutoPlay = nil
+            }
         }
         .onChangeCompat(of: viewModel.triggerMultiView) { nv in
             if nv {
@@ -122,6 +126,16 @@ struct MainView: SwiftUI.View {
                 withAnimation(.spring()) { showMultiView = true }
                 viewModel.triggerMultiView = false
             }
+        }
+        // PiP window's "back to full screen" button: the on-screen player
+        // was dismissed behind the float, so re-present it for the channel
+        // that's playing. If the cover is still up, there's nothing to do —
+        // the system just brings the app forward.
+        .onReceive(NotificationCenter.default.publisher(for: .nebuloPiPRestore)) { _ in
+            guard selectedChannel == nil,
+                  let id = viewModel.lastPlayedChannelID,
+                  let c = viewModel.channels.first(where: { $0.id == id }) else { return }
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { selectedChannel = c }
         }
         // Search lives in its own presented context: inside the main ZStack,
         // the keyboard-driven relayout of the hierarchy underneath animated
@@ -341,11 +355,35 @@ struct MainViewModifiers: ViewModifier {
                         playAction(newChannel)
                     }, showQuickSwitcher: $showQuickSwitcher)
                     .ignoresSafeArea()
+                    // Transparent cover: while the player card is dragged
+                    // down, the page underneath shows through instead of the
+                    // cover's black backdrop.
+                    .presentationBackground(.clear)
                 }
             }
             .sheet(isPresented: $showSettings) {
                 SettingsView(categories: categories, accentColor: accentColor, viewModel: viewModel, scoreViewModel: scoreViewModel, playAction: playAction, onSave: { viewModel.saveCategorySettings() })
                     .presentationDragIndicator(.visible)
+            }
+            // A Live Activity deep link is about to present the stats sheet
+            // from the root — anything covering it full-screen (the video
+            // player, search, multi-view) must step aside first.
+            .onReceive(NotificationCenter.default.publisher(for: .nebuloDeepLinkWillPresent)) { _ in
+                if selectedChannel != nil {
+                    selectedChannel = nil
+                    showQuickSwitcher = false
+                    if viewModel.miniPlayerChannel == nil {
+                        NebuloPlayerEngine.shared.stop()
+                    }
+                }
+                selectedRecording = nil
+                showMultiView = false
+                if showSearch {
+                    viewModel.searchText = ""
+                    var t = Transaction()
+                    t.disablesAnimations = true
+                    withTransaction(t) { showSearch = false }
+                }
             }
             .alert("No Streams Found", isPresented: showNoStreamsAlert) { Button("OK", role: .cancel) { } } message: { Text("No streams were found. Please search for the channel manually.") }
             .alert("Rename", isPresented: showRenameAlert) {
@@ -1554,6 +1592,8 @@ struct SidebarLayout: SwiftUI.View {
     let isLandscape: Bool; let accentColor: Color; let playAction: (StreamChannel) -> Void; @Binding var showMultiView: Bool; @Binding var showSettings: Bool
     var zoomNS: Namespace.ID? = nil
     @State private var channelForDescription: StreamChannel?
+    /// Tap-through preview: what's on, description, and the play button.
+    @State private var previewChannel: StreamChannel?
 
     // O(1) id → channel cache. Refreshed only when the channel list size
     // changes; prevents the O(recent × channels) walk that getChannelsToShow
@@ -1605,7 +1645,7 @@ struct SidebarLayout: SwiftUI.View {
                             } else {
                                 List {
                                     ForEach(channels) { c in
-                                        ChannelRow(channel: c, epgProgram: viewModel.getCurrentProgram(for: c), isFavorite: viewModel.favoriteIDs.contains(c.id), accentColor: accentColor, isCompact: !isLandscape, playAction: { playAction(c) }, toggleFav: { viewModel.toggleFavorite(c.id) })
+                                        ChannelRow(channel: c, epgProgram: viewModel.getCurrentProgram(for: c), isFavorite: viewModel.favoriteIDs.contains(c.id), accentColor: accentColor, isCompact: !isLandscape, playAction: { viewModel.triggerSelectionHaptic(); previewChannel = c }, toggleFav: { viewModel.toggleFavorite(c.id) })
                                             .equatable()
                                             .id(c.id)
                                             .matchedTransitionSourceIfAvailable(id: c.id, in: zoomNS)
@@ -1677,6 +1717,14 @@ struct SidebarLayout: SwiftUI.View {
                 dismissButton: .default(Text("OK"))
             )
         }
+        .sheet(item: $previewChannel) { channel in
+            ChannelPreviewSheet(
+                channel: channel,
+                viewModel: viewModel,
+                accentColor: accentColor,
+                playAction: { playAction($0) }
+            )
+        }
         .onAppear {
             if idToChannel.isEmpty {
                 var map = [Int: StreamChannel]()
@@ -1708,7 +1756,9 @@ struct CategoryDetailView: SwiftUI.View {
     let title: String; let channels: [StreamChannel]; let accentColor: Color; let playAction: (StreamChannel) -> Void; let toggleFav: (Int) -> Void; let promptRename: (StreamChannel) -> Void; let hideChannel: (Int) -> Void; let favoriteIDs: Set<Int>; @ObservedObject var viewModel: ChannelViewModel; @Binding var showMultiView: Bool; var onBack: (() -> Void)? = nil; var onCategorySelect: ((StreamCategory) -> Void)? = nil; var zoomNS: Namespace.ID? = nil
     @AppStorage("nebColor1") private var nebColor1 = "#1A2538"; @AppStorage("nebColor2") private var nebColor2 = "#11101A"; @AppStorage("nebColor3") private var nebColor3 = "#1F1A24"; @AppStorage("nebX1") private var nebX1 = 0.5; @AppStorage("nebY1") private var nebY1 = 0.0; @AppStorage("nebX2") private var nebX2 = 0.5; @AppStorage("nebY2") private var nebY2 = 0.5; @AppStorage("nebX3") private var nebX3 = 0.5; @AppStorage("nebY3") private var nebY3 = 1.0
     @State private var channelForDescription: StreamChannel?
-    
+    /// Tap-through preview: what's on, description, and the play button.
+    @State private var previewChannel: StreamChannel?
+
     var body: some SwiftUI.View {
         ZStack {
             NebulaBackgroundView(color1: Color(hex: nebColor1) ?? .purple, color2: Color(hex: nebColor2) ?? .blue, color3: Color(hex: nebColor3) ?? .pink, point1: UnitPoint(x: nebX1, y: nebY1), point2: UnitPoint(x: nebX2, y: nebY2), point3: UnitPoint(x: nebX3, y: nebY3))
@@ -1721,7 +1771,7 @@ struct CategoryDetailView: SwiftUI.View {
                         } else {
                             List {
                                 ForEach(channels) { c in
-                                    ChannelRow(channel: c, epgProgram: viewModel.getCurrentProgram(for: c), isFavorite: favoriteIDs.contains(c.id), accentColor: accentColor, playAction: { playAction(c) }, toggleFav: { toggleFav(c.id) })
+                                    ChannelRow(channel: c, epgProgram: viewModel.getCurrentProgram(for: c), isFavorite: favoriteIDs.contains(c.id), accentColor: accentColor, playAction: { viewModel.triggerSelectionHaptic(); previewChannel = c }, toggleFav: { toggleFav(c.id) })
                                         .equatable()
                                         .id(c.id)
                                         .matchedTransitionSourceIfAvailable(id: c.id, in: zoomNS)
@@ -1787,6 +1837,14 @@ struct CategoryDetailView: SwiftUI.View {
                 title: Text("Program Description"),
                 message: Text(viewModel.getCurrentProgram(for: channel)?.description ?? "No description available."),
                 dismissButton: .default(Text("OK"))
+            )
+        }
+        .sheet(item: $previewChannel) { channel in
+            ChannelPreviewSheet(
+                channel: channel,
+                viewModel: viewModel,
+                accentColor: accentColor,
+                playAction: { playAction($0) }
             )
         }
     }
@@ -2741,8 +2799,31 @@ struct HomeFilterChips: View {
 struct TouchPassingHorizontalScroll<Content: View>: UIViewRepresentable {
     @ViewBuilder var content: () -> Content
 
+    /// Re-attaching to a window (a fullScreenCover — player, search — was
+    /// dismissed) can leave the hosted SwiftUI content with a stale layout:
+    /// a too-small content size makes the shelf unscrollable, a too-large
+    /// one lets it drift into empty space with no snap-back. Kick a fresh
+    /// layout on every window re-attach, and clamp on every layout pass so
+    /// a stale offset never survives to the next data refresh.
+    final class ShelfScrollView: UIScrollView {
+        weak var hostedView: UIView?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard window != nil else { return }
+            hostedView?.invalidateIntrinsicContentSize()
+            hostedView?.setNeedsLayout()
+            setNeedsLayout()
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            TouchPassingHorizontalScroll.Coordinator.clampOffset(self)
+        }
+    }
+
     func makeUIView(context: Context) -> UIScrollView {
-        let scrollView = UIScrollView()
+        let scrollView = ShelfScrollView()
         scrollView.showsHorizontalScrollIndicator = false
         scrollView.showsVerticalScrollIndicator = false
         scrollView.alwaysBounceVertical = false
@@ -2773,6 +2854,7 @@ struct TouchPassingHorizontalScroll<Content: View>: UIViewRepresentable {
         ])
 
         context.coordinator.host = host
+        (scrollView as? ShelfScrollView)?.hostedView = host.view
         scrollView.delegate = context.coordinator
         return scrollView
     }
@@ -2780,11 +2862,19 @@ struct TouchPassingHorizontalScroll<Content: View>: UIViewRepresentable {
     func updateUIView(_ scrollView: UIScrollView, context: Context) {
         context.coordinator.host?.rootView = content()
         context.coordinator.scrollView = scrollView
+        // Force a fresh measurement on every content change. Without this,
+        // an update that lands while the shelf is covered (a new Continue
+        // Watching entry added mid-playback) keeps the OLD content size —
+        // the shelf comes back cut off and unscrollable until something
+        // else (backgrounding the app) kicks a layout.
+        context.coordinator.host?.view.invalidateIntrinsicContentSize()
+        scrollView.setNeedsLayout()
         // Content can shrink on a data refresh (fewer live games, shorter
         // shelf) while the old contentOffset survives — the shelf then shows
         // a stray blank gap before the first card. Clamp after the new
         // content has been laid out.
         DispatchQueue.main.async {
+            scrollView.layoutIfNeeded()
             Coordinator.clampOffset(scrollView)
         }
     }
@@ -2869,11 +2959,126 @@ struct LiveGamesPreviewList: View {
                             let sport = scoreViewModel.sportType(for: game)
                             viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.broadcastName)
                         }
+                        .liveGameContextMenu(game: game, viewModel: viewModel, scoreViewModel: scoreViewModel)
                 }
             }
             .padding(.horizontal)
         }
         .frame(height: 170)
+    }
+}
+
+/// The sports-hub long-press menu, reusable on any live game card (home
+/// Live Now shelf, search overlay's Live Now). Same actions as the hub's
+/// GameScoreButton menu, minus Remind Me (these cards are always live).
+extension View {
+    func liveGameContextMenu(
+        game: ESPNEvent,
+        viewModel: ChannelViewModel,
+        scoreViewModel: ScoreViewModel,
+        beforeNavigate: (() -> Void)? = nil
+    ) -> some View {
+        modifier(LiveGameContextMenuModifier(
+            game: game,
+            viewModel: viewModel,
+            scoreViewModel: scoreViewModel,
+            beforeNavigate: beforeNavigate
+        ))
+    }
+}
+
+struct LiveGameContextMenuModifier: ViewModifier {
+    let game: ESPNEvent
+    @ObservedObject var viewModel: ChannelViewModel
+    @ObservedObject var scoreViewModel: ScoreViewModel
+    let beforeNavigate: (() -> Void)?
+    // Observed (not read through the singleton) so stopping the activity —
+    // from here, another menu, or the Lock Screen — refreshes the label.
+    @ObservedObject private var activityManager = GameActivityManager.shared
+
+    func body(content: Content) -> some View {
+        content.contextMenu {
+            let (h, a) = game.searchTerms
+            let sport = scoreViewModel.sportType(for: game)
+            let isPinned = scoreViewModel.pinnedGameIDs.contains(game.id)
+            let isScoreHidden = scoreViewModel.hiddenScoreGameIDs.contains(game.id)
+
+            if sport != .f1 {
+                Button {
+                    beforeNavigate?()
+                    // The root-level deep-link sheet — presents the stats
+                    // page over any screen, not just the sports hub.
+                    scoreViewModel.deepLinkRequest = scoreViewModel.makeDetailRequest(for: game, sport: sport)
+                } label: {
+                    Label("View Stats", systemImage: "chart.bar.fill")
+                }
+            }
+
+            Button {
+                beforeNavigate?()
+                viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.broadcastName)
+            } label: {
+                Label("Watch Stream", systemImage: "play.fill")
+            }
+
+            Button {
+                beforeNavigate?()
+                viewModel.showStreamOptions(home: h, away: a, sport: sport, network: game.broadcastName)
+            } label: {
+                Label("Stream List", systemImage: "list.bullet")
+            }
+
+            Button {
+                beforeNavigate?()
+                viewModel.autoAddGameToMultiView(home: h, away: a, network: game.broadcastName)
+            } label: {
+                Label("Add to Multi-View", systemImage: "square.grid.2x2")
+            }
+
+            Button {
+                let query = "\(game.shortName) highlights"
+                if let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+                   let url = URL(string: "https://www.youtube.com/results?search_query=\(encoded)") {
+                    UIApplication.shared.open(url)
+                }
+            } label: {
+                Label("Find Highlights", systemImage: "play.rectangle.fill")
+            }
+
+            Button {
+                viewModel.toggleGameRecording(game: game, sport: sport)
+            } label: {
+                let isScheduled = viewModel.scheduledRecording(for: game) != nil
+                Label(isScheduled ? "Cancel Recording" : "Record",
+                      systemImage: isScheduled ? "stop.circle" : "record.circle")
+            }
+
+            if game.status.type.state == "in" {
+                let isTracking = activityManager.trackedGameIDs.contains(game.id)
+                Button {
+                    activityManager.toggle(
+                        game: game,
+                        leagueName: game.leagueLabel ?? sport.rawValue,
+                        sport: sport
+                    )
+                } label: {
+                    Label(isTracking ? "Stop Live Activity" : "Live Activity",
+                          systemImage: isTracking ? "bell.slash" : "bell.badge")
+                }
+            }
+
+            Button {
+                scoreViewModel.togglePin(game.id)
+            } label: {
+                Label(isPinned ? "Unpin" : "Pin", systemImage: isPinned ? "pin.slash" : "pin")
+            }
+
+            Button {
+                scoreViewModel.toggleHideScore(game.id)
+            } label: {
+                Label(isScoreHidden ? "Show Score" : "Hide Score", systemImage: isScoreHidden ? "eye" : "eye.slash")
+            }
+        }
     }
 }
 

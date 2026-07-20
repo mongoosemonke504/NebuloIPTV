@@ -630,14 +630,27 @@ class ChannelViewModel: ObservableObject {
             // channels (weighted: 1 + 1/2 + 1/3 ≈ 1.83). Below that, defaults win.
             let hasHistory = genreScores.values.reduce(0, +) >= 1.5
 
-            let preferredGenres: [HomeCategoryGroup]
+            // Hero slots allocated PROPORTIONALLY to watch share: a user
+            // who mostly watches sports gets several sports cards, not one
+            // card per genre. Capped at 4 per genre so the carousel always
+            // keeps some variety; remaining slots fill from the defaults.
+            var slotGenres: [HomeCategoryGroup]
             if hasHistory {
-                let topUserGenres = genreScores.sorted { $0.value > $1.value }.map { $0.key }
-                var ordered = topUserGenres
-                for g in defaultGenres where !ordered.contains(g) { ordered.append(g) }
-                preferredGenres = ordered
+                let total = genreScores.values.reduce(0, +)
+                var slots: [HomeCategoryGroup] = []
+                for (genre, score) in genreScores.sorted(by: { $0.value > $1.value }) {
+                    let share = score / max(total, 0.001)
+                    let count = min(4, max(1, Int((share * 6).rounded())))
+                    slots.append(contentsOf: Array(repeating: genre, count: count))
+                    if slots.count >= 6 { break }
+                }
+                slots = Array(slots.prefix(6))
+                for g in defaultGenres where slots.count < 6 && !slots.contains(g) {
+                    slots.append(g)
+                }
+                slotGenres = slots
             } else {
-                preferredGenres = defaultGenres
+                slotGenres = defaultGenres
             }
 
             // Bucket all visible channels by genre once — avoids repeatedly
@@ -648,11 +661,12 @@ class ChannelViewModel: ObservableObject {
                 byGenre[g, default: []].append(ch)
             }
 
-            // Pick: walk preferredGenres, take the best live channel from each,
-            // falling back to any visible channel if no live ones exist. Cap 6.
+            // Pick: one channel per slot (a genre with 3 slots contributes
+            // its 3 best channels), live programming first, falling back to
+            // any visible channel in the genre. Cap 6.
             var result: [StreamChannel] = []
             var seen = Set<Int>()
-            for genre in preferredGenres {
+            for genre in slotGenres {
                 guard let pool = byGenre[genre], !pool.isEmpty else { continue }
                 if let live = pool.first(where: { hasLiveProgram($0) && !seen.contains($0.id) }) {
                     result.append(live); seen.insert(live.id)
@@ -1872,7 +1886,7 @@ class ChannelViewModel: ObservableObject {
         if let index = categories.firstIndex(where: { $0.id == id }) { categories[index].name = newName; objectWillChange.send() }
     }
     
-    func toggleFavorite(_ id: Int) { if favoriteIDs.contains(id) { favoriteIDs.remove(id) } else { favoriteIDs.insert(id) }; if let d = try? JSONEncoder().encode(Array(favoriteIDs)) { UserDefaults.standard.set(d, forKey: settingsPrefix + "favoriteChannelIDs") } }
+    func toggleFavorite(_ id: Int) { if favoriteIDs.contains(id) { triggerHaptic(.light); favoriteIDs.remove(id) } else { triggerHaptic(.medium); favoriteIDs.insert(id) }; if let d = try? JSONEncoder().encode(Array(favoriteIDs)) { UserDefaults.standard.set(d, forKey: settingsPrefix + "favoriteChannelIDs") } }
     func hideChannel(_ id: Int) { hiddenIDs.insert(id); if let d = try? JSONEncoder().encode(Array(hiddenIDs)) { UserDefaults.standard.set(d, forKey: settingsPrefix + "hiddenChannelIDs") } }
     func unhideChannel(_ id: Int) { hiddenIDs.remove(id); if let d = try? JSONEncoder().encode(Array(hiddenIDs)) { UserDefaults.standard.set(d, forKey: settingsPrefix + "hiddenChannelIDs") } }
     func hideCategory(_ id: Int) { if let idx = categories.firstIndex(where: { $0.id == id }) { categories[idx].isHidden = true; saveCategorySettings() } }
@@ -2097,6 +2111,7 @@ class ChannelViewModel: ObservableObject {
 
     func toggleGameRecording(game: ESPNEvent, sport: SportType) {
         if let existing = scheduledRecording(for: game) {
+            triggerHaptic(.light)
             RecordingManager.shared.deleteRecording(existing)
             return
         }
@@ -2112,6 +2127,7 @@ class ChannelViewModel: ObservableObject {
             epg: epgData, now: currentTime,
             preferredLanguage: preferredLanguage, preferredQuality: preferredQuality
         ) else {
+            triggerNotificationHaptic(.error)
             showNoStreamsAlert = true
             return
         }
@@ -2119,6 +2135,9 @@ class ChannelViewModel: ObservableObject {
         let startTime = game.gameDate
         let endTime = startTime.addingTimeInterval(3 * 3600)
 
+        // A recording got armed — the one state change here that deserves
+        // the full "success" tap.
+        triggerNotificationHaptic(.success)
         RecordingManager.shared.scheduleRecording(
             channel: channel,
             startTime: startTime,

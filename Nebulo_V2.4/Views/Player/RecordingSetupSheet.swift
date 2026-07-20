@@ -13,11 +13,27 @@ struct RecordingSetupSheet: View {
     let channel: StreamChannel
     let onDismiss: () -> Void
 
+    // Same nebula palette as the rest of the app, so the sheet reads as a
+    // page of the app rather than a black slab.
+    @AppStorage("nebColor1") private var nebColor1 = "#1A2538"
+    @AppStorage("nebColor2") private var nebColor2 = "#11101A"
+    @AppStorage("nebColor3") private var nebColor3 = "#1F1A24"
+    @AppStorage("nebX1") private var nebX1 = 0.5
+    @AppStorage("nebY1") private var nebY1 = 0.0
+    @AppStorage("nebX2") private var nebX2 = 0.5
+    @AppStorage("nebY2") private var nebY2 = 0.5
+    @AppStorage("nebX3") private var nebX3 = 0.5
+    @AppStorage("nebY3") private var nebY3 = 1.0
+
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var mode: SetupMode = .guide
     @State private var selectedProgram: EPGProgram? = nil
     @State private var startTime: Date
     @State private var endTime: Date
     @State private var selectedCategory: Recording.RecordingCategory = .other
+    /// Set once the user taps a category chip — auto-guessing stops
+    /// overriding their explicit choice from then on.
+    @State private var userPickedCategory = false
     @State private var didSchedule = false
 
     @ObservedObject private var recordingManager = RecordingManager.shared
@@ -40,17 +56,35 @@ struct RecordingSetupSheet: View {
         _startTime = State(initialValue: initialStartTime)
         _endTime   = State(initialValue: initialStartTime.addingTimeInterval(30 * 60))
         // If we have a current program, pre-select it
+        var program: EPGProgram? = nil
         if let prog = ChannelViewModel.shared.getCurrentProgram(for: channel) {
+            program = prog
             _selectedProgram = State(initialValue: prog)
             _startTime = State(initialValue: max(prog.start, initialStartTime))
             _endTime   = State(initialValue: prog.stop)
         }
+        // Pre-select the category the recording most likely belongs to —
+        // the picker below still lets the user override.
+        let streamCategory = ChannelViewModel.shared.categories.first { $0.id == channel.categoryID }
+        _selectedCategory = State(initialValue: .guess(channel: channel, category: streamCategory, program: program))
     }
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.9).ignoresSafeArea()
+            NebulaBackgroundView(
+                color1: Color(hex: nebColor1) ?? .purple,
+                color2: Color(hex: nebColor2) ?? .blue,
+                color3: Color(hex: nebColor3) ?? .pink,
+                point1: UnitPoint(x: nebX1, y: nebY1),
+                point2: UnitPoint(x: nebX2, y: nebY2),
+                point3: UnitPoint(x: nebX3, y: nebY3)
+            )
+            .ignoresSafeArea()
 
+            // Scrollable in landscape: the fixed column is taller than a
+            // compact-height screen, which was shoving the category chips
+            // and Schedule button off the bottom.
+            ScrollView(showsIndicators: false) {
             VStack(spacing: 0) {
                 // Drag handle
                 RoundedRectangle(cornerRadius: 3)
@@ -79,19 +113,22 @@ struct RecordingSetupSheet: View {
                 .padding(.horizontal, 22)
                 .padding(.bottom, 18)
 
-                // Mode picker
-                HStack(spacing: 0) {
+                // Mode picker — app chip language: solid white when active.
+                HStack(spacing: 8) {
                     ForEach(SetupMode.allCases, id: \.self) { m in
                         Button {
+                            ChannelViewModel.shared.triggerSelectionHaptic()
                             withAnimation(.easeInOut(duration: 0.2)) { mode = m }
                         } label: {
                             Text(m.rawValue)
-                                .font(.system(size: 14, weight: mode == m ? .semibold : .regular))
-                                .foregroundStyle(mode == m ? .white : .white.opacity(0.5))
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(mode == m ? .black : .white)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 10)
-                                .background(mode == m ? Color.white.opacity(0.15) : Color.clear)
-                                .clipShape(Capsule())
+                                .background(
+                                    Capsule().fill(mode == m ? Color.white : Color.white.opacity(0.10))
+                                )
+                                .contentShape(Capsule())
                         }
                         .buttonStyle(.plain)
                     }
@@ -101,12 +138,18 @@ struct RecordingSetupSheet: View {
 
                 Divider().background(Color.white.opacity(0.12))
 
-                // Content
-                if mode == .guide {
-                    guideContent
-                } else {
-                    manualContent
+                // Content — a FIXED-height box for both modes, so toggling
+                // Guide ↔ Manual never reflows the category chips and
+                // buttons below. Shorter in landscape so the whole column
+                // fits with minimal scrolling.
+                Group {
+                    if mode == .guide {
+                        guideContent
+                    } else {
+                        manualContent
+                    }
                 }
+                .frame(height: verticalSizeClass == .compact ? 170 : 260, alignment: .top)
 
                 Divider().background(Color.white.opacity(0.12))
 
@@ -120,6 +163,7 @@ struct RecordingSetupSheet: View {
                     .padding(.horizontal, 22)
                     .padding(.top, 14)
                     .padding(.bottom, 30)
+            }
             }
         }
         .onAppear {
@@ -169,18 +213,27 @@ struct RecordingSetupSheet: View {
                 startTime = max(prog.start, Date())
                 endTime   = prog.stop
             }
+            // Re-guess for the newly chosen program — unless the user has
+            // explicitly picked a category, which always wins.
+            if !userPickedCategory {
+                let streamCategory = ChannelViewModel.shared.categories.first { $0.id == channel.categoryID }
+                selectedCategory = .guess(channel: channel, category: streamCategory, program: prog)
+            }
         } label: {
             HStack(spacing: 14) {
-                // Time column
+                // Time column — fixedSize so "3:15 PM" never wraps into
+                // "3:15 P / M" when the row is wide (landscape).
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(shortTime(prog.start))
                         .font(.system(size: 12, design: .monospaced).weight(isNow ? .bold : .regular))
                         .foregroundStyle(isNow ? .white : .white.opacity(isPast ? 0.3 : 0.55))
+                        .lineLimit(1)
+                        .fixedSize()
                     Text(durationLabel(prog))
                         .font(.system(size: 10))
                         .foregroundStyle(.white.opacity(0.3))
                 }
-                .frame(width: 50, alignment: .trailing)
+                .frame(minWidth: 62, alignment: .trailing)
 
                 // Accent bar
                 RoundedRectangle(cornerRadius: 2)
@@ -259,7 +312,7 @@ struct RecordingSetupSheet: View {
 
             HStack(spacing: 8) {
                 ForEach(Recording.RecordingCategory.allCases, id: \.self) { cat in
-                    Button { selectedCategory = cat } label: {
+                    Button { userPickedCategory = true; selectedCategory = cat } label: {
                         Text(cat.displayName)
                             .font(.system(size: 13, weight: selectedCategory == cat ? .semibold : .regular))
                             .foregroundStyle(selectedCategory == cat ? .white : .white.opacity(0.5))

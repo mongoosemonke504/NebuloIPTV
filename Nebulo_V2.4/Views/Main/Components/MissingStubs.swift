@@ -134,6 +134,10 @@ struct SearchView: View {
     /// than 0 — progress is measured relative to this baseline.
     @State private var probeRestY: CGFloat? = nil
 
+    /// One dismissal per rubber-band pull — reset once the scroll returns
+    /// near rest so a long bounce can't fire twice.
+    @State private var pullDismissFired = ValueBox(false)
+
     /// Manual keyboard tracking. This overlay is presented inside MainView's
     /// `.ignoresSafeArea()` ZStack, which strips both the safe-area insets AND
     /// SwiftUI's automatic keyboard avoidance — so the view measures the
@@ -189,6 +193,7 @@ struct SearchView: View {
         guard let idx = all.firstIndex(of: scope) else { return }
         let next = idx + delta
         guard all.indices.contains(next) else { return }
+        viewModel.triggerSelectionHaptic()
         withAnimation(.easeOut(duration: 0.15)) { scope = all[next] }
     }
 
@@ -266,6 +271,21 @@ struct SearchView: View {
                 }
                 .coordinateSpace(name: "searchScroll")
                 .frame(maxWidth: .infinity)
+                // Pull-past-top to close, like dragging a sheet down: once
+                // the rubber-band overscroll passes 70pts the overlay
+                // dismisses. Latched so one long bounce fires exactly once.
+                .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                    geometry.contentOffset.y + geometry.contentInsets.top
+                } action: { _, scrolled in
+                    if scrolled >= -5 {
+                        pullDismissFired.value = false
+                    } else if scrolled < -70, !pullDismissFired.value {
+                        pullDismissFired.value = true
+                        viewModel.triggerSelectionHaptic()
+                        fieldFocused = false
+                        onDismiss()
+                    }
+                }
                 // Horizontal swipe on the results area steps through the
                 // scope chips (All → Channels → EPG → Recordings), matching
                 // the Sports and Favorites sections. Fires mid-drag for an
@@ -485,6 +505,10 @@ struct SearchView: View {
                                         onDismiss()
                                         viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: svm.sportType(for: game), network: game.broadcastName)
                                     }
+                                    .liveGameContextMenu(game: game, viewModel: viewModel, scoreViewModel: svm, beforeNavigate: {
+                                        fieldFocused = false
+                                        onDismiss()
+                                    })
                             }
                         }
                         .padding(.horizontal, 20)

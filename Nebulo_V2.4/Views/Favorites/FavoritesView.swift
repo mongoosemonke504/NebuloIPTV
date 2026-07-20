@@ -804,6 +804,7 @@ struct FavoriteTeamRow: View {
     let sport: SportType?
     let leagueLabel: String?
     @ObservedObject var scoreViewModel: ScoreViewModel
+    @ObservedObject private var activityManager = GameActivityManager.shared
     /// Tap on the row body (anywhere except the Watch pill) opens the team's
     /// schedule sheet. The Watch pill keeps its existing one-tap-to-play flow.
     let onTap: () -> Void
@@ -875,6 +876,38 @@ struct FavoriteTeamRow: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
+            if let game = liveGame {
+                Button { onWatch(game) } label: {
+                    Label(game.status.type.state == "in" ? "Watch Live" : "Find Stream", systemImage: "play.fill")
+                }
+                let gameSport = sport ?? scoreViewModel.sportType(for: game)
+                if gameSport != .f1 {
+                    Button {
+                        scoreViewModel.deepLinkRequest = scoreViewModel.makeDetailRequest(for: game, sport: gameSport)
+                    } label: {
+                        Label("View Stats", systemImage: "chart.bar.fill")
+                    }
+                }
+                if game.status.type.state == "pre" {
+                    let isReminderSet = scoreViewModel.reminderGameIDs.contains(game.id)
+                    Button { scoreViewModel.toggleReminder(game) } label: {
+                        Label(isReminderSet ? "Cancel Reminder" : "Remind Me",
+                              systemImage: isReminderSet ? "bell.slash" : "bell")
+                    }
+                } else if game.status.type.state == "in" {
+                    let isTracking = activityManager.trackedGameIDs.contains(game.id)
+                    Button {
+                        activityManager.toggle(
+                            game: game,
+                            leagueName: game.leagueLabel ?? gameSport.rawValue,
+                            sport: gameSport
+                        )
+                    } label: {
+                        Label(isTracking ? "Stop Live Activity" : "Live Activity",
+                              systemImage: isTracking ? "bell.slash" : "bell.badge")
+                    }
+                }
+            }
             Button(role: .destructive, action: onRemove) {
                 Label("Remove from Favorites", systemImage: "heart.slash")
             }
@@ -898,7 +931,7 @@ struct FavoriteTeamRow: View {
                 }
             }
         } else if let next = liveGame, next.status.type.state == "pre" {
-            Text("Next · \(next.status.type.detail)")
+            Text("Next · \(next.scheduleAwareDetail)")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.white.opacity(0.6))
         } else if let label = leagueLabel {

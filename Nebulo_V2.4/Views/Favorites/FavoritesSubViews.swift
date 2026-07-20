@@ -51,6 +51,16 @@ struct AddFavoriteSheet: View {
     @ObservedObject var scoreViewModel: ScoreViewModel
     @Environment(\.dismiss) private var dismiss
 
+    @AppStorage("nebColor1") private var nebColor1 = "#1A2538"
+    @AppStorage("nebColor2") private var nebColor2 = "#11101A"
+    @AppStorage("nebColor3") private var nebColor3 = "#1F1A24"
+    @AppStorage("nebX1") private var nebX1 = 0.5
+    @AppStorage("nebY1") private var nebY1 = 0.0
+    @AppStorage("nebX2") private var nebX2 = 0.5
+    @AppStorage("nebY2") private var nebY2 = 0.5
+    @AppStorage("nebX3") private var nebX3 = 0.5
+    @AppStorage("nebY3") private var nebY3 = 1.0
+
     @State private var tab: Tab = .teams
     @State private var search = ""
     /// Leagues the user has opened in the Teams tab. Collapsed by default so
@@ -133,7 +143,18 @@ struct AddFavoriteSheet: View {
 
     var body: some View {
         NavigationView {
-            VStack(spacing: 0) {
+            ZStack {
+                NebulaBackgroundView(
+                    color1: Color(hex: nebColor1) ?? .purple,
+                    color2: Color(hex: nebColor2) ?? .blue,
+                    color3: Color(hex: nebColor3) ?? .pink,
+                    point1: UnitPoint(x: nebX1, y: nebY1),
+                    point2: UnitPoint(x: nebX2, y: nebY2),
+                    point3: UnitPoint(x: nebX3, y: nebY3)
+                )
+                .ignoresSafeArea()
+
+                VStack(spacing: 0) {
                 Picker("", selection: $tab) {
                     ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
                 }
@@ -163,6 +184,7 @@ struct AddFavoriteSheet: View {
                                                 isFavorite: scoreViewModel.isFavoriteTeam(hit.team, sport: hit.sport),
                                                 onToggle: { scoreViewModel.toggleFavoriteTeam(hit.team, sport: hit.sport) }
                                             )
+                                            .listRowBackground(Color.black.opacity(0.35))
                                         }
                                     }
                                 } header: {
@@ -221,13 +243,40 @@ struct AddFavoriteSheet: View {
                                             isFavorite: scoreViewModel.isFavoriteLeague(sport: hit.sport, leagueLabel: hit.leagueLabel),
                                             onToggle: { scoreViewModel.toggleFavoriteLeague(sport: hit.sport, leagueLabel: hit.leagueLabel) }
                                         )
+                                        .listRowBackground(Color.black.opacity(0.35))
                                     }
                                 }
                             }
                         }
                     }
                 }
-                .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search teams or leagues")
+                .scrollContentBackground(.hidden)
+                }
+            }
+            // Search rides at the bottom in the same glass pill the home
+            // screen uses, instead of the system navigation-bar drawer.
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    TextField("Search teams or leagues", text: $search)
+                        .font(.body.weight(.medium))
+                        .autocorrectionDisabled()
+                    if !search.isEmpty {
+                        Button { search = "" } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 13)
+                .modifier(GlassEffect(cornerRadius: 100, isSelected: false, accentColor: nil))
+                .padding(.horizontal, 16)
+                .padding(.top, 6)
+                .padding(.bottom, 4)
             }
             .navigationTitle("Add to Favorites")
             .navigationBarTitleDisplayMode(.inline)
@@ -237,6 +286,7 @@ struct AddFavoriteSheet: View {
                 }
             }
         }
+        .preferredColorScheme(.dark)
     }
 }
 

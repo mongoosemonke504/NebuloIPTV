@@ -1,4 +1,5 @@
 import SwiftUI
+import AVKit
 
 struct PlayerControlsView: View {
     @ObservedObject var playerManager: NebuloPlayerEngine
@@ -483,16 +484,16 @@ struct PlayerControlsView: View {
                                         HStack(spacing: 8) {
                                             Image(systemName: "captions.bubble.fill")
                                                 .font(.caption.bold())
-                                            Text(playerManager.availableSubtitles.isEmpty ? "None" : (playerManager.currentSubtitle?.name ?? "Off"))
+                                            Text(!playerManager.hasSelectableSubtitles ? "None" : (playerManager.currentSubtitle?.name ?? "Off"))
                                                 .font(.caption.bold())
                                         }
                                         .frame(maxWidth: .infinity)
                                         .frame(height: 40)
                                         .modifier(GlassEffect(cornerRadius: 20, isSelected: true, accentColor: nil))
-                                        .opacity(playerManager.availableSubtitles.isEmpty ? 0.6 : (playerManager.currentSubtitle != nil ? 1.0 : 0.7))
+                                        .opacity(!playerManager.hasSelectableSubtitles ? 0.6 : (playerManager.currentSubtitle != nil ? 1.0 : 0.7))
                                     }
                                     .buttonStyle(.plain)
-                                    .disabled(playerManager.availableSubtitles.isEmpty)
+                                    .disabled(!playerManager.hasSelectableSubtitles)
                                     
                                     
                                     Button(action: {
@@ -583,11 +584,23 @@ struct PlayerControlsView: View {
                 .modifier(GlassEffect(cornerRadius: 22, isSelected: true, accentColor: nil))
 
             if let vm = viewModel {
-                // Miniplayer (floating player)
+                // System Picture-in-Picture: floats the video over the home
+                // screen (and outside the app). Falls back to the in-app
+                // miniplayer for streams AVPlayer can't decode.
                 Button(action: {
                     vm.triggerSelectionHaptic()
-                    vm.miniPlayerChannel = channel
-                    onDismiss()
+                    playerManager.enablePictureInPicture()
+                    // Give PiP a beat to appear; when it did, close the
+                    // full player (the floating window carries on). If the
+                    // stream can't PiP, fall back to the in-app miniplayer.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                        if playerManager.isPiPSessionActive {
+                            onDismiss()
+                        } else if !AVPictureInPictureController.isPictureInPictureSupported() {
+                            vm.miniPlayerChannel = channel
+                            onDismiss()
+                        }
+                    }
                 }) {
                     Image(systemName: "pip.enter")
                         .font(.system(size: 18, weight: .bold))

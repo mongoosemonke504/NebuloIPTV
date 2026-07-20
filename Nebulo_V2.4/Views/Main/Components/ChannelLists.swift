@@ -299,3 +299,243 @@ private struct ChannelRowButtonStyle: ButtonStyle {
             )
     }
 }
+/// Tap-through preview for a channel in the category lists: what's on now
+/// (with live progress), the description, the channel's upcoming guide with
+/// one-tap record bells, and the play button.
+struct ChannelPreviewSheet: View {
+    let channel: StreamChannel
+    @ObservedObject var viewModel: ChannelViewModel
+    @ObservedObject private var recordingManager = RecordingManager.shared
+    let accentColor: Color
+    let playAction: (StreamChannel) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    private var currentProgram: EPGProgram? {
+        viewModel.getCurrentProgram(for: channel)
+    }
+
+    /// The channel's guide for the next two days, current program excluded.
+    private var upcomingPrograms: [EPGProgram] {
+        guard let epgID = channel.epgID,
+              let schedule = viewModel.epgData[epgID] else { return [] }
+        let now = Date()
+        let limit = now.addingTimeInterval(48 * 3600)
+        return schedule
+            .filter { $0.stop > now && $0.start < limit && $0.id != currentProgram?.id }
+            .sorted { $0.start < $1.start }
+    }
+
+    private var progress: Double? {
+        guard let prog = currentProgram else { return nil }
+        let total = prog.stop.timeIntervalSince(prog.start)
+        guard total > 0 else { return nil }
+        let elapsed = Date().timeIntervalSince(prog.start)
+        guard elapsed >= 0, elapsed <= total else { return nil }
+        return elapsed / total
+    }
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "h:mm a"
+        return f
+    }()
+    private static let dayTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "EEE h:mm a"
+        return f
+    }()
+
+    private func rowTime(_ date: Date) -> String {
+        Calendar.current.isDateInToday(date)
+            ? Self.timeFormatter.string(from: date)
+            : Self.dayTimeFormatter.string(from: date)
+    }
+
+    private func isScheduled(_ prog: EPGProgram) -> Bool {
+        recordingManager.recordings.contains {
+            $0.channelName == channel.name
+                && abs($0.startTime.timeIntervalSince(prog.start)) < 60
+                && ($0.status == .scheduled || $0.status == .recording)
+        }
+    }
+
+    private func record(_ prog: EPGProgram) {
+        guard !isScheduled(prog) else { return }
+        ChannelViewModel.shared.triggerNotificationHaptic(.success)
+        let streamCategory = ChannelViewModel.shared.categories.first { $0.id == channel.categoryID }
+        recordingManager.scheduleRecording(
+            channel: channel,
+            startTime: max(prog.start, Date()),
+            endTime: prog.stop,
+            programTitle: prog.title,
+            programDescription: prog.description,
+            category: .guess(channel: channel, category: streamCategory, program: prog)
+        )
+    }
+
+    var body: some View {
+        ZStack {
+            Color(red: 0.05, green: 0.05, blue: 0.08).ignoresSafeArea()
+
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 16) {
+                    // Channel identity
+                    HStack(spacing: 14) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color.white.opacity(0.06))
+                            CachedAsyncImage(urlString: channel.icon ?? "", size: nil)
+                                .padding(10)
+                        }
+                        .frame(width: 76, height: 76)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(channel.name)
+                                .font(.system(size: 18, weight: .bold))
+                                .foregroundStyle(.white)
+                                .lineLimit(2)
+                            if let prog = currentProgram {
+                                HStack(spacing: 6) {
+                                    Circle().fill(Color.red).frame(width: 6, height: 6)
+                                    Text("\(Self.timeFormatter.string(from: prog.start)) \u{2013} \(Self.timeFormatter.string(from: prog.stop))")
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundStyle(.white.opacity(0.6))
+                                }
+                            }
+                        }
+                        Spacer()
+
+                        Button {
+                            viewModel.toggleFavorite(channel.id)
+                        } label: {
+                            Image(systemName: viewModel.favoriteIDs.contains(channel.id) ? "star.fill" : "star")
+                                .font(.system(size: 17, weight: .bold))
+                                .foregroundStyle(viewModel.favoriteIDs.contains(channel.id) ? .yellow : .white.opacity(0.7))
+                                .frame(width: 42, height: 42)
+                                .background(Circle().fill(Color.white.opacity(0.08)))
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    // Now playing card
+                    if let prog = currentProgram {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(prog.title)
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundStyle(.white)
+                                .lineLimit(2)
+
+                            if let progress {
+                                GeometryReader { geo in
+                                    ZStack(alignment: .leading) {
+                                        Capsule().fill(Color.white.opacity(0.12))
+                                        Capsule().fill(Color.red)
+                                            .frame(width: max(4, geo.size.width * progress))
+                                    }
+                                }
+                                .frame(height: 4)
+                            }
+
+                            if let desc = prog.description, !desc.isEmpty {
+                                Text(desc)
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(.white.opacity(0.65))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.black.opacity(0.35))
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+                        )
+                    } else {
+                        Text("No guide information for this channel.")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.white.opacity(0.5))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 24)
+                    }
+
+                    // Upcoming guide with one-tap record bells.
+                    if !upcomingPrograms.isEmpty {
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text("UPCOMING")
+                                .font(.system(size: 11, weight: .black))
+                                .kerning(1)
+                                .foregroundStyle(.white.opacity(0.4))
+                                .padding(.bottom, 8)
+
+                            ForEach(Array(upcomingPrograms.enumerated()), id: \.element.id) { index, prog in
+                                let scheduled = isScheduled(prog)
+                                HStack(spacing: 12) {
+                                    Text(rowTime(prog.start))
+                                        .font(.system(size: 12, design: .monospaced))
+                                        .foregroundStyle(.white.opacity(0.55))
+                                        .lineLimit(1)
+                                        .fixedSize()
+                                        .frame(minWidth: 70, alignment: .leading)
+                                    Text(prog.title)
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(.white.opacity(0.85))
+                                        .lineLimit(1)
+                                    Spacer(minLength: 8)
+                                    Button {
+                                        record(prog)
+                                    } label: {
+                                        Image(systemName: scheduled ? "checkmark.circle.fill" : "record.circle")
+                                            .font(.system(size: 17, weight: .semibold))
+                                            .foregroundStyle(scheduled ? .green : .white.opacity(0.65))
+                                            .frame(width: 34, height: 34)
+                                            .contentShape(Circle())
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                .padding(.vertical, 6)
+                                if index < upcomingPrograms.count - 1 {
+                                    Divider().background(Color.white.opacity(0.06))
+                                }
+                            }
+                        }
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.black.opacity(0.35))
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+                        )
+                    }
+                }
+                .padding(20)
+                .padding(.bottom, 80)
+            }
+        }
+        // Play floats over the scrolling guide, always reachable.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Button {
+                ChannelViewModel.shared.triggerHaptic(.medium)
+                dismiss()
+                playAction(channel)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "play.fill")
+                    Text("Play")
+                }
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(.black)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 15)
+                .background(Capsule().fill(.white))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 12)
+        }
+        .preferredColorScheme(.dark)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+}

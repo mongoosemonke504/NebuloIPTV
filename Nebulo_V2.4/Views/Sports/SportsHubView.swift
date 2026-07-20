@@ -38,12 +38,6 @@ struct SportsHubView: View {
         scoreViewModel.sportTabOrder.filter { !scoreViewModel.hiddenSportTabs.contains($0) }
     }
 
-    /// Which side the incoming games list enters from. `true` when moving to
-    /// a chip further right ("All" → NFL → …), so content slides in from the
-    /// trailing edge like a page turn. Set BEFORE the animated tab change so
-    /// the transition reads the correct direction.
-    @State private var slideFromTrailing = true
-
     /// Chips in visual order — "All" first, then each sport.
     private var orderedTabs: [SportsTab] {
         [.all] + orderedSports.map { SportsTab.sport($0) }
@@ -54,6 +48,12 @@ struct SportsHubView: View {
     /// can leave the incoming view stuck offscreen (a fully blank section)
     /// — rapid swipes must wait ~0.3s for the previous slide to settle.
     @State private var isSliding = false
+
+    /// Which side the incoming games list enters from. `true` when moving to
+    /// a chip further right ("All" → NFL → …), so content slides in from the
+    /// trailing edge like a page turn. Set BEFORE the animated tab change so
+    /// the transition reads the correct direction.
+    @State private var slideFromTrailing = true
 
     /// One tab switch per drag: set the moment the swipe fires (mid-drag,
     /// in `.onChanged`), cleared when the finger lifts.
@@ -182,12 +182,13 @@ struct SportsHubView: View {
                 guard let y = offsets["sports"] else { return }
                 statsProgress.set(min(max(-y / 40, 0), 1))
             }
-            // Horizontal swipe anywhere on the list flips to the previous /
-            // next sport. Fires DURING the drag the moment it clearly reads
-            // as a horizontal page swipe — waiting for finger-lift made every
-            // switch feel like it lagged a beat behind the gesture. Drags
-            // that start on the chip row scroll the chips instead, and
-            // left-edge swipes stay reserved for back navigation.
+            // Horizontal swipe anywhere on the list turns the page. Fires
+            // DURING the drag the moment it clearly reads as a deliberate
+            // horizontal swipe — the slide itself is the manual two-page
+            // animation (both sports visible), it just doesn't track the
+            // finger. Drags that start on the chip row scroll the chips
+            // instead, and left-edge swipes stay reserved for back
+            // navigation.
             .simultaneousGesture(
                 DragGesture(minimumDistance: 10, coordinateSpace: .global)
                     .onChanged { value in
@@ -199,16 +200,10 @@ struct SportsHubView: View {
                         if abs(dx) > abs(dy) * 1.4 {
                             SwipeTapGuard.suppress()
                         }
-                        // Low threshold + mid-drag firing so the page turns
-                        // with the finger, not after it. The chip row is the
-                        // only horizontal scroller here and it's excluded by
-                        // frame — no shared-signal check (the chip row's own
-                        // programmatic centering scroll was tripping it and
-                        // blocking follow-up swipes).
-                        guard !swipeConsumed,
+                        guard !swipeConsumed, !isSliding,
                               value.startLocation.x > 44,
                               !chipBarFrame.contains(value.startLocation),
-                              abs(dx) > 20, abs(dx) > abs(dy) * 1.4 else { return }
+                              abs(dx) > 38, abs(dx) > abs(dy) * 1.4 else { return }
                         swipeConsumed = true
                         advanceSportsTab(dx < 0 ? 1 : -1)
                     }
@@ -404,12 +399,12 @@ struct SportsHubView: View {
         let cal = Calendar.current
 
         var todaysIDs = Set<String>()
-        for games in scoreViewModel.filteredGames.values {
+        for (sport, games) in scoreViewModel.filteredGames where !scoreViewModel.hiddenSportTabs.contains(sport) {
             for g in games where cal.isDateInToday(g.gameDate) {
                 todaysIDs.insert(g.id)
             }
         }
-        for sections in scoreViewModel.filteredSectionsMap.values {
+        for (sport, sections) in scoreViewModel.filteredSectionsMap where !scoreViewModel.hiddenSportTabs.contains(sport) {
             for s in sections {
                 for g in s.games where cal.isDateInToday(g.gameDate) {
                     todaysIDs.insert(g.id)
@@ -715,6 +710,10 @@ private struct GameScoreButton: View {
     let sport: SportType
     @ObservedObject var viewModel: ChannelViewModel
     @ObservedObject var scoreViewModel: ScoreViewModel
+    // Observed so a stopped/dismissed Live Activity re-renders the menu
+    // label — reading the singleton directly left "Stop Live Activity"
+    // stuck after the activity was already gone.
+    @ObservedObject private var activityManager = GameActivityManager.shared
 
     var body: some View {
         // Captured once per body pass — read from the view model only once
@@ -784,6 +783,26 @@ private struct GameScoreButton: View {
                     Label(isReminderSet ? "Cancel Reminder" : "Remind Me",
                           systemImage: isReminderSet ? "bell.slash" : "bell")
                 }
+            } else if game.status.type.state == "in" {
+                let isTracking = activityManager.trackedGameIDs.contains(game.id)
+                Button {
+                    activityManager.toggle(
+                        game: game,
+                        leagueName: game.leagueLabel ?? sport.rawValue,
+                        sport: sport == .pinned ? scoreViewModel.sportType(for: game) : sport
+                    )
+                } label: {
+                    Label(isTracking ? "Stop Live Activity" : "Live Activity",
+                          systemImage: isTracking ? "bell.slash" : "bell.badge")
+                }
+            }
+
+            if sport != .f1 {
+                Button {
+                    scoreViewModel.presentGameDetails(game, sport: sport)
+                } label: {
+                    Label("View Stats", systemImage: "chart.bar.fill")
+                }
             }
 
             Button {
@@ -827,7 +846,7 @@ private struct GameContextPreview: View {
                         .padding(.vertical, 2)
                         .background(Color.primary.opacity(0.12), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
                 }
-                let detail = game.status.type.detail.trimmingCharacters(in: .whitespaces)
+                let detail = game.scheduleAwareDetail.trimmingCharacters(in: .whitespaces)
                 if !detail.isEmpty {
                     Text(detail)
                         .font(.system(size: 12, weight: .semibold))
@@ -1200,7 +1219,7 @@ struct ScoreRow: View {
         }
     }
     
-    private var teamLayout: some View { HStack(alignment: .center, spacing: 4) { if let away = game.awayCompetitor { TeamColumn(competitor: away, gameState: game.status.type.state, align: .trailing, isScoreHidden: isScoreHidden).frame(maxWidth: .infinity) }; VStack(spacing: 6) { Text(game.status.type.detail.uppercased()).font(.system(size: 11, weight: .bold)).foregroundStyle(game.status.type.state == "in" ? .red : .secondary).multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.8).frame(minWidth: 70, maxWidth: 100); if let cn = game.broadcastName { Text(cn).font(.system(size: 10, weight: .black)).foregroundStyle(.primary).padding(.horizontal, 6).padding(.vertical, 2).background(Color.white.opacity(0.15)).cornerRadius(4) }; Capsule().fill(Color.white.opacity(0.1)).frame(width: 1.5, height: 20) }; if let home = game.homeCompetitor { TeamColumn(competitor: home, gameState: game.status.type.state, align: .leading, isScoreHidden: isScoreHidden).frame(maxWidth: .infinity) } } }
+    private var teamLayout: some View { HStack(alignment: .center, spacing: 4) { if let away = game.awayCompetitor { TeamColumn(competitor: away, gameState: game.status.type.state, align: .trailing, isScoreHidden: isScoreHidden).frame(maxWidth: .infinity) }; VStack(spacing: 6) { Text(game.scheduleAwareDetail.uppercased()).font(.system(size: 11, weight: .bold)).foregroundStyle(game.status.type.state == "in" ? .red : .secondary).multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.8).frame(minWidth: 70, maxWidth: 100); if let cn = game.broadcastName { Text(cn).font(.system(size: 10, weight: .black)).foregroundStyle(.primary).padding(.horizontal, 6).padding(.vertical, 2).background(Color.white.opacity(0.15)).cornerRadius(4) }; Capsule().fill(Color.white.opacity(0.1)).frame(width: 1.5, height: 20) }; if let home = game.homeCompetitor { TeamColumn(competitor: home, gameState: game.status.type.state, align: .leading, isScoreHidden: isScoreHidden).frame(maxWidth: .infinity) } } }
     
     
     /// Tennis scoreboard row: round + status header, then one line per

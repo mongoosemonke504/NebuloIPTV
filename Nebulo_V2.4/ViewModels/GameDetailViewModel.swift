@@ -39,6 +39,7 @@ struct GDStatBar: Identifiable {
 struct GDLineupPlayer: Identifiable {
     let id: String
     let name: String
+    let fullName: String
     let jersey: String
     let rating: Double?
     let goals: Int
@@ -47,6 +48,17 @@ struct GDLineupPlayer: Identifiable {
     let subbedOffClock: String?
     let subbedOnClock: String?
     let positionAbbrev: String?
+    let headshot: String?
+    /// Match stat lines for the individual-stats sheet, in ESPN's order.
+    let stats: [GDPlayerStatLine]
+}
+
+struct GDPlayerStatLine: Identifiable {
+    /// ESPN's internal stat key ("totalGoals") — used for grouping.
+    let key: String
+    let label: String
+    let value: String
+    var id: String { key }
 }
 
 struct GDLineup {
@@ -60,10 +72,15 @@ struct GDLineup {
 }
 
 struct GDBoxRow: Identifiable {
+    /// Unique per group ("athleteID + group name") — a two-way player
+    /// appears in several groups.
     let id: String
+    /// Bare athlete id, for merging one player's rows across groups.
+    let athleteID: String
     let name: String
     let rating: Double?
     let values: [String]
+    let headshot: String?
 }
 
 struct GDBoxGroup: Identifiable {
@@ -99,6 +116,16 @@ struct GDShot: Identifiable {
     let isGoal: Bool
     let text: String
     let minute: String
+}
+
+/// One located touch/shot for a single player's heatmap. Coordinates are
+/// normalized toward the attacked goal (x → 100 at the goal line).
+struct GDHeatPoint: Identifiable {
+    let id: String
+    let x: Double
+    let y: Double
+    let isShot: Bool
+    let isGoal: Bool
 }
 
 struct GDStandingRow: Identifiable {
@@ -216,10 +243,45 @@ final class GameDetailViewModel: ObservableObject {
             let fetched = try await Self.fetchSummary(url: url)
             summary = fetched
             failed = false
+            prefetchPlayerImages()
         } catch {
             if summary == nil { failed = true }
         }
         isLoading = false
+    }
+
+    private var didPrefetchImages = false
+
+    /// Pulls every player headshot for this game (both lineups + box
+    /// scores) into the image cache the moment the summary arrives, so the
+    /// lineup and player sheets render photos instantly instead of loading
+    /// them one by one on first look. The disk cache persists, so a player
+    /// seen once is instant in every later session too.
+    private func prefetchPlayerImages() {
+        guard !didPrefetchImages, summary != nil else { return }
+        didPrefetchImages = true
+        var urls = Set<String>()
+        for homeAway in ["home", "away"] {
+            if let lineup = lineup(homeAway: homeAway) {
+                for player in lineup.starters + lineup.substitutes {
+                    if let url = player.headshot, !url.isEmpty { urls.insert(url) }
+                }
+            }
+            for group in boxGroups(homeAway: homeAway) {
+                for row in group.rows {
+                    if let url = row.headshot, !url.isEmpty { urls.insert(url) }
+                }
+            }
+        }
+        if !urls.isEmpty {
+            Task {
+                await withTaskGroup(of: Void.self) { group in
+                    for url in urls {
+                        group.addTask { _ = await ImageCache.shared.image(forKey: url) }
+                    }
+                }
+            }
+        }
     }
 
     nonisolated private static func fetchSummary(url: URL) async throws -> GameSummary {
@@ -311,7 +373,10 @@ final class GameDetailViewModel: ObservableObject {
     }
 
     var statusDetail: String {
-        summary?.header?.competitions?.first?.status?.type?.detail ?? request.game.status.type.detail
+        // Pre-game: the app's own schedule wording ("Today at 7:05 PM")
+        // instead of whatever shape this sport's feed uses.
+        if statusState == "pre" { return request.game.scheduleAwareDetail }
+        return summary?.header?.competitions?.first?.status?.type?.detail ?? request.game.status.type.detail
     }
 
     var statusState: String {
@@ -520,7 +585,77 @@ final class GameDetailViewModel: ObservableObject {
     /// everyone at 10.0).
     private var ratingsAvailable: Bool { statusState != "pre" }
 
+    /// Headshot for an athlete: the payload's own URL when present,
+    /// otherwise built from ESPN's headshot CDN path (box scores and soccer
+    /// rosters frequently omit the href even though the image exists).
+    private func headshotURL(_ athlete: GSAthlete?) -> String? {
+        if let href = athlete?.headshot?.href, !href.isEmpty { return href }
+        guard let id = athlete?.id, !id.isEmpty else { return nil }
+        let league: String
+        if request.leagueCode != nil || request.sport.isSoccer {
+            league = "soccer"
+        } else if let path = request.sport.apiPath, let slug = path.split(separator: "/").last {
+            league = String(slug)
+        } else {
+            return nil
+        }
+        return "https://a.espncdn.com/combiner/i?img=/i/headshots/\(league)/players/full/\(id).png&w=96&h=96&scale=crop"
+    }
+
     // MARK: Soccer lineups
+
+    /// Friendly display names for ESPN's internal soccer stat keys; unknown
+    /// keys fall back to the camelCase key split into words.
+    nonisolated private static let soccerStatLabels: [String: String] = [
+        "minutes": "Minutes played",
+        "totalGoals": "Goals",
+        "goalAssists": "Assists",
+        "totalShots": "Shots",
+        "shotsOnTarget": "Shots on target",
+        "blockedShots": "Blocked shots",
+        "offsides": "Offsides",
+        "ownGoals": "Own goals",
+        "totalPasses": "Passes",
+        "accuratePasses": "Accurate passes",
+        "totalCrosses": "Crosses",
+        "accurateCrosses": "Accurate crosses",
+        "totalLongBalls": "Long balls",
+        "accurateLongBalls": "Accurate long balls",
+        "totalTackles": "Tackles",
+        "effectiveTackles": "Tackles won",
+        "totalClearance": "Clearances",
+        "effectiveClearance": "Effective clearances",
+        "interceptions": "Interceptions",
+        "foulsCommitted": "Fouls committed",
+        "foulsSuffered": "Fouls suffered",
+        "yellowCards": "Yellow cards",
+        "redCards": "Red cards",
+        "saves": "Saves",
+        "shotsFaced": "Shots faced",
+        "goalsConceded": "Goals conceded",
+        "punches": "Punches",
+        "crossesCaught": "Crosses caught",
+        "appearances": "Appearances",
+        "subIns": "Sub appearances"
+    ]
+
+    nonisolated static func statLabel(for key: String) -> String {
+        if let label = soccerStatLabels[key] { return label }
+        // "totalKeeperSweeper" → "Total keeper sweeper"
+        var words: [String] = []
+        var current = ""
+        for ch in key {
+            if ch.isUppercase && !current.isEmpty {
+                words.append(current)
+                current = String(ch).lowercased()
+            } else {
+                current.append(ch)
+            }
+        }
+        if !current.isEmpty { words.append(current) }
+        guard let first = words.first else { return key }
+        return ([first.prefix(1).uppercased() + first.dropFirst()] + words.dropFirst()).joined(separator: " ")
+    }
 
     func lineup(homeAway: String) -> GDLineup? {
         guard let roster = summary?.rosters?.first(where: { $0.homeAway == homeAway }),
@@ -537,9 +672,16 @@ final class GameDetailViewModel: ObservableObject {
                 }
             }
             let isGK = p.position?.abbreviation == "G"
+            let statLines: [GDPlayerStatLine] = (p.stats ?? []).compactMap { s in
+                guard let key = s.name ?? s.abbreviation else { return nil }
+                let value = s.displayValue ?? s.value.map { $0 == $0.rounded() ? String(Int($0)) : String($0) }
+                guard let value else { return nil }
+                return GDPlayerStatLine(key: key, label: Self.statLabel(for: key), value: value)
+            }
             return GDLineupPlayer(
                 id: p.athlete?.id ?? UUID().uuidString,
                 name: p.athlete?.lastName ?? p.athlete?.shortName ?? p.athlete?.displayName ?? "—",
+                fullName: p.athlete?.displayName ?? p.athlete?.shortName ?? p.athlete?.lastName ?? "—",
                 jersey: p.jersey?.value ?? "",
                 rating: ratingsAvailable ? PlayerRatingEngine.soccerRating(stats: p.stats ?? [], isGoalkeeper: isGK) : nil,
                 goals: goals,
@@ -547,7 +689,9 @@ final class GameDetailViewModel: ObservableObject {
                 red: red,
                 subbedOffClock: (p.subbedOut?.didSub == true) ? (p.subbedOut?.clock ?? "") : nil,
                 subbedOnClock: (p.subbedIn?.didSub == true) ? (p.subbedIn?.clock ?? "") : nil,
-                positionAbbrev: p.position?.abbreviation
+                positionAbbrev: p.position?.abbreviation,
+                headshot: headshotURL(p.athlete),
+                stats: statLines
             )
         }
 
@@ -678,9 +822,11 @@ final class GameDetailViewModel: ObservableObject {
                 } : nil
                 return GDBoxRow(
                     id: (athlete.id ?? UUID().uuidString) + (group.name ?? ""),
+                    athleteID: athlete.id ?? "",
                     name: athlete.compactName,
                     rating: rating,
-                    values: stats
+                    values: stats,
+                    headshot: headshotURL(athlete)
                 )
             }
             guard !rows.isEmpty, !cols.isEmpty else { return nil }
@@ -695,12 +841,14 @@ final class GameDetailViewModel: ObservableObject {
         return events.compactMap { event in
             guard let typeText = event.type?.type?.lowercased() ?? event.type?.text?.lowercased() else { return nil }
             let kind: GDEventKind
+            // "red" must match the card specifically — "Penalty - Scored"
+            // contains "red" (sco-RED) and was rendering goals as red cards.
             if typeText.contains("own-goal") || typeText.contains("own goal") { kind = .ownGoal }
             else if typeText.contains("penalty") && (typeText.contains("missed") || typeText.contains("saved")) { kind = .penaltyMiss }
-            else if typeText.contains("penalty") && typeText.contains("goal") { kind = .penaltyGoal }
-            else if typeText.contains("goal") { kind = .goal }
+            else if typeText.contains("penalty") && (typeText.contains("goal") || typeText.contains("scored")) { kind = .penaltyGoal }
+            else if typeText.contains("goal") || typeText.contains("scored") { kind = .goal }
             else if typeText.contains("yellow") { kind = .yellow }
-            else if typeText.contains("red") { kind = .red }
+            else if typeText.contains("red card") || typeText.contains("red-card") || typeText == "red" { kind = .red }
             else if typeText.contains("sub") { kind = .substitution }
             else { return nil }
 
@@ -779,6 +927,47 @@ final class GameDetailViewModel: ObservableObject {
             ))
         }
         return result
+    }
+
+    /// Every located play involving one athlete, for the player heatmap.
+    /// ESPN only attaches pitch coordinates to shot-type plays, so this is
+    /// effectively the player's shooting/chance map.
+    func playerHeatPoints(athleteID: String) -> [GDHeatPoint] {
+        var plays: [GSKeyEvent] = (summary?.commentary ?? []).compactMap { $0.play }
+        plays.append(contentsOf: summary?.keyEvents ?? [])
+
+        var seen = Set<String>()
+        var out: [GDHeatPoint] = []
+        for play in plays {
+            guard let x = play.fieldPositionX, let y = play.fieldPositionY,
+                  play.participants?.first?.athlete?.id == athleteID,
+                  seen.insert(play.eventID).inserted else { continue }
+            let typeText = (play.type?.type ?? play.type?.text ?? "").lowercased()
+            let isGoal = typeText.contains("goal")
+                && !typeText.contains("kick")
+                && !typeText.contains("goalkeeper")
+                && !typeText.contains("post")
+            let isShot = typeText.contains("shot") || typeText.contains("attempt") || isGoal
+            out.append(GDHeatPoint(id: play.eventID, x: x, y: y, isShot: isShot, isGoal: isGoal))
+        }
+        return out
+    }
+
+    /// Rough expected-goals estimate from shot locations alone (distance +
+    /// angle decay) — ESPN's feed carries no real xG, so this is our own
+    /// model and is labeled "(est.)" in the UI.
+    nonisolated static func estimatedXG(points: [GDHeatPoint]) -> Double? {
+        let shots = points.filter { $0.isShot }
+        guard !shots.isEmpty else { return nil }
+        var total = 0.0
+        for p in shots {
+            // Meters to the goal line / off-center, on a 105×68 pitch.
+            let dx = (100.0 - p.x) * 1.05
+            let dy = (p.y - 50.0) * 0.68
+            let distance = (dx * dx + dy * dy).squareRoot()
+            total += min(0.95, max(0.02, 1.30 * exp(-0.115 * distance)))
+        }
+        return total
     }
 
     // MARK: Standings

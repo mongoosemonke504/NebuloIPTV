@@ -87,10 +87,17 @@ struct Nebulo_V2_4App: App {
 
 
     let timer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
+    /// Faster tick used only while Live Activities are running — a game
+    /// clock that moves once a minute reads as frozen on the Lock Screen.
+    let liveActivityTimer = Timer.publish(every: 20, on: .main, in: .common).autoconnect()
 
     init() {
         AppDefaults.register()
         BackgroundManager.shared.register()
+        // Re-arm at every launch too, not just on backgrounding — a reboot,
+        // app update, or force-quit wipes pending BGTask submissions, and
+        // an app that's opened then killed would otherwise never refresh.
+        BackgroundManager.shared.scheduleAppRefresh()
     }
     
     var body: some Scene {
@@ -104,15 +111,24 @@ struct Nebulo_V2_4App: App {
                 .onChange(of: scenePhase) { phase in
                     if phase == .active {
                         Task { await channelViewModel.handleAppActivation() }
+                        // Live Activities froze while the app was away —
+                        // push fresh scores into them immediately.
+                        if !GameActivityManager.shared.trackedGameIDs.isEmpty {
+                            Task { await scoreViewModel.fetchScores(forceRefresh: true, silent: true) }
+                        }
                     } else if phase == .background {
                         BackgroundManager.shared.scheduleAppRefresh()
                     }
                 }
                 .onReceive(timer) { _ in
-                    
+
                     Task {
                         await scoreViewModel.fetchScores(silent: true)
                     }
+                }
+                .onReceive(liveActivityTimer) { _ in
+                    guard !GameActivityManager.shared.trackedGameIDs.isEmpty else { return }
+                    Task { await scoreViewModel.fetchScores(silent: true) }
                 }
         }
     }
@@ -120,18 +136,26 @@ struct Nebulo_V2_4App: App {
 
 class BackgroundManager {
     static let shared = BackgroundManager()
+    /// Long-form PROCESSING task: minutes of runtime for the full guide
+    /// download + parse, but iOS mostly grants it overnight on charge.
     let backgroundTaskID = "com.nebulo.epgUpdate"
+    /// Short APP-REFRESH task: ~30s budget, but the system runs these far
+    /// more often (whenever it predicts the app might be used). Acts as the
+    /// day-time trigger so a stale guide doesn't wait for the charger.
+    let quickRefreshTaskID = "com.nebulo.epgQuickRefresh"
 
     func register() {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: backgroundTaskID, using: nil) { task in
             self.handleEPGRefresh(task: task)
         }
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: quickRefreshTaskID, using: nil) { task in
+            self.handleEPGRefresh(task: task)
+        }
     }
 
-    /// A PROCESSING task, not an app-refresh task: a full guide download and
-    /// parse takes minutes, and app-refresh tasks get killed after ~30s.
-    /// Earliest run = 12 hours after the last successful update, so the
-    /// guide refreshes on the same cadence whether or not the app is open.
+    /// Arms BOTH background triggers, earliest run = 12 hours after the
+    /// last successful update. Whichever the system grants first refreshes
+    /// the guide; the other becomes a no-op (the fetch checks staleness).
     func scheduleAppRefresh() {
         BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: backgroundTaskID)
         let request = BGProcessingTaskRequest(identifier: backgroundTaskID)
@@ -143,6 +167,15 @@ class BackgroundManager {
             try BGTaskScheduler.shared.submit(request)
         } catch {
             print("Could not schedule EPG background refresh: \(error)")
+        }
+
+        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: quickRefreshTaskID)
+        let quick = BGAppRefreshTaskRequest(identifier: quickRefreshTaskID)
+        quick.earliestBeginDate = nextRunDate()
+        do {
+            try BGTaskScheduler.shared.submit(quick)
+        } catch {
+            print("Could not schedule EPG quick refresh: \(error)")
         }
     }
 

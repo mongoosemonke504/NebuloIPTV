@@ -25,7 +25,11 @@ struct CustomVideoPlayerView: SwiftUI.View {
 
     @State private var currentChannel: StreamChannel?
     @State private var showControls = true
-    @State private var offset: CGSize = .zero
+    /// Dismiss-drag translation, held in its own observable object so the
+    /// per-frame writes re-render ONLY the transform modifier at the root —
+    /// not this entire body (video surface, controls, info panel), which
+    /// was the dropped frames during the pull-down.
+    @State private var dismissDrag = ScrollProgress()
     @State private var timer: AnyCancellable?
     @State private var showFullDescription = false
     @State private var descriptionHeight: CGFloat = 0
@@ -77,24 +81,6 @@ struct CustomVideoPlayerView: SwiftUI.View {
     // let the miniplayer animate in independently — the same playback engine
     // continues, so the audio/video feels continuous regardless.
 
-    /// 0 = idle, 1 = ~mid-drag.  Drives subtle scale + corner radius only.
-    /// Capped at 1 so the visuals don't keep growing past the threshold.
-    private var dragProgress: CGFloat {
-        let h = max(0, offset.height)
-        return min(h / 240, 1)
-    }
-
-    /// Subtle scale-down for depth (1.0 → 0.94). Apple uses this on most
-    /// modal dismissals — small but recognisable.
-    private var dismissScale: CGFloat {
-        1.0 - dragProgress * 0.06
-    }
-
-    /// Corner radius grows so the player looks like a "card" being pulled away.
-    private var dismissCornerRadius: CGFloat {
-        dragProgress * 16
-    }
-    
     var body: some SwiftUI.View {
         GeometryReader { geo in
             let isLandscape = geo.size.width > geo.size.height
@@ -202,9 +188,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
         //   • corner radius growth so it feels like a card being pulled away
         // The fullScreenCover's own slide-down handles the final removal once
         // we set selectedChannel = nil.
-        .scaleEffect(dismissScale)
-        .offset(y: offset.height)
-        .clipShape(RoundedRectangle(cornerRadius: dismissCornerRadius, style: .continuous))
+        .modifier(PlayerDismissTransform(drag: dismissDrag))
         .ignoresSafeArea()
         .statusBar(hidden: true)
         .preferredColorScheme(.dark)
@@ -482,8 +466,9 @@ struct CustomVideoPlayerView: SwiftUI.View {
                 }
 
                 if val.translation.height > 0 && abs(val.translation.height) > abs(val.translation.width) {
-                    // Track the drag 1:1; the computed `dismissScale` derives from this.
-                    offset = CGSize(width: 0, height: val.translation.height)
+                    // Track the drag 1:1 — writes only invalidate the
+                    // transform modifier, never this whole view.
+                    dismissDrag.set(val.translation.height)
                 }
             }
             .onEnded { val in
@@ -510,16 +495,42 @@ struct CustomVideoPlayerView: SwiftUI.View {
                     // Apple-style hand-off:
                     //   1. Stage the miniplayer with a soft spring so it
                     //      animates into the corner from below.
-                    //   2. Simultaneously dismiss the cover — its built-in
-                    //      slide-down animation carries the player off the
-                    //      bottom of the screen.
-                    // The two motions are concurrent and complementary —
-                    // exactly how Apple Music's Now Playing → MiniBar feels.
-                    withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
-                        viewModel?.miniPlayerChannel = channel
+                    //   2. Carry the card the REST of the way down ourselves,
+                    //      continuing from wherever the finger let go, then
+                    //      remove the (transparent) cover with animations
+                    //      off. Letting the cover's own slide-down run after
+                    //      an offset reset was the visible snap-glitch.
+                    // Continue at the finger's release speed — a fixed-curve
+                    // exit restarted from zero velocity, which read as
+                    // fast → stop → fast on a hard flick. Linear over the
+                    // REMAINING distance at the throw's own pace keeps one
+                    // continuous motion.
+                    viewModel?.triggerHaptic(.light)
+                    let screenHeight = UIScreen.main.bounds.height
+                    let remaining = max(0, screenHeight - max(0, val.translation.height))
+                    let throwSpeed = max(val.velocity.height, 1400)
+                    let duration = min(0.3, remaining / throwSpeed)
+                    withAnimation(.linear(duration: duration)) {
+                        dismissDrag.value = screenHeight
                     }
-                    onDismiss?()
-                    offset = .zero
+                    // Stage the miniplayer on the NEXT runloop turn: setting
+                    // it re-renders the whole home screen, and doing that in
+                    // the same frame that commits the exit animation delayed
+                    // the commit — the one-frame stall visible at release.
+                    // A beat later the rebuild happens while the card is
+                    // already moving in the render server.
+                    let vm = viewModel
+                    let departingChannel = channel
+                    DispatchQueue.main.async {
+                        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
+                            vm?.miniPlayerChannel = departingChannel
+                        }
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.03) {
+                        var t = Transaction()
+                        t.disablesAnimations = true
+                        withTransaction(t) { onDismiss?() }
+                    }
                 } else if val.translation.height < -100 && abs(val.translation.height) > abs(val.translation.width) {
                     frozenRecentIDs = viewModel?.recentIDs ?? []
                     withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
@@ -528,15 +539,15 @@ struct CustomVideoPlayerView: SwiftUI.View {
                         showControls = true
                         timer?.cancel()
                     }
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) { offset = .zero }
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) { dismissDrag.value = 0 }
                 } else if val.translation.width < -50 && abs(val.translation.width) > abs(val.translation.height) {
                     switchChannel(offset: 1)
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) { offset = .zero }
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) { dismissDrag.value = 0 }
                 } else if val.translation.width > 50 && abs(val.translation.width) > abs(val.translation.height) {
                     switchChannel(offset: -1)
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) { offset = .zero }
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) { dismissDrag.value = 0 }
                 } else {
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) { offset = .zero }
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) { dismissDrag.value = 0 }
                 }
             }
     }
@@ -570,10 +581,9 @@ struct CustomVideoPlayerView: SwiftUI.View {
             }
             content()
                 .frame(width: 300)
-                .background(Material.ultraThinMaterial)
-                .cornerRadius(16)
-                .shadow(radius: 20)
-                .transition(.scale.combined(with: .opacity))
+                .modifier(GlassEffect(cornerRadius: 24, isSelected: false, accentColor: nil))
+                .shadow(color: .black.opacity(0.4), radius: 24, y: 8)
+                .transition(.scale(scale: 0.94).combined(with: .opacity))
                 .zIndex(100)
         }
     }
@@ -824,5 +834,20 @@ struct QuickSwitcherView: View {
         }
         .modifier(GlassEffect(cornerRadius: 20, isSelected: false, accentColor: nil))
         .fixedSize(horizontal: false, vertical: true)
+    }
+}
+/// The dismiss-drag transform, isolated so the per-frame drag writes
+/// re-render only this modifier — the player content underneath is reused,
+/// not rebuilt. Scale eases toward 0.94 and the corners round toward 16pt
+/// over the first 240pts of drag, mirroring Apple's modal pull-away.
+private struct PlayerDismissTransform: ViewModifier {
+    @ObservedObject var drag: ScrollProgress
+
+    func body(content: Content) -> some View {
+        let progress = min(max(0, drag.value) / 240, 1)
+        content
+            .scaleEffect(1.0 - progress * 0.06)
+            .offset(y: max(0, drag.value))
+            .clipShape(RoundedRectangle(cornerRadius: progress * 16, style: .continuous))
     }
 }
