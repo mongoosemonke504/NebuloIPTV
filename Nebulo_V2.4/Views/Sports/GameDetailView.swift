@@ -55,14 +55,24 @@ extension EnvironmentValues {
     }
 }
 
-/// Player-carousel counterpart of `gameDetailPull`.
-private struct PlayerSheetPullKey: EnvironmentKey {
-    static let defaultValue: (CGFloat) -> Void = { _ in }
+/// Player-carousel counterparts of `gameDetailAtTop` / `gameDetailDragActive`.
+private struct PlayerSheetAtTopKey: EnvironmentKey {
+    static let defaultValue: (Bool) -> Void = { _ in }
 }
 extension EnvironmentValues {
-    var playerSheetPull: (CGFloat) -> Void {
-        get { self[PlayerSheetPullKey.self] }
-        set { self[PlayerSheetPullKey.self] = newValue }
+    var playerSheetAtTop: (Bool) -> Void {
+        get { self[PlayerSheetAtTopKey.self] }
+        set { self[PlayerSheetAtTopKey.self] = newValue }
+    }
+}
+
+private struct PlayerSheetDragActiveKey: EnvironmentKey {
+    static let defaultValue: ValueBox<Bool>? = nil
+}
+extension EnvironmentValues {
+    var playerSheetDragActive: ValueBox<Bool>? {
+        get { self[PlayerSheetDragActiveKey.self] }
+        set { self[PlayerSheetDragActiveKey.self] = newValue }
     }
 }
 
@@ -139,10 +149,21 @@ struct GameDetailPresenter: View {
     /// scrolls up to the top and keeps going doesn't make the card jump.
     @State private var dragEngaged = ValueBox(false)
     @State private var dragBaseline = ValueBox<CGFloat>(0)
+    /// The gap-filling black backdrop's opacity. Held solid through the whole
+    /// swipe, then faded out once the card is fully off-screen so the Sports
+    /// Hub reappears.
+    @State private var tintOpacity: CGFloat = 0.78
     @StateObject private var playerHost = PlayerSheetHost()
 
     var body: some View {
         ZStack {
+            // Strong black tint filling the gaps above and between the cards:
+            // the Sports Hub stays faintly visible behind it but isn't easy to
+            // read through. Stays solid through the whole swipe, then fades out
+            // once the card is gone so the hub comes back.
+            Color.black.opacity(tintOpacity)
+                .ignoresSafeArea()
+
             GameDetailView(request: request, viewModel: viewModel, scoreViewModel: scoreViewModel, accentColor: accentColor)
                 .environment(\.gameDetailDismiss, onDismiss)
                 // The content reports when it's scrolled to the top; only then
@@ -153,15 +174,10 @@ struct GameDetailPresenter: View {
                 .environment(\.gameDetailDragActive, dragEngaged)
                 .environmentObject(playerHost)
                 .offset(y: dragY)
-                // Flatten the card to a single composited unit so the slide
-                // moves one layer over the hub instead of re-blending every
-                // translucent sublayer each frame. compositingGroup doesn't
-                // rasterize, so it's free during scrolling — only the
-                // transform benefits.
-                .compositingGroup()
-                // Reveal the hub through the widening gap as the card is
-                // pulled down, so the dismiss reads as the card sliding off
-                // the hub.
+                // No compositingGroup: for a pure translation it forces the
+                // whole heavy subtree to re-flatten every frame, which made the
+                // slide less smooth than the (ungrouped) player card. Letting
+                // the already-rendered layers just translate matches it.
                 .ignoresSafeArea(edges: .bottom)
                 // While a player carousel is up it owns all touches (its own
                 // clear backing sits on top), so this gesture never fires and
@@ -226,13 +242,15 @@ struct GameDetailPresenter: View {
                 let travel = v.translation.height - dragBaseline.value
                 let predicted = v.predictedEndTranslation.height - dragBaseline.value
                 if travel > 120 || predicted > 400 {
-                    // Continue the finger's motion off the bottom with the same
-                    // offset transform, then remove the live view once it's
-                    // safely off-screen (onDismiss tears it down without a
-                    // visible hitch).
+                    // Slide the card off the bottom over the still-solid black
+                    // backdrop, THEN fade that black out to reveal the hub, and
+                    // only then tear the live view down (off-screen, unseen).
                     let target = UIScreen.main.bounds.height + 120
                     withAnimation(.easeOut(duration: 0.34)) { dragY = target }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) { onDismiss() }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) {
+                        withAnimation(.easeOut(duration: 0.2)) { tintOpacity = 0 }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { onDismiss() }
+                    }
                 } else {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { dragY = 0 }
                 }
@@ -247,11 +265,19 @@ struct GameDetailPresenter: View {
 /// from the top strip slides the card off. Used in place of a `.sheet`,
 /// whose full-height detent would darken the detail behind it.
 private struct PlayerSheetContainer<Content: View>: View {
+    /// Removes the carousel instantly (used for a tap in the gap and by the
+    /// drag-close after it has slid the card off-screen).
     let onDismiss: () -> Void
+
     @ViewBuilder var content: Content
 
     @State private var dragY: CGFloat = 0
-    @State private var stripDrag = ValueBox(false)
+    /// Same sheet-style dismiss model as the game card: engage only from the
+    /// scroll top, track the finger 1:1, and on release either slide the rest
+    /// of the way off (then remove) or spring back.
+    @State private var atTop = ValueBox(true)
+    @State private var dragEngaged = ValueBox(false)
+    @State private var dragBaseline = ValueBox<CGFloat>(0)
 
     var body: some View {
         ZStack {
@@ -265,30 +291,44 @@ private struct PlayerSheetContainer<Content: View>: View {
             content
                 .ignoresSafeArea(edges: .bottom)
                 .environment(\.playerSheetDismiss, onDismiss)
-                // Pulling the carousel down from its scroll top tracks the
-                // finger, same as the game card; yields to a top-strip drag.
-                .environment(\.playerSheetPull) { dy in if !stripDrag.value { dragY = dy } }
+                .environment(\.playerSheetAtTop) { atTop.value = $0 }
+                .environment(\.playerSheetDragActive, dragEngaged)
         }
         .offset(y: dragY)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 14, coordinateSpace: .global)
-                .onChanged { v in
-                    guard v.startLocation.y < 200,
+        .simultaneousGesture(dismissGesture)
+    }
+
+    private var dismissGesture: some Gesture {
+        DragGesture(minimumDistance: 10, coordinateSpace: .global)
+            .onChanged { v in
+                if !dragEngaged.value {
+                    guard atTop.value,
                           v.translation.height > 0,
                           v.translation.height > abs(v.translation.width) * 1.3 else { return }
-                    stripDrag.value = true
-                    dragY = v.translation.height
+                    dragEngaged.value = true
+                    dragBaseline.value = v.translation.height
                 }
-                .onEnded { v in
-                    stripDrag.value = false
-                    guard v.startLocation.y < 200 else { return }
-                    if v.translation.height > 130 || v.predictedEndTranslation.height > 500 {
-                        onDismiss()
-                    } else {
-                        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { dragY = 0 }
+                dragY = max(0, v.translation.height - dragBaseline.value)
+            }
+            .onEnded { v in
+                let engaged = dragEngaged.value
+                dragEngaged.value = false
+                guard engaged else { return }
+                let travel = v.translation.height - dragBaseline.value
+                let predicted = v.predictedEndTranslation.height - dragBaseline.value
+                if travel > 120 || predicted > 400 {
+                    // Slide the live card the rest of the way off, then remove
+                    // it (unanimated, since it's already gone from view).
+                    withAnimation(.easeOut(duration: 0.34)) { dragY = UIScreen.main.bounds.height + 120 }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) {
+                        var transaction = Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) { onDismiss() }
                     }
+                } else {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { dragY = 0 }
                 }
-        )
+            }
     }
 }
 
@@ -436,6 +476,10 @@ struct GameDetailContentView: View {
     /// (0 while riding with the content, growing as they dock under the
     /// compact bar). Same leaf-only re-render trick as collapseProgress.
     @State private var chipStick = ScrollProgress()
+    /// Live scroll offset, used to pin the header vignette (an in-content
+    /// element at zIndex 0.5, below the chips) at the top as content scrolls
+    /// under it — so the vignette passes continuously behind the bright chips.
+    @State private var headerPin = ScrollProgress()
     /// Measured height of each tab's content, so the pager can be framed to
     /// the visible tab and a short tab can't scroll as deep as its tallest
     /// neighbor.
@@ -492,6 +536,25 @@ struct GameDetailContentView: View {
 
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 14) {
+                    // Header vignette (dark + blur) pinned at the top once the
+                    // page collapses. It lives in the content at zIndex 0.5 —
+                    // above the scrolling rows it dims, but BELOW the tab chips
+                    // (zIndex 1), so the vignette passes continuously behind the
+                    // chips while they stay bright. Zero layout height (the
+                    // negative bottom padding cancels the VStack spacing) so it
+                    // never pushes the real content down.
+                    Color.clear
+                        .frame(height: 0)
+                        .overlay(alignment: .top) {
+                            GameHeaderScrim()
+                                .padding(.horizontal, -9)
+                                .offset(y: -55)
+                                .scrollProgressReveal(collapseProgress)
+                        }
+                        .scrollProgressOffset(headerPin)
+                        .padding(.bottom, -14)
+                        .zIndex(0.5)
+
                     headerCard
 
                     watchButton
@@ -559,6 +622,9 @@ struct GameDetailContentView: View {
                 )
             } action: { _, metrics in
                 collapseProgress.set(min(max((metrics.scrolled - 105) / 50, 0), 1))
+                // Pin the header vignette against the scroll (offset by the
+                // live scroll distance so it holds at the top).
+                headerPin.set(metrics.scrolled)
                 // Report at-top to the presenter's dismiss drag. Cancel the
                 // scroll's own top rubber-band ONLY while the card is being
                 // dragged to dismiss (so the content doesn't over-bounce past
@@ -714,7 +780,8 @@ struct GameDetailContentView: View {
         // Sits just below the grabber handle at the card's top edge.
         .padding(.top, 18)
         .padding(.bottom, 10)
-        .background(alignment: .top) { PinnedHeaderGradient() }
+        // No scrim here — the vignette is a separate in-content layer pinned
+        // behind the bar AND the chips (so the chips stay bright over it).
     }
 
     private func compactBattingColor(_ situation: GDBaseballSituation) -> Color {
@@ -2216,12 +2283,10 @@ private struct PlayerStatsPage: View {
     let points: [GDHeatPoint]
 
     @Environment(\.playerSheetDismiss) private var dismiss
-    @Environment(\.playerSheetPull) private var pull
+    @Environment(\.playerSheetAtTop) private var reportAtTop
+    @Environment(\.playerSheetDragActive) private var dragActive
     /// 0 while the big header is visible, 1 once it has scrolled past.
     @State private var collapse: CGFloat = 0
-    /// True only while the finger is actively dragging — gates pull-to-close
-    /// against fling-bounce overscroll.
-    @State private var dragging = ValueBox(false)
     /// Cancels the scroll's own top rubber-band so the content rides down
     /// with the card during a pull-to-close instead of drifting ahead of it.
     @State private var bounceCancel = ScrollProgress()
@@ -2252,15 +2317,11 @@ private struct PlayerStatsPage: View {
             // The avatar + name block is ~150pt tall; crossfade the pinned
             // strip in over the stretch where it slides out.
             collapse = min(max((scrolled - 110) / 45, 0), 1)
-            // At the top and pulling down: drag the whole card with the
-            // finger, then close once it's pulled far enough.
+            // Report at-top to the container's dismiss drag; cancel the top
+            // rubber-band only while that drag is engaged.
             let overscroll = max(0, -scrolled)
-            pull(overscroll)
-            bounceCancel.set(-overscroll)
-            if dragging.value && overscroll > 60 { dismiss() }
-        }
-        .onScrollPhaseChange { _, newPhase in
-            dragging.value = newPhase == .interacting
+            bounceCancel.set((dragActive?.value ?? false) ? -overscroll : 0)
+            reportAtTop(scrolled <= 1)
         }
         .background(alignment: .top) { TeamGlow(color: side.color) }
         .overlay(alignment: .top) { compactBar.opacity(collapse) }
@@ -2517,9 +2578,9 @@ private struct BoxPlayerStatsPage: View {
     let isTopRated: Bool
 
     @Environment(\.playerSheetDismiss) private var dismiss
-    @Environment(\.playerSheetPull) private var pull
+    @Environment(\.playerSheetAtTop) private var reportAtTop
+    @Environment(\.playerSheetDragActive) private var dragActive
     @State private var collapse: CGFloat = 0
-    @State private var dragging = ValueBox(false)
     @State private var bounceCancel = ScrollProgress()
 
     var body: some View {
@@ -2540,12 +2601,8 @@ private struct BoxPlayerStatsPage: View {
         } action: { _, scrolled in
             collapse = min(max((scrolled - 110) / 45, 0), 1)
             let overscroll = max(0, -scrolled)
-            pull(overscroll)
-            bounceCancel.set(-overscroll)
-            if dragging.value && overscroll > 60 { dismiss() }
-        }
-        .onScrollPhaseChange { _, newPhase in
-            dragging.value = newPhase == .interacting
+            bounceCancel.set((dragActive?.value ?? false) ? -overscroll : 0)
+            reportAtTop(scrolled <= 1)
         }
         .background(alignment: .top) { TeamGlow(color: side.color) }
         .overlay(alignment: .top) { compactBar.opacity(collapse) }

@@ -312,14 +312,9 @@ struct FavoritesView: View {
             // tall frame + upward offset stretch it past the screen top so
             // no edge can form; below, it fades to clear past the pills.
             .background(alignment: .top) {
-                LinearGradient(
-                    colors: [Color.black.opacity(0.55), Color.black.opacity(0.3), .clear],
-                    startPoint: .top, endPoint: .bottom
-                )
-                .frame(height: 250)
-                .offset(y: -130)
-                .scrollProgressOpacity(titleProgress) { Double($0 * $0) }
-                .allowsHitTesting(false)
+                CompactHeaderScrim(height: 265, fadeStart: 0.4)
+                    .offset(y: -130)
+                    .scrollProgressOpacity(titleProgress) { Double($0 * $0) }
             }
     }
 

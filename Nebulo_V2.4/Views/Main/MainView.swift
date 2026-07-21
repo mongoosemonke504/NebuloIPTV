@@ -1134,28 +1134,40 @@ struct StandardLayout: SwiftUI.View {
                         homeHeaderProgress.set(min(max(scrolled / 40, 0), 1))
                     }
                     // Compact header — always present, crossfading in as the
-                    // big title above fades/scrolls away. Transparent scrim
-                    // (no material) so everything scrolled past stays visible
-                    // behind the text.
+                    // big title above fades/scrolls away. A darkened scrim with
+                    // a slight frosted blur, both masked to fade out toward the
+                    // bottom so content scrolled past stays legible below it.
                     .overlay(alignment: .top) {
-                        VStack(spacing: 1) {
-                            Text(favHeader?.title ?? "\(liveGameCount) live")
-                                .font(.footnote.weight(.bold))
-                                .foregroundStyle(.white)
-                            Text(favHeader?.subtitle ?? "\(startingTodayCount) starting today")
-                                .font(.caption2)
-                                .foregroundStyle(.white.opacity(0.7))
+                        ZStack(alignment: .top) {
+                            // Dark + blurred vignette spanning from the very top
+                            // of the screen (behind the status bar / island) and
+                            // fading to fully transparent just below the collapsed
+                            // title. The GeometryReader ignores the top safe area,
+                            // so `safeAreaInsets.top` gives the status-bar height it
+                            // now covers, letting the scrim reach the real top.
+                            GeometryReader { proxy in
+                                // Shared app-wide scrim. The GeometryReader ignores
+                                // the top safe area, so `safeAreaInsets.top` gives the
+                                // status-bar height it now covers — added to the reach
+                                // so the vignette starts at the real screen top.
+                                CompactHeaderScrim(height: proxy.safeAreaInsets.top + 215, fadeStart: 0.2)
+                                    .frame(width: proxy.size.width)
+                            }
+                            .ignoresSafeArea(.container, edges: .top)
+
+                            VStack(spacing: 1) {
+                                Text(favHeader?.title ?? "\(liveGameCount) live")
+                                    .font(.footnote.weight(.bold))
+                                    .foregroundStyle(.white)
+                                Text(favHeader?.subtitle ?? "\(startingTodayCount) starting today")
+                                    .font(.caption2)
+                                    .foregroundStyle(.white.opacity(0.7))
+                            }
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 6)
+                            .padding(.bottom, 12)
                         }
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 6)
-                        .padding(.bottom, 12)
-                        .background(
-                            LinearGradient(
-                                colors: [Color.black.opacity(0.55), Color.black.opacity(0.3), .clear],
-                                startPoint: .top, endPoint: .bottom
-                            )
-                        )
                         .allowsHitTesting(false)
                         .scrollProgressOpacity(homeHeaderProgress) { Double($0) }
                     }

@@ -262,15 +262,54 @@ extension View {
     }
 }
 
+/// The app-wide compact-header vignette: a strong frosted blur + dark wash at
+/// the top that fades — blur and all — to fully clear down a long tail, the
+/// same recipe used behind the collapsed home title. Every pinned/compact
+/// header (home, sports hub, favorites, game detail, player stats) uses this
+/// so they read identically. `height` sets the total reach and `fadeStart` is
+/// the fraction that stays fully solid before the long fade begins — a taller
+/// solid cap for headers that sit further below the top of the screen.
+struct CompactHeaderScrim: View {
+    var height: CGFloat
+    var fadeStart: CGFloat = 0.2
+
+    var body: some View {
+        ZStack {
+            Rectangle().fill(.regularMaterial)
+            LinearGradient(
+                colors: [Color.black.opacity(0.78), Color.black.opacity(0.5), .clear],
+                startPoint: .top, endPoint: .bottom
+            )
+        }
+        .frame(height: height)
+        .mask(
+            LinearGradient(
+                stops: [
+                    .init(color: .black, location: 0),
+                    .init(color: .black, location: fadeStart),
+                    .init(color: .clear, location: 1)
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+        )
+        .allowsHitTesting(false)
+    }
+}
+
 struct PinnedHeaderGradient: View {
     var body: some View {
-        LinearGradient(
-            colors: [Color.black.opacity(0.55), Color.black.opacity(0.3), .clear],
-            startPoint: .top, endPoint: .bottom
-        )
-        .frame(height: 200)
-        .offset(y: -120)
-        .allowsHitTesting(false)
+        CompactHeaderScrim(height: 275, fadeStart: 0.2)
+            .offset(y: -55)
+    }
+}
+
+/// Game-detail compact-header vignette — one continuous scrim (dark + blur)
+/// with no cutout. It's rendered BEHIND the tab chips (lower z-order) so the
+/// vignette, blur and all, passes continuously behind them while the chips
+/// themselves stay bright on top.
+struct GameHeaderScrim: View {
+    var body: some View {
+        CompactHeaderScrim(height: 340, fadeStart: 0.16)
     }
 }
 
