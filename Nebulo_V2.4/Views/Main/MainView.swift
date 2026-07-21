@@ -572,6 +572,8 @@ struct StandardLayout: SwiftUI.View {
     /// Scoped the same way so scrolling a hub doesn't re-render this layout
     /// (which would in turn re-render the whole hub view inside it).
     @State private var sectionTitleProgress = ScrollProgress()
+    /// 0 at the top, 1 once the search results scroll — reveals the vignette.
+    @State private var searchHeaderProgress: CGFloat = 0
 
     /// One-line info shown under the compact chrome title for hubs.
     private func sectionChromeDetail(for cat: StreamCategory) -> String? {
@@ -1252,14 +1254,20 @@ struct StandardLayout: SwiftUI.View {
             }
             .padding(.top, 20)
         }
-        // Shared app-wide compact-header vignette (dark + blur) at the top,
-        // dimming the results as they scroll under the chrome row.
+        .onScrollGeometryChange(for: CGFloat.self) { geo in
+            geo.contentOffset.y + geo.contentInsets.top
+        } action: { _, y in
+            searchHeaderProgress = min(max(y / 40, 0), 1)
+        }
+        // Shared app-wide compact-header vignette (dark + blur), revealed as
+        // the results scroll up under the chrome row.
         .overlay(alignment: .top) {
             GeometryReader { proxy in
                 CompactHeaderScrim(height: proxy.safeAreaInsets.top + 215, fadeStart: 0.2)
                     .frame(width: proxy.size.width)
             }
             .ignoresSafeArea(.container, edges: .top)
+            .opacity(searchHeaderProgress * searchHeaderProgress)
             .allowsHitTesting(false)
         }
     }
@@ -1780,6 +1788,8 @@ struct CategoryDetailView: SwiftUI.View {
     @State private var channelForDescription: StreamChannel?
     /// Tap-through preview: what's on, description, and the play button.
     @State private var previewChannel: StreamChannel?
+    /// 0 at the top, 1 once scrolled — reveals the compact-header vignette.
+    @State private var headerProgress: CGFloat = 0
 
     var body: some SwiftUI.View {
         ZStack {
@@ -1829,6 +1839,11 @@ struct CategoryDetailView: SwiftUI.View {
                             .listStyle(.plain)
                             .scrollContentBackground(.hidden)
                             .environment(\.defaultMinListRowHeight, 0)
+                            .onScrollGeometryChange(for: CGFloat.self) { geo in
+                                geo.contentOffset.y + geo.contentInsets.top
+                            } action: { _, y in
+                                headerProgress = min(max(y / 40, 0), 1)
+                            }
                         }
                     }
                     .onAppear {
@@ -1839,13 +1854,14 @@ struct CategoryDetailView: SwiftUI.View {
                 }
             }
 
-            // Shared app-wide compact-header vignette (dark + blur) at the top,
-            // dimming the channel list as it scrolls under the chrome row.
+            // Shared app-wide compact-header vignette (dark + blur), revealed
+            // as the channel list scrolls up under the chrome row.
             GeometryReader { proxy in
                 CompactHeaderScrim(height: proxy.safeAreaInsets.top + 215, fadeStart: 0.2)
                     .frame(width: proxy.size.width)
             }
             .ignoresSafeArea(.container, edges: .top)
+            .opacity(headerProgress * headerProgress)
             .allowsHitTesting(false)
         }
         .navigationTitle(title)
