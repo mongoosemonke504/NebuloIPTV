@@ -78,7 +78,7 @@ struct AppIconPickerView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Color.black.ignoresSafeArea()
+                AppBackground().ignoresSafeArea()
 
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 20) {

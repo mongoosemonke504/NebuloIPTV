@@ -8,6 +8,32 @@ import SwiftUI
 /// Removing the TimelineView was the key change: the old `.periodic(by: 1/fps)`
 /// schedule fired every second and forced the entire Canvas to repaint, which
 /// added CPU/GPU pressure during home-screen scrolling.
+/// Drop-in "the background the user chose" for any screen or sheet — reads the
+/// stored nebula palette (or custom photo) so every surface matches the rest
+/// of the app instead of a one-off hardcoded colour.
+struct AppBackground: View {
+    @AppStorage("nebColor1") private var nebColor1 = "#1A2538"
+    @AppStorage("nebColor2") private var nebColor2 = "#11101A"
+    @AppStorage("nebColor3") private var nebColor3 = "#1F1A24"
+    @AppStorage("nebX1") private var nebX1 = 0.5
+    @AppStorage("nebY1") private var nebY1 = 0.0
+    @AppStorage("nebX2") private var nebX2 = 0.5
+    @AppStorage("nebY2") private var nebY2 = 0.5
+    @AppStorage("nebX3") private var nebX3 = 0.5
+    @AppStorage("nebY3") private var nebY3 = 1.0
+
+    var body: some View {
+        NebulaBackgroundView(
+            color1: Color(hex: nebColor1) ?? .purple,
+            color2: Color(hex: nebColor2) ?? .blue,
+            color3: Color(hex: nebColor3) ?? .pink,
+            point1: UnitPoint(x: nebX1, y: nebY1),
+            point2: UnitPoint(x: nebX2, y: nebY2),
+            point3: UnitPoint(x: nebX3, y: nebY3)
+        )
+    }
+}
+
 struct NebulaBackgroundView: View {
     let color1, color2, color3: Color
     let point1, point2, point3: UnitPoint
@@ -15,6 +41,7 @@ struct NebulaBackgroundView: View {
     @AppStorage("useCustomBackground")     private var useCustomBackground     = false
     @AppStorage("customBackgroundBlur")    private var customBackgroundBlur    = 0.0
     @AppStorage("customBackgroundVersion") private var customBackgroundVersion = 0
+    @Environment(\.colorScheme) private var scheme
 
     @State private var customImage: UIImage? = nil
 
@@ -34,8 +61,19 @@ struct NebulaBackgroundView: View {
                         .overlay(Color.black.opacity(0.2))
                 }
             } else if useCustomBackground {
-                // Image chosen but not loaded yet — solid black avoids a flash.
-                Color.black
+                // Image chosen but not loaded yet — match the scheme to avoid a flash.
+                (scheme == .light ? Color(white: 0.96) : Color.black)
+            } else if scheme == .light {
+                // Light mode: a clean, soft canvas — very light tints of the
+                // user's colours over near-white rather than glowing blobs on black.
+                LinearGradient(
+                    colors: [
+                        color1.mix(with: .white, by: 0.85),
+                        color3.mix(with: .white, by: 0.9),
+                        Color(white: 0.97)
+                    ],
+                    startPoint: .top, endPoint: .bottom
+                )
             } else {
                 // Nebula gradient — painted once, never redrawn unless props change.
                 Canvas { ctx, size in

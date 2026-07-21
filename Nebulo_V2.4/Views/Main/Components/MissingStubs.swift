@@ -304,6 +304,16 @@ struct SearchView: View {
                         }
                         .onEnded { _ in scopeSwipeConsumed = false }
                 )
+                // Shared app-wide compact-header vignette, revealed as the big
+                // "Search" title scrolls away. Sits above the scrolling results
+                // but below the chrome (added by the safeAreaInset that follows).
+                .overlay(alignment: .top) {
+                    CompactHeaderScrim(height: screenInsets.top + 215, fadeStart: 0.2)
+                        .frame(maxWidth: .infinity)
+                        .ignoresSafeArea(.container, edges: .top)
+                        .scrollProgressOpacity(titleProgress) { Double($0 * $0) }
+                        .allowsHitTesting(false)
+                }
                 // Chrome rides as a top inset OVER the scroll: content
                 // scrolls UNDER the Back pill, gear and chips with nothing
                 // drawn behind them — totally translucent, like the other

@@ -390,7 +390,7 @@ struct ChannelPreviewSheet: View {
 
     var body: some View {
         ZStack {
-            Color(red: 0.05, green: 0.05, blue: 0.08).ignoresSafeArea()
+            AppBackground().ignoresSafeArea()
 
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 16) {

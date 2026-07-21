@@ -12,11 +12,32 @@ extension Notification.Name {
     static let nebuloPiPRestore = Notification.Name("nebuloPiPRestore")
 }
 
+/// App-wide light/dark preference. Stored as a raw string in @AppStorage so a
+/// single toggle in Settings drives `.preferredColorScheme` at the root.
+enum AppAppearance: String, CaseIterable {
+    case system, light, dark
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+    var label: String {
+        switch self {
+        case .system: return "Auto"
+        case .light: return "Light"
+        case .dark: return "Dark"
+        }
+    }
+}
+
 struct ContentView: View {
     @ObservedObject private var accountManager = AccountManager.shared
     @ObservedObject var viewModel: ChannelViewModel
     @ObservedObject var scoreViewModel: ScoreViewModel
     @AppStorage("customAccentHex") private var customAccentHex = "#FFFFFF"
+    @AppStorage("appAppearance") private var appAppearance = AppAppearance.dark.rawValue
 
     var body: some View {
         Group {
@@ -26,6 +47,9 @@ struct ContentView: View {
                 LoginView()
             }
         }
+        // Root stays dark for now; light mode is being rolled out section by
+        // section (each converted screen opts into `appAppearance` as it's
+        // done). Settings is the first — it follows the setting itself.
         .preferredColorScheme(.dark)
         // Live Activity tap: nebulo://game/<id> → the game's detail page.
         // Presented from the root so it opens over whatever screen is up.
