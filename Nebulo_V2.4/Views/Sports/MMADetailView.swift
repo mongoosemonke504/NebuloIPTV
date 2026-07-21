@@ -182,7 +182,10 @@ struct MMADetailContentView: View {
 
     @StateObject private var detail: MMADetailViewModel
     @Environment(\.gameDetailDismiss) private var dismiss
+    @Environment(\.gameDetailAtTop) private var reportAtTop
+    @Environment(\.gameDetailDragActive) private var dragActive
     @State private var collapseProgress = ScrollProgress()
+    @State private var bounceCancel = ScrollProgress()
 
     init(request: GameDetailRequest, viewModel: ChannelViewModel, accentColor: Color) {
         self.request = request
@@ -217,13 +220,18 @@ struct MMADetailContentView: View {
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 18)
+                // Clears the grabber handle at the card's top edge.
+                .padding(.top, 24)
                 .padding(.bottom, 40)
+                .scrollProgressOffset(bounceCancel)
             }
             .onScrollGeometryChange(for: CGFloat.self) { geometry in
                 geometry.contentOffset.y + geometry.contentInsets.top
             } action: { _, scrolled in
                 collapseProgress.set(min(max((scrolled - 105) / 50, 0), 1))
+                let overscroll = max(0, -scrolled)
+                bounceCancel.set((dragActive?.value ?? false) ? -overscroll : 0)
+                reportAtTop(scrolled <= 1)
             }
             .overlay(alignment: .top) {
                 compactHeader

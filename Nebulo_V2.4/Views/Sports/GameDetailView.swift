@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 /// Closes the game-detail presentation. The detail is shown as a custom
 /// in-hierarchy overlay (not a system sheet), so `@Environment(\.dismiss)`
@@ -12,6 +13,105 @@ extension EnvironmentValues {
         get { self[GameDetailDismissKey.self] }
         set { self[GameDetailDismissKey.self] = newValue }
     }
+}
+
+/// Closes the player-stats carousel. Injected by `PlayerSheetContainer` so a
+/// player page can dismiss itself when overscrolled past its own top.
+private struct PlayerSheetDismissKey: EnvironmentKey {
+    static let defaultValue: () -> Void = {}
+}
+extension EnvironmentValues {
+    var playerSheetDismiss: () -> Void {
+        get { self[PlayerSheetDismissKey.self] }
+        set { self[PlayerSheetDismissKey.self] = newValue }
+    }
+}
+
+/// Reports whether the detail's vertical scroll is at its top, so the
+/// presenter's dismiss drag knows when a downward swipe (from the header strip
+/// or anywhere in the content) should grab and slide the whole card off
+/// instead of scrolling — the way a system sheet only dismisses from its top.
+private struct GameDetailAtTopKey: EnvironmentKey {
+    static let defaultValue: (Bool) -> Void = { _ in }
+}
+extension EnvironmentValues {
+    var gameDetailAtTop: (Bool) -> Void {
+        get { self[GameDetailAtTopKey.self] }
+        set { self[GameDetailAtTopKey.self] = newValue }
+    }
+}
+
+/// The presenter's "dismiss drag is engaged" latch, handed down so the content
+/// only cancels its top rubber-band while the card is actually being pulled to
+/// dismiss — leaving the normal elastic bounce intact when you just scroll up
+/// into the top.
+private struct GameDetailDragActiveKey: EnvironmentKey {
+    static let defaultValue: ValueBox<Bool>? = nil
+}
+extension EnvironmentValues {
+    var gameDetailDragActive: ValueBox<Bool>? {
+        get { self[GameDetailDragActiveKey.self] }
+        set { self[GameDetailDragActiveKey.self] = newValue }
+    }
+}
+
+/// Player-carousel counterpart of `gameDetailPull`.
+private struct PlayerSheetPullKey: EnvironmentKey {
+    static let defaultValue: (CGFloat) -> Void = { _ in }
+}
+extension EnvironmentValues {
+    var playerSheetPull: (CGFloat) -> Void {
+        get { self[PlayerSheetPullKey.self] }
+        set { self[PlayerSheetPullKey.self] = newValue }
+    }
+}
+
+/// The little grey grab handle centered at the top of a detail/stat card —
+/// the sheet-style affordance that says "drag me down to close".
+private struct CardGrabber: View {
+    var body: some View {
+        Capsule()
+            .fill(Color.white.opacity(0.4))
+            .frame(width: 36, height: 5)
+            .padding(.top, 8)
+            .allowsHitTesting(false)
+    }
+}
+
+/// Everything a soccer player-stats carousel needs, published up from the
+/// tapped card to the presenter so the carousel can be shown full-screen
+/// above the whole detail (not clipped inside the detail card). Equated by
+/// `key` only — the heat-points closure isn't `Equatable`.
+struct SoccerPlayerSheetData: Equatable {
+    let key: String
+    let players: [GDLineupPlayer]
+    let initialID: String
+    let side: GDTeamSide
+    let topRatedID: String?
+    let heatPoints: (String) -> [GDHeatPoint]
+    static func == (l: SoccerPlayerSheetData, r: SoccerPlayerSheetData) -> Bool { l.key == r.key }
+}
+
+struct BoxPlayerSheetData: Equatable {
+    let key: String
+    let players: [BoxSheetPlayer]
+    let initialID: String
+    let side: GDTeamSide
+    let topRatedID: String?
+    static func == (l: BoxPlayerSheetData, r: BoxPlayerSheetData) -> Bool { l.key == r.key }
+}
+
+/// Shared between the detail cards and their presenter: a tapped player sets
+/// one of these, and the presenter renders the corresponding carousel over
+/// the whole detail. Lifting it out of the card is what lets the player
+/// carousel be the full screen width (peeking neighbours from the true
+/// screen edge, like the games) and keeps a downward swipe on it from also
+/// dragging the detail card behind it.
+final class PlayerSheetHost: ObservableObject {
+    @Published var soccer: SoccerPlayerSheetData?
+    @Published var box: BoxPlayerSheetData?
+    var isPresenting: Bool { soccer != nil || box != nil }
+    func dismiss() { soccer = nil; box = nil }
 }
 
 /// Presents `GameDetailView` as a full-screen overlay layered directly over
@@ -30,36 +130,165 @@ struct GameDetailPresenter: View {
     let onDismiss: () -> Void
 
     @State private var dragY: CGFloat = 0
+    /// True while the detail's vertical scroll is at its top — the dismiss
+    /// drag only engages then, so mid-content scrolling is never hijacked.
+    @State private var atTop = ValueBox(true)
+    /// Latched once the dismiss drag takes over, with the finger translation
+    /// captured at that instant. Subtracting the baseline means the card
+    /// tracks the finger from where the drag engaged — so a swipe that first
+    /// scrolls up to the top and keeps going doesn't make the card jump.
+    @State private var dragEngaged = ValueBox(false)
+    @State private var dragBaseline = ValueBox<CGFloat>(0)
+    @StateObject private var playerHost = PlayerSheetHost()
 
     var body: some View {
-        GameDetailView(request: request, viewModel: viewModel, scoreViewModel: scoreViewModel, accentColor: accentColor)
-            .environment(\.gameDetailDismiss, onDismiss)
-            .offset(y: dragY)
-            // Reveal the hub through the widening gap as the card is pulled
-            // down, so the dismiss reads as the card sliding off the hub.
-            .ignoresSafeArea(edges: .bottom)
-            .simultaneousGesture(dismissGesture)
+        ZStack {
+            GameDetailView(request: request, viewModel: viewModel, scoreViewModel: scoreViewModel, accentColor: accentColor)
+                .environment(\.gameDetailDismiss, onDismiss)
+                // The content reports when it's scrolled to the top; only then
+                // does a downward drag grab the whole card to dismiss.
+                .environment(\.gameDetailAtTop) { atTop.value = $0 }
+                // Lets the content cancel its rubber-band only while the card
+                // is being dragged to dismiss — normal top bounce stays.
+                .environment(\.gameDetailDragActive, dragEngaged)
+                .environmentObject(playerHost)
+                .offset(y: dragY)
+                // Flatten the card to a single composited unit so the slide
+                // moves one layer over the hub instead of re-blending every
+                // translucent sublayer each frame. compositingGroup doesn't
+                // rasterize, so it's free during scrolling — only the
+                // transform benefits.
+                .compositingGroup()
+                // Reveal the hub through the widening gap as the card is
+                // pulled down, so the dismiss reads as the card sliding off
+                // the hub.
+                .ignoresSafeArea(edges: .bottom)
+                // While a player carousel is up it owns all touches (its own
+                // clear backing sits on top), so this gesture never fires and
+                // the detail card stays put under it.
+                .simultaneousGesture(dismissGesture)
+
+            // Player stats live here — a sibling ABOVE the whole detail, not
+            // inside a detail card — so the carousel spans the full screen
+            // width and its clear backing blocks the detail's own swipe.
+            if let data = playerHost.soccer {
+                PlayerSheetContainer(onDismiss: { playerHost.dismiss() }) {
+                    PlayerStatsSheet(
+                        players: data.players, initialID: data.initialID, side: data.side,
+                        showPhotos: true, topRatedID: data.topRatedID, heatPoints: data.heatPoints
+                    )
+                }
+                .transition(.move(edge: .bottom))
+                .zIndex(20)
+            }
+            if let data = playerHost.box {
+                PlayerSheetContainer(onDismiss: { playerHost.dismiss() }) {
+                    BoxPlayerStatsSheet(
+                        players: data.players, initialID: data.initialID,
+                        side: data.side, topRatedID: data.topRatedID
+                    )
+                }
+                .transition(.move(edge: .bottom))
+                .zIndex(20)
+            }
+        }
+        .animation(.smooth(duration: 0.3), value: playerHost.soccer)
+        .animation(.smooth(duration: 0.3), value: playerHost.box)
     }
 
-    /// Dismiss only on a downward drag that STARTS in the top strip (the
-    /// score/compact header) — the vertical stat lists scroll normally, and
-    /// the horizontal card-to-card paging is left alone by the
-    /// vertical-dominance guard.
+    /// Sheet-style dismiss: while the content is scrolled to its top, a
+    /// downward drag grabs the whole card and it tracks the finger 1:1 the
+    /// entire way (nothing re-renders — it's just a transform on the same
+    /// live card, which is why the follow is smooth). On release, if pulled
+    /// far enough the SAME transform simply animates the rest of the way off
+    /// the bottom — then the heavy view is dropped once it's already
+    /// off-screen, so no teardown hitch is ever visible. Otherwise it springs
+    /// back. The vertical-dominance guard leaves horizontal paging alone.
     private var dismissGesture: some Gesture {
-        DragGesture(minimumDistance: 14, coordinateSpace: .global)
+        DragGesture(minimumDistance: 10, coordinateSpace: .global)
             .onChanged { v in
-                guard v.startLocation.y < 175,
-                      v.translation.height > 0,
-                      v.translation.height > abs(v.translation.width) * 1.3 else { return }
-                dragY = v.translation.height
+                if !dragEngaged.value {
+                    // Engage only from the scroll top, on a clearly downward,
+                    // vertical drag — leaves scrolling and horizontal paging
+                    // untouched. Baseline = translation at this instant.
+                    guard atTop.value,
+                          v.translation.height > 0,
+                          v.translation.height > abs(v.translation.width) * 1.3 else { return }
+                    dragEngaged.value = true
+                    dragBaseline.value = v.translation.height
+                }
+                dragY = max(0, v.translation.height - dragBaseline.value)
             }
             .onEnded { v in
-                guard v.startLocation.y < 175 else { return }
-                if v.translation.height > 130 || v.predictedEndTranslation.height > 500 {
-                    onDismiss()
+                let engaged = dragEngaged.value
+                dragEngaged.value = false
+                guard engaged else { return }
+                let travel = v.translation.height - dragBaseline.value
+                let predicted = v.predictedEndTranslation.height - dragBaseline.value
+                if travel > 120 || predicted > 400 {
+                    // Continue the finger's motion off the bottom with the same
+                    // offset transform, then remove the live view once it's
+                    // safely off-screen (onDismiss tears it down without a
+                    // visible hitch).
+                    let target = UIScreen.main.bounds.height + 120
+                    withAnimation(.easeOut(duration: 0.34)) { dragY = target }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) { onDismiss() }
+                } else {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { dragY = 0 }
                 }
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.9)) { dragY = 0 }
             }
+    }
+}
+
+/// Wraps a player-stats card carousel so it presents over the match detail
+/// the same way the detail presents over the Sports Hub: the detail page
+/// stays visible and undimmed behind the card (a clear backing blocks stray
+/// taps and dismisses on a tap in the surrounding gap), and a downward drag
+/// from the top strip slides the card off. Used in place of a `.sheet`,
+/// whose full-height detent would darken the detail behind it.
+private struct PlayerSheetContainer<Content: View>: View {
+    let onDismiss: () -> Void
+    @ViewBuilder var content: Content
+
+    @State private var dragY: CGFloat = 0
+    @State private var stripDrag = ValueBox(false)
+
+    var body: some View {
+        ZStack {
+            // Full-screen clear backing: shows the detail through, blocks its
+            // touches (so a swipe here never reaches the detail's own dismiss
+            // gesture), and dismisses on a tap in the surrounding gap.
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture { onDismiss() }
+                .ignoresSafeArea()
+            content
+                .ignoresSafeArea(edges: .bottom)
+                .environment(\.playerSheetDismiss, onDismiss)
+                // Pulling the carousel down from its scroll top tracks the
+                // finger, same as the game card; yields to a top-strip drag.
+                .environment(\.playerSheetPull) { dy in if !stripDrag.value { dragY = dy } }
+        }
+        .offset(y: dragY)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 14, coordinateSpace: .global)
+                .onChanged { v in
+                    guard v.startLocation.y < 200,
+                          v.translation.height > 0,
+                          v.translation.height > abs(v.translation.width) * 1.3 else { return }
+                    stripDrag.value = true
+                    dragY = v.translation.height
+                }
+                .onEnded { v in
+                    stripDrag.value = false
+                    guard v.startLocation.y < 200 else { return }
+                    if v.translation.height > 130 || v.predictedEndTranslation.height > 500 {
+                        onDismiss()
+                    } else {
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { dragY = 0 }
+                    }
+                }
+        )
     }
 }
 
@@ -99,7 +328,7 @@ struct GameDetailView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 14) {
+                LazyHStack(spacing: 9) {
                     ForEach(pages) { page in
                         Group {
                             if page.sport == .tennis {
@@ -119,10 +348,11 @@ struct GameDetailView: View {
                         // bottom rectangle floating above it.
                         .clipShape(
                             UnevenRoundedRectangle(
-                                topLeadingRadius: 24, bottomLeadingRadius: 0,
-                                bottomTrailingRadius: 0, topTrailingRadius: 24
+                                topLeadingRadius: 34, bottomLeadingRadius: 0,
+                                bottomTrailingRadius: 0, topTrailingRadius: 34
                             )
                         )
+                        .overlay(alignment: .top) { CardGrabber() }
                         .allowsHitTesting(page.id == currentID)
                         .id(page.id)
                     }
@@ -130,7 +360,9 @@ struct GameDetailView: View {
                 .scrollTargetLayout()
             }
             .scrollTargetBehavior(.viewAligned)
-            .safeAreaPadding(.horizontal, 24)
+            // Slightly narrower main card + tighter inter-card gap: more of
+            // the next game peeks in from the edge (peek ≈ inset − spacing).
+            .safeAreaPadding(.horizontal, 19)
             .scrollPosition(id: $currentID)
             .onAppear {
                 // The scrollPosition binding's initial value alone lands on
@@ -140,7 +372,7 @@ struct GameDetailView: View {
             .onChange(of: currentID) { _, _ in
                 ChannelViewModel.shared.triggerSelectionHaptic()
             }
-            .padding(.top, 16)
+            .padding(.top, 34)
             .preferredColorScheme(.dark)
         }
     }
@@ -183,12 +415,16 @@ struct GameDetailContentView: View {
     @StateObject private var detail: GameDetailViewModel
     @ObservedObject private var activityManager = GameActivityManager.shared
     @Environment(\.gameDetailDismiss) private var dismiss
+    /// Reports scroll-at-top to the presenter, which owns the dismiss drag.
+    @Environment(\.gameDetailAtTop) private var reportAtTop
+    /// True while the presenter's dismiss drag is engaged — only then do we
+    /// cancel the top rubber-band.
+    @Environment(\.gameDetailDragActive) private var dragActive
+    /// Owned by the presenter — a tapped player publishes its stats carousel
+    /// here so it renders full-screen above the whole detail.
+    @EnvironmentObject private var playerHost: PlayerSheetHost
     @State private var lineupSide = "home"
     @State private var boxSide = "home"
-    /// Lineup player whose individual-stats sheet is up.
-    @State private var lineupStatsPlayer: GDLineupPlayer?
-    /// Box-score player (US sports) whose individual-stats sheet is up.
-    @State private var boxStatsPlayer: GDBoxRow?
     @State private var scrolledTab: GDTab? = .overview
     /// 0 at rest, 1 once the big header has scrolled past. Tracks the live
     /// scroll offset directly (no withAnimation) so the compact score bar
@@ -214,6 +450,11 @@ struct GameDetailContentView: View {
     /// True while the vertical scroll is untouched — rubber-band overshoot
     /// while dragging must not be mistaken for a stranded offset.
     @State private var scrollIdle = ValueBox(true)
+    /// Cancels the scroll's own top rubber-band (set to −overscroll) so that
+    /// while the whole card is being pulled down, the content inside moves
+    /// with the card instead of also bouncing on its own — otherwise the
+    /// content drifts twice as far as the card at the top.
+    @State private var bounceCancel = ScrollProgress()
 
     private var tab: GDTab { scrolledTab ?? .overview }
 
@@ -287,17 +528,23 @@ struct GameDetailContentView: View {
                             .zIndex(1)
                         }
                         tabPager
-                            .padding(.horizontal, -16)
+                            .padding(.horizontal, -9)
                             .frame(height: tabHeights[tab], alignment: .top)
                             .clipped()
                             .animation(.easeOut(duration: 0.25), value: tab)
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 18)
+                // Tighter side padding so the section cards sit closer to
+                // the card's edges.
+                .padding(.horizontal, 9)
+                // Clears the grabber handle sitting at the card's top edge.
+                .padding(.top, 24)
                 // Clears the home-indicator strip so the last stats row
                 // isn't tucked under it at the bottom of the scroll.
                 .padding(.bottom, 80)
+                // Undo the top rubber-band so the content rides down with the
+                // card, not ahead of it, during a pull-to-close.
+                .scrollProgressOffset(bounceCancel)
             }
             .scrollPosition($scrollTarget)
             // Scroll-linked, not threshold + animation: the bar's opacity
@@ -312,6 +559,13 @@ struct GameDetailContentView: View {
                 )
             } action: { _, metrics in
                 collapseProgress.set(min(max((metrics.scrolled - 105) / 50, 0), 1))
+                // Report at-top to the presenter's dismiss drag. Cancel the
+                // scroll's own top rubber-band ONLY while the card is being
+                // dragged to dismiss (so the content doesn't over-bounce past
+                // the card); otherwise leave the normal elastic top bounce.
+                let overscroll = max(0, -metrics.scrolled)
+                bounceCancel.set((dragActive?.value ?? false) ? -overscroll : 0)
+                reportAtTop(metrics.scrolled <= 1)
                 // Content got shorter than the current offset (switched to a
                 // tab with less content): bring the new tab's bottom to the
                 // bottom of the screen instead of leaving empty space. Only
@@ -339,40 +593,46 @@ struct GameDetailContentView: View {
             }
         }
         .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
-            // A player sheet expanding to full screen pushes this whole page
-            // back — the probes report the transformed frames and the chips
-            // would slide around behind the sheet. Freeze them while it's up.
-            guard lineupStatsPlayer == nil && boxStatsPlayer == nil else { return }
+            // A player carousel over the page can shift the probes' reported
+            // frames; freeze the chip dock while one is up.
+            guard !playerHost.isPresenting else { return }
             guard let containerTop = offsets["gdContainer"], let chipsTop = offsets["gdChips"] else { return }
             chipStick.set(max(0, containerTop + barHeight - chipsTop))
         }
         .preferredColorScheme(.dark)
-        .sheet(item: $lineupStatsPlayer) { player in
-            let lineup = detail.lineup(homeAway: lineupSide)
-            let roster = (lineup?.starters ?? []) + (lineup?.substitutes ?? [])
-            PlayerStatsSheet(
-                players: roster.isEmpty ? [player] : roster,
-                initialID: player.id,
-                side: lineupSide == "home" ? detail.homeSide : detail.awaySide,
-                showPhotos: true,
-                topRatedID: detail.topRatedPlayerID,
-                heatPoints: { detail.playerHeatPoints(athleteID: $0) }
-            )
-        }
-        .sheet(item: $boxStatsPlayer) { row in
-            let players = boxSheetPlayers()
-            BoxPlayerStatsSheet(
-                players: players.isEmpty
-                    ? [BoxSheetPlayer(id: row.athleteID, name: row.name, headshot: row.headshot, rating: row.rating, sections: [])]
-                    : players,
-                initialID: row.athleteID,
-                side: boxSide == "home" ? detail.homeSide : detail.awaySide,
-                topRatedID: detail.topRatedPlayerID
-            )
-        }
         .task(id: request.id) {
             await detail.refreshLoop()
         }
+    }
+
+    /// Builds the soccer player's stats carousel data from this card's lineup
+    /// and publishes it to the presenter, which shows it over the whole
+    /// detail (full screen width, undimmed detail behind).
+    private func presentLineupPlayer(_ player: GDLineupPlayer) {
+        let lineup = detail.lineup(homeAway: lineupSide)
+        let roster = (lineup?.starters ?? []) + (lineup?.substitutes ?? [])
+        playerHost.soccer = SoccerPlayerSheetData(
+            key: player.id,
+            players: roster.isEmpty ? [player] : roster,
+            initialID: player.id,
+            side: lineupSide == "home" ? detail.homeSide : detail.awaySide,
+            topRatedID: detail.topRatedPlayerID,
+            heatPoints: { detail.playerHeatPoints(athleteID: $0) }
+        )
+    }
+
+    /// Box-score (US sports) counterpart of `presentLineupPlayer`.
+    private func presentBoxPlayer(_ row: GDBoxRow) {
+        let players = boxSheetPlayers()
+        playerHost.box = BoxPlayerSheetData(
+            key: row.athleteID,
+            players: players.isEmpty
+                ? [BoxSheetPlayer(id: row.athleteID, name: row.name, headshot: row.headshot, rating: row.rating, sections: [])]
+                : players,
+            initialID: row.athleteID,
+            side: boxSide == "home" ? detail.homeSide : detail.awaySide,
+            topRatedID: detail.topRatedPlayerID
+        )
     }
 
     /// One entry per athlete on the current box-score side, their rows from
@@ -450,8 +710,9 @@ struct GameDetailContentView: View {
                     .frame(width: 34, height: 34)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
+        .padding(.horizontal, 9)
+        // Sits just below the grabber handle at the card's top edge.
+        .padding(.top, 18)
         .padding(.bottom, 10)
         .background(alignment: .top) { PinnedHeaderGradient() }
     }
@@ -542,7 +803,9 @@ struct GameDetailContentView: View {
             .scrollTargetLayout()
         }
         .scrollTargetBehavior(.viewAligned)
-        .safeAreaPadding(.horizontal, 16)
+        // Tab content sits closer to the card edge (matches the reduced
+        // outer content padding).
+        .safeAreaPadding(.horizontal, 9)
         .scrollPosition(id: $scrolledTab)
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         .onScrollGeometryChange(for: CGFloat.self) { geometry in
@@ -1251,7 +1514,7 @@ struct GameDetailContentView: View {
                             onSwipe: handleLineupSwipe
                         ) { tapped in
                             viewModel.triggerSelectionHaptic()
-                            lineupStatsPlayer = tapped
+                            presentLineupPlayer(tapped)
                         }
                     } else {
                         VStack(spacing: 6) {
@@ -1305,7 +1568,7 @@ struct GameDetailContentView: View {
     private func lineupListRow(_ player: GDLineupPlayer) -> some View {
         Button {
             viewModel.triggerSelectionHaptic()
-            lineupStatsPlayer = player
+            presentLineupPlayer(player)
         } label: {
             lineupListRowContent(player)
                 .contentShape(Rectangle())
@@ -1416,7 +1679,7 @@ struct GameDetailContentView: View {
                     let index = Int((location.y - 22) / 27)
                     guard index >= 0, group.rows.indices.contains(index) else { return }
                     viewModel.triggerSelectionHaptic()
-                    boxStatsPlayer = group.rows[index]
+                    presentBoxPlayer(group.rows[index])
                 }))
 
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -1905,19 +2168,28 @@ struct PlayerStatsSheet: View {
         // neighbors peeking in from the screen edges.
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 14) {
+                LazyHStack(spacing: 9) {
                     ForEach(players) { player in
                         PlayerStatsPage(player: player, side: side, showPhoto: showPhotos, isTopRated: player.id == topRatedID, points: heatPoints(player.id))
-                            .background(Color(white: 0.10))
+                            // Translucent frosted glass: the match detail
+                            // blurs through the card, with a dark tint on top
+                            // keeping the stat text readable.
+                            .background { Color.black.opacity(0.3).background(.ultraThinMaterial) }
                             .containerRelativeFrame(.horizontal)
-                            .clipShape(RoundedRectangle(cornerRadius: 24))
+                            .clipShape(
+                                UnevenRoundedRectangle(
+                                    topLeadingRadius: 34, bottomLeadingRadius: 0,
+                                    bottomTrailingRadius: 0, topTrailingRadius: 34
+                                )
+                            )
+                            .overlay(alignment: .top) { CardGrabber() }
                             .id(player.id)
                     }
                 }
                 .scrollTargetLayout()
             }
             .scrollTargetBehavior(.viewAligned)
-            .safeAreaPadding(.horizontal, 24)
+            .safeAreaPadding(.horizontal, 20)
             .scrollPosition(id: $selection)
             .onAppear {
                 // The binding's initial value alone lands unreliably in a
@@ -1928,16 +2200,8 @@ struct PlayerStatsSheet: View {
                 ChannelViewModel.shared.triggerSelectionHaptic()
             }
         }
-        .padding(.top, 16)
+        .padding(.top, 31)
         .preferredColorScheme(.dark)
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
-        .presentationCornerRadius(30)
-        // The game page shows through around the cards instead of a black
-        // frame; background interaction stops iOS dimming/pushing back the
-        // screen underneath at the full-height detent.
-        .presentationBackground(.clear)
-        .presentationBackgroundInteraction(.enabled(upThrough: .large))
     }
 }
 
@@ -1951,8 +2215,16 @@ private struct PlayerStatsPage: View {
     let isTopRated: Bool
     let points: [GDHeatPoint]
 
+    @Environment(\.playerSheetDismiss) private var dismiss
+    @Environment(\.playerSheetPull) private var pull
     /// 0 while the big header is visible, 1 once it has scrolled past.
     @State private var collapse: CGFloat = 0
+    /// True only while the finger is actively dragging — gates pull-to-close
+    /// against fling-bounce overscroll.
+    @State private var dragging = ValueBox(false)
+    /// Cancels the scroll's own top rubber-band so the content rides down
+    /// with the card during a pull-to-close instead of drifting ahead of it.
+    @State private var bounceCancel = ScrollProgress()
 
     private static let topKeys = ["minutes", "totalGoals", "goalAssists", "totalShots", "shotsOnTarget", "accuratePasses", "saves", "goalsConceded"]
     private static let attackKeys = ["totalPasses", "totalCrosses", "accurateCrosses", "totalLongBalls", "accurateLongBalls", "blockedShots", "offsides", "ownGoals"]
@@ -1969,9 +2241,10 @@ private struct PlayerStatsPage: View {
                 statSection("Discipline", keys: Self.disciplineKeys)
                 otherSection
             }
-            .padding(.horizontal, 22)
+            .padding(.horizontal, 18)
             .padding(.top, 28)
             .padding(.bottom, 44)
+            .scrollProgressOffset(bounceCancel)
         }
         .onScrollGeometryChange(for: CGFloat.self) { geometry in
             geometry.contentOffset.y + geometry.contentInsets.top
@@ -1979,6 +2252,15 @@ private struct PlayerStatsPage: View {
             // The avatar + name block is ~150pt tall; crossfade the pinned
             // strip in over the stretch where it slides out.
             collapse = min(max((scrolled - 110) / 45, 0), 1)
+            // At the top and pulling down: drag the whole card with the
+            // finger, then close once it's pulled far enough.
+            let overscroll = max(0, -scrolled)
+            pull(overscroll)
+            bounceCancel.set(-overscroll)
+            if dragging.value && overscroll > 60 { dismiss() }
+        }
+        .onScrollPhaseChange { _, newPhase in
+            dragging.value = newPhase == .interacting
         }
         .background(alignment: .top) { TeamGlow(color: side.color) }
         .overlay(alignment: .top) { compactBar.opacity(collapse) }
@@ -2194,19 +2476,28 @@ struct BoxPlayerStatsSheet: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 14) {
+                LazyHStack(spacing: 9) {
                     ForEach(players) { player in
                         BoxPlayerStatsPage(player: player, side: side, isTopRated: player.id == topRatedID)
-                            .background(Color(white: 0.10))
+                            // Translucent frosted glass: the match detail
+                            // blurs through the card, with a dark tint on top
+                            // keeping the stat text readable.
+                            .background { Color.black.opacity(0.3).background(.ultraThinMaterial) }
                             .containerRelativeFrame(.horizontal)
-                            .clipShape(RoundedRectangle(cornerRadius: 24))
+                            .clipShape(
+                                UnevenRoundedRectangle(
+                                    topLeadingRadius: 34, bottomLeadingRadius: 0,
+                                    bottomTrailingRadius: 0, topTrailingRadius: 34
+                                )
+                            )
+                            .overlay(alignment: .top) { CardGrabber() }
                             .id(player.id)
                     }
                 }
                 .scrollTargetLayout()
             }
             .scrollTargetBehavior(.viewAligned)
-            .safeAreaPadding(.horizontal, 24)
+            .safeAreaPadding(.horizontal, 20)
             .scrollPosition(id: $selection)
             .onAppear {
                 proxy.scrollTo(selection, anchor: .center)
@@ -2215,16 +2506,8 @@ struct BoxPlayerStatsSheet: View {
                 ChannelViewModel.shared.triggerSelectionHaptic()
             }
         }
-        .padding(.top, 16)
+        .padding(.top, 31)
         .preferredColorScheme(.dark)
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
-        .presentationCornerRadius(30)
-        // The game page shows through around the cards instead of a black
-        // frame; background interaction stops iOS dimming/pushing back the
-        // screen underneath at the full-height detent.
-        .presentationBackground(.clear)
-        .presentationBackgroundInteraction(.enabled(upThrough: .large))
     }
 }
 
@@ -2233,7 +2516,11 @@ private struct BoxPlayerStatsPage: View {
     let side: GDTeamSide
     let isTopRated: Bool
 
+    @Environment(\.playerSheetDismiss) private var dismiss
+    @Environment(\.playerSheetPull) private var pull
     @State private var collapse: CGFloat = 0
+    @State private var dragging = ValueBox(false)
+    @State private var bounceCancel = ScrollProgress()
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -2243,14 +2530,22 @@ private struct BoxPlayerStatsPage: View {
                     statList(section)
                 }
             }
-            .padding(.horizontal, 22)
+            .padding(.horizontal, 18)
             .padding(.top, 28)
             .padding(.bottom, 44)
+            .scrollProgressOffset(bounceCancel)
         }
         .onScrollGeometryChange(for: CGFloat.self) { geometry in
             geometry.contentOffset.y + geometry.contentInsets.top
         } action: { _, scrolled in
             collapse = min(max((scrolled - 110) / 45, 0), 1)
+            let overscroll = max(0, -scrolled)
+            pull(overscroll)
+            bounceCancel.set(-overscroll)
+            if dragging.value && overscroll > 60 { dismiss() }
+        }
+        .onScrollPhaseChange { _, newPhase in
+            dragging.value = newPhase == .interacting
         }
         .background(alignment: .top) { TeamGlow(color: side.color) }
         .overlay(alignment: .top) { compactBar.opacity(collapse) }

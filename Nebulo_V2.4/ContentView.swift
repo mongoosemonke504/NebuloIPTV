@@ -53,17 +53,31 @@ struct ContentView: View {
                     viewModel: viewModel,
                     scoreViewModel: scoreViewModel,
                     accentColor: Color(hex: customAccentHex) ?? .white,
-                    onDismiss: {
-                        scoreViewModel.detailRequest = nil
-                        scoreViewModel.deepLinkRequest = nil
-                    }
+                    onDismiss: closeDetail
                 )
                 .transition(.move(edge: .bottom))
                 .zIndex(50)
             }
         }
-        .animation(.spring(response: 0.42, dampingFraction: 0.86), value: scoreViewModel.detailRequest)
-        .animation(.spring(response: 0.42, dampingFraction: 0.86), value: scoreViewModel.deepLinkRequest)
+        // Smooth (no-bounce) present — the open slides the live view up. The
+        // drag-close animates the card off-screen itself (in the presenter),
+        // then calls closeDetail to drop the view once it's already gone, so
+        // this animation only ever drives the OPEN.
+        .animation(.smooth(duration: 0.3), value: scoreViewModel.detailRequest)
+        .animation(.smooth(duration: 0.3), value: scoreViewModel.deepLinkRequest)
+    }
+
+    /// Removes the game detail. The drag-close has already animated the card
+    /// off-screen by the time this runs, so the removal itself is instant and
+    /// unanimated (any teardown hitch is off-screen). Non-drag closes (Watch
+    /// button, deep link) just remove it.
+    private func closeDetail() {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            scoreViewModel.detailRequest = nil
+            scoreViewModel.deepLinkRequest = nil
+        }
     }
 }
 
