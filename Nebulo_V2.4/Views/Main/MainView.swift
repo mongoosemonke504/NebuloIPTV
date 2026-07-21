@@ -1252,8 +1252,18 @@ struct StandardLayout: SwiftUI.View {
             }
             .padding(.top, 20)
         }
+        // Shared app-wide compact-header vignette (dark + blur) at the top,
+        // dimming the results as they scroll under the chrome row.
+        .overlay(alignment: .top) {
+            GeometryReader { proxy in
+                CompactHeaderScrim(height: proxy.safeAreaInsets.top + 215, fadeStart: 0.2)
+                    .frame(width: proxy.size.width)
+            }
+            .ignoresSafeArea(.container, edges: .top)
+            .allowsHitTesting(false)
+        }
     }
-    
+
     func getChannelsToShow(for cat: StreamCategory) -> [StreamChannel] {
         // -2 = Recently Watched. Use the cached id-to-channel map so this is
         // O(recent) instead of O(recent × channels) -- the latter was the
@@ -1828,6 +1838,15 @@ struct CategoryDetailView: SwiftUI.View {
                     }
                 }
             }
+
+            // Shared app-wide compact-header vignette (dark + blur) at the top,
+            // dimming the channel list as it scrolls under the chrome row.
+            GeometryReader { proxy in
+                CompactHeaderScrim(height: proxy.safeAreaInsets.top + 215, fadeStart: 0.2)
+                    .frame(width: proxy.size.width)
+            }
+            .ignoresSafeArea(.container, edges: .top)
+            .allowsHitTesting(false)
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)

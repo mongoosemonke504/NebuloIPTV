@@ -205,16 +205,14 @@ struct RecordingsView: View {
                 headerProgress = min(max(-y / 40, 0), 1)
             }
 
-            // Home-style dark gradient — a ZStack layer above the scroll, so
-            // it dims content passing the top of the screen exactly like the
-            // home header does. ignoresSafeArea carries it through the status
-            // bar and chrome region, so there is no starting edge anywhere.
-            LinearGradient(
-                colors: [Color.black.opacity(0.55), Color.black.opacity(0.3), .clear],
-                startPoint: .top, endPoint: .bottom
-            )
-            .frame(height: 160)
-            .ignoresSafeArea(edges: .top)
+            // Shared app-wide compact-header vignette (dark + blur), reaching
+            // from the true screen top and fading out down a long tail — same
+            // as home/sports/favorites. Revealed as the big title scrolls away.
+            GeometryReader { proxy in
+                CompactHeaderScrim(height: proxy.safeAreaInsets.top + 215, fadeStart: 0.2)
+                    .frame(width: proxy.size.width)
+            }
+            .ignoresSafeArea(.container, edges: .top)
             .opacity(headerProgress * headerProgress)
             .allowsHitTesting(false)
 

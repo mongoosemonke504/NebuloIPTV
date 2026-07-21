@@ -224,10 +224,12 @@ struct GameDetailPresenter: View {
         DragGesture(minimumDistance: 10, coordinateSpace: .global)
             .onChanged { v in
                 if !dragEngaged.value {
-                    // Engage only from the scroll top, on a clearly downward,
-                    // vertical drag — leaves scrolling and horizontal paging
-                    // untouched. Baseline = translation at this instant.
-                    guard atTop.value,
+                    // Engage on a clearly downward, vertical drag when either
+                    // the scroll is at its top OR the drag started on the grey
+                    // grab bar / compact header at the very top of the card —
+                    // so the grabber always closes, even when scrolled down.
+                    // Leaves mid-content scrolling and horizontal paging alone.
+                    guard atTop.value || v.startLocation.y < 110,
                           v.translation.height > 0,
                           v.translation.height > abs(v.translation.width) * 1.3 else { return }
                     dragEngaged.value = true
@@ -247,10 +249,13 @@ struct GameDetailPresenter: View {
                     // only then tear the live view down (off-screen, unseen).
                     let target = UIScreen.main.bounds.height + 120
                     withAnimation(.easeOut(duration: 0.34)) { dragY = target }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) {
-                        withAnimation(.easeOut(duration: 0.2)) { tintOpacity = 0 }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { onDismiss() }
+                    // Start fading the black early (while the card is still
+                    // sliding) and quickly, so the hub is already back by the
+                    // time the card clears the bottom.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        withAnimation(.easeOut(duration: 0.14)) { tintOpacity = 0 }
                     }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) { onDismiss() }
                 } else {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { dragY = 0 }
                 }
