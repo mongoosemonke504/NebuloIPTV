@@ -294,6 +294,11 @@ extension View {
 struct CompactHeaderScrim: View {
     var height: CGFloat
     var fadeStart: CGFloat = 0.2
+    /// Overrides the background-derived tint with a fixed colour. The game and
+    /// score cards pass `.black`: they float above the app background on their
+    /// own dark surface, so a background-tinted vignette read as a colour cast
+    /// rather than a shadow.
+    var tintOverride: Color? = nil
     /// The tint is derived from the user's chosen app background, darkened, so
     /// the vignette matches whatever background they pick — the top nebula
     /// colour for the gradient background, or the sampled top colour of a
@@ -304,6 +309,7 @@ struct CompactHeaderScrim: View {
     @AppStorage("customBgTintHex") private var customBgTintHex = ""
 
     private var tint: Color {
+        if let tintOverride { return tintOverride }
         let base: Color = useCustomBackground && !customBgTintHex.isEmpty
             ? (Color(hex: customBgTintHex) ?? .black)
             : (Color(hex: nebColor1) ?? .black)
@@ -335,7 +341,7 @@ struct CompactHeaderScrim: View {
 
 struct PinnedHeaderGradient: View {
     var body: some View {
-        CompactHeaderScrim(height: 275, fadeStart: 0.2)
+        CompactHeaderScrim(height: 275, fadeStart: 0.2, tintOverride: .black)
             .offset(y: -55)
     }
 }
@@ -346,7 +352,56 @@ struct PinnedHeaderGradient: View {
 /// themselves stay bright on top.
 struct GameHeaderScrim: View {
     var body: some View {
-        CompactHeaderScrim(height: 340, fadeStart: 0.16)
+        CompactHeaderScrim(height: 340, fadeStart: 0.16, tintOverride: .black)
+    }
+}
+
+/// Pinned-chip styling derived from the user's chosen app background, so the
+/// chip rows on Home, Sports and Favorites always sit in the same colour family
+/// as the nebula (or custom photo) behind them. Reads the same @AppStorage keys
+/// as `CompactHeaderScrim`, so chips restyle live the moment the background
+/// changes.
+///
+/// The unselected fill stays fully opaque — these rows pin over scrolling
+/// content, which must never show through them.
+struct BackgroundTintedChip: ViewModifier {
+    let isSelected: Bool
+
+    @AppStorage("nebColor1") private var nebColor1 = "#1A2538"
+    @AppStorage("useCustomBackground") private var useCustomBackground = false
+    @AppStorage("customBgTintHex") private var customBgTintHex = ""
+
+    /// Falls back to the old fixed navy if a colour can't be parsed, so chips
+    /// never render transparent.
+    private var base: Color {
+        let parsed: Color? = useCustomBackground && !customBgTintHex.isEmpty
+            ? Color(hex: customBgTintHex)
+            : Color(hex: nebColor1)
+        return parsed ?? Color(red: 0.13, green: 0.15, blue: 0.20)
+    }
+
+    /// Selected reads as "on" by inverting toward a bright tint of the same
+    /// hue rather than pure white; unselected sits just below the background
+    /// so it reads as a recessed pill.
+    private var fill: Color {
+        isSelected ? base.mix(with: .white, by: 0.88) : base.mix(with: .black, by: 0.35)
+    }
+    private var text: Color {
+        isSelected ? base.mix(with: .black, by: 0.78) : .white
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .foregroundStyle(text)
+            .background(Capsule().fill(fill))
+            .contentShape(Capsule())
+    }
+}
+
+extension View {
+    /// Styles a chip's fill + label colour from the user's background palette.
+    func backgroundTintedChip(isSelected: Bool) -> some View {
+        modifier(BackgroundTintedChip(isSelected: isSelected))
     }
 }
 

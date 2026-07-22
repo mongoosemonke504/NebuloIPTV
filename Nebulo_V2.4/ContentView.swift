@@ -12,32 +12,11 @@ extension Notification.Name {
     static let nebuloPiPRestore = Notification.Name("nebuloPiPRestore")
 }
 
-/// App-wide light/dark preference. Stored as a raw string in @AppStorage so a
-/// single toggle in Settings drives `.preferredColorScheme` at the root.
-enum AppAppearance: String, CaseIterable {
-    case system, light, dark
-    var colorScheme: ColorScheme? {
-        switch self {
-        case .system: return nil
-        case .light: return .light
-        case .dark: return .dark
-        }
-    }
-    var label: String {
-        switch self {
-        case .system: return "Auto"
-        case .light: return "Light"
-        case .dark: return "Dark"
-        }
-    }
-}
-
 struct ContentView: View {
     @ObservedObject private var accountManager = AccountManager.shared
     @ObservedObject var viewModel: ChannelViewModel
     @ObservedObject var scoreViewModel: ScoreViewModel
     @AppStorage("customAccentHex") private var customAccentHex = "#FFFFFF"
-    @AppStorage("appAppearance") private var appAppearance = AppAppearance.dark.rawValue
 
     var body: some View {
         Group {
@@ -47,9 +26,6 @@ struct ContentView: View {
                 LoginView()
             }
         }
-        // Root stays dark for now; light mode is being rolled out section by
-        // section (each converted screen opts into `appAppearance` as it's
-        // done). Settings is the first — it follows the setting itself.
         .preferredColorScheme(.dark)
         // Live Activity tap: nebulo://game/<id> → the game's detail page.
         // Presented from the root so it opens over whatever screen is up.
@@ -79,16 +55,14 @@ struct ContentView: View {
                     accentColor: Color(hex: customAccentHex) ?? .white,
                     onDismiss: closeDetail
                 )
-                .transition(.move(edge: .bottom))
+                // Identity, NOT a move transition: sliding the presenter would
+                // carry its black backdrop up with the card. The backdrop must
+                // be there the instant the overlay mounts, so the presenter
+                // appears in place and animates only the card up itself.
+                .transition(.identity)
                 .zIndex(50)
             }
         }
-        // Smooth (no-bounce) present — the open slides the live view up. The
-        // drag-close animates the card off-screen itself (in the presenter),
-        // then calls closeDetail to drop the view once it's already gone, so
-        // this animation only ever drives the OPEN.
-        .animation(.smooth(duration: 0.3), value: scoreViewModel.detailRequest)
-        .animation(.smooth(duration: 0.3), value: scoreViewModel.deepLinkRequest)
     }
 
     /// Removes the game detail. The drag-close has already animated the card

@@ -1372,10 +1372,6 @@ struct SportSelectorView: View {
     var allMode: Binding<Bool>? = nil
     let action: () -> Void
 
-    /// Opaque unselected-chip fill — content scrolling behind the pinned
-    /// chips must not show through them. Shared tone across all chip rows.
-    static let chipFill = Color(red: 0.13, green: 0.15, blue: 0.20)
-
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
@@ -1391,8 +1387,7 @@ struct SportSelectorView: View {
                                 .font(.caption.bold())
                                 .padding(.vertical, 8)
                                 .padding(.horizontal, 16)
-                                .background(allMode.wrappedValue ? Color.white : Self.chipFill)
-                                .foregroundColor(allMode.wrappedValue ? .black : .white)
+                                .backgroundTintedChip(isSelected: allMode.wrappedValue)
                                 .clipShape(Capsule())
                         }
                         .id("__all__")
@@ -1410,8 +1405,7 @@ struct SportSelectorView: View {
                                 .font(.caption.bold())
                                 .padding(.vertical, 8)
                                 .padding(.horizontal, 16)
-                                .background((allMode?.wrappedValue == false || allMode == nil) && selectedSport == s ? Color.white : Self.chipFill)
-                                .foregroundColor((allMode?.wrappedValue == false || allMode == nil) && selectedSport == s ? .black : .white)
+                                .backgroundTintedChip(isSelected: (allMode?.wrappedValue == false || allMode == nil) && selectedSport == s)
                                 .clipShape(Capsule())
                         }
                         .id(s)

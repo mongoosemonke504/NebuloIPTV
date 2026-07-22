@@ -625,15 +625,12 @@ struct FavoritesFilterPills: View {
                         }) {
                             Text(f.rawValue)
                                 .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(selected == f ? Color.black : Color.white)
                                 .padding(.horizontal, 18)
                                 .padding(.vertical, 10)
-                                .background(
-                                    // Opaque fill — content scrolling behind
-                                    // the pinned pills must not show through.
-                                    Capsule()
-                                        .fill(selected == f ? Color.white : SportSelectorView.chipFill)
-                                )
+                                // Opaque, background-derived fill — content
+                                // scrolling behind the pinned pills must not
+                                // show through.
+                                .backgroundTintedChip(isSelected: selected == f)
                         }
                         .buttonStyle(.plain)
                         .id(f)

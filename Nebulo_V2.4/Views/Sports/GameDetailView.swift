@@ -139,7 +139,11 @@ struct GameDetailPresenter: View {
     let accentColor: Color
     let onDismiss: () -> Void
 
-    @State private var dragY: CGFloat = 0
+    /// Starts one full screen down so the card slides UP into place on appear
+    /// while the black backdrop is already painted behind it. The presenter
+    /// itself mounts with no transition (see ContentView), which is what keeps
+    /// the backdrop from travelling with the card.
+    @State private var dragY: CGFloat = UIScreen.main.bounds.height
     /// True while the detail's vertical scroll is at its top — the dismiss
     /// drag only engages then, so mid-content scrolling is never hijacked.
     @State private var atTop = ValueBox(true)
@@ -210,6 +214,12 @@ struct GameDetailPresenter: View {
         }
         .animation(.smooth(duration: 0.3), value: playerHost.soccer)
         .animation(.smooth(duration: 0.3), value: playerHost.box)
+        // Drives the OPEN: the backdrop is already solid at this point, so only
+        // the card travels up. The drag-close animates dragY off-screen itself
+        // and then drops the view, so this never runs on close.
+        .onAppear {
+            withAnimation(.smooth(duration: 0.3)) { dragY = 0 }
+        }
     }
 
     /// Sheet-style dismiss: while the content is scrolled to its top, a

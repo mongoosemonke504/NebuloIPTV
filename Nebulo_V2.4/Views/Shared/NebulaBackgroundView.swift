@@ -41,7 +41,6 @@ struct NebulaBackgroundView: View {
     @AppStorage("useCustomBackground")     private var useCustomBackground     = false
     @AppStorage("customBackgroundBlur")    private var customBackgroundBlur    = 0.0
     @AppStorage("customBackgroundVersion") private var customBackgroundVersion = 0
-    @Environment(\.colorScheme) private var scheme
 
     @State private var customImage: UIImage? = nil
 
@@ -61,19 +60,8 @@ struct NebulaBackgroundView: View {
                         .overlay(Color.black.opacity(0.2))
                 }
             } else if useCustomBackground {
-                // Image chosen but not loaded yet — match the scheme to avoid a flash.
-                (scheme == .light ? Color(white: 0.96) : Color.black)
-            } else if scheme == .light {
-                // Light mode: a clean, soft canvas — very light tints of the
-                // user's colours over near-white rather than glowing blobs on black.
-                LinearGradient(
-                    colors: [
-                        color1.mix(with: .white, by: 0.85),
-                        color3.mix(with: .white, by: 0.9),
-                        Color(white: 0.97)
-                    ],
-                    startPoint: .top, endPoint: .bottom
-                )
+                // Image chosen but not loaded yet — black avoids a flash.
+                Color.black
             } else {
                 // Nebula gradient — painted once, never redrawn unless props change.
                 Canvas { ctx, size in

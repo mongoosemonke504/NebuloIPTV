@@ -2819,13 +2819,9 @@ struct HomeFilterChips: View {
             .font(.subheadline.weight(.semibold))
             .padding(.vertical, 10)
             .padding(.horizontal, 18)
-            .background(
-                // Opaque fill — uniform with the pinned chip rows in the
-                // Sports and Favorites sections.
-                Capsule()
-                    .fill(isSelected ? Color.white : SportSelectorView.chipFill)
-            )
-            .foregroundStyle(isSelected ? Color.black : Color.primary)
+            // Opaque, background-derived fill — uniform with the pinned chip
+            // rows in the Sports and Favorites sections.
+            .backgroundTintedChip(isSelected: isSelected)
             .overlay(
                 Capsule()
                     .stroke(Color.white.opacity(isSelected ? 0 : 0.18), lineWidth: 0.5)

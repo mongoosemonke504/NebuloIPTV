@@ -20,8 +20,7 @@ struct SettingsView: View {
     @AppStorage("loginTypeRaw") private var loginTypeRaw = LoginType.xtream.rawValue 
     @AppStorage("customBackgroundVersion") private var customBackgroundVersion = 0
     @AppStorage("showSupportPopup") private var showSupportPopup = true
-    @AppStorage("appAppearance") private var appAppearance = AppAppearance.dark.rawValue
-    
+
     @ObservedObject var accountManager = AccountManager.shared
     @ObservedObject var updateService = UpdateService.shared
     
@@ -116,9 +115,6 @@ struct SettingsView: View {
             .onChangeCompat(of: inputImage) { newImage in if let img = newImage { saveImage(img) } }
             .onAppear { loadSavedImage() }
         }
-        // First screen wired to the light/dark toggle. The rest of the app is
-        // still dark; each section opts in as it's converted.
-        .preferredColorScheme((AppAppearance(rawValue: appAppearance) ?? .dark).colorScheme)
     }
 
     func saveImage(_ image: UIImage) {
@@ -155,7 +151,6 @@ struct AppearanceCard: View {
     @AppStorage("useCustomBackground") private var useCustomBackground = false
     @AppStorage("customBackgroundBlur") private var customBackgroundBlur = 0.0
     @AppStorage("featuredGlowStrength") private var featuredGlowStrength = 0.5
-    @AppStorage("appAppearance") private var appAppearance = AppAppearance.dark.rawValue
 
     @Binding var showSourceSelection: Bool
     @Binding var showImagePicker: Bool
@@ -167,24 +162,11 @@ struct AppearanceCard: View {
         SettingsCard {
             VStack(spacing: 16) {
                 HStack {
-                    Text("Theme").font(.body).foregroundStyle(.primary)
-                    Spacer()
-                    Picker("", selection: $appAppearance) {
-                        ForEach(AppAppearance.allCases, id: \.rawValue) { mode in
-                            Text(mode.label).tag(mode.rawValue)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .fixedSize()
-                }
-                Divider().background(Color.primary.opacity(0.1))
-
-                HStack {
                     Text("Accent Color").font(.body).foregroundStyle(.primary)
                     Spacer()
                     ColorPicker("", selection: Binding(get: { Color(hex: customAccentHex) ?? .blue }, set: { if let h = $0.toHex() { customAccentHex = h } }))
                 }
-                Divider().background(Color.primary.opacity(0.1))
+                Divider().background(Color.white.opacity(0.1))
 
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
@@ -695,30 +677,14 @@ struct SettingsSectionHeader: View {
 }
 
 struct SettingsCard<Content: View>: View {
-    @Environment(\.colorScheme) private var scheme
     @ViewBuilder let content: Content
     var body: some View {
         VStack(spacing: 0) {
             content
         }
-        .background {
-            if scheme == .light {
-                // Solid, opaque light-grey card (not a translucent frost) with
-                // a soft shadow — clearly reads as a distinct panel against the
-                // light canvas instead of washing into it.
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color(white: 0.86))
-                    .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
-            } else {
-                // Dark mode — unchanged from the original.
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(.ultraThinMaterial)
-            }
-        }
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(scheme == .light ? Color.black.opacity(0.08) : Color.white.opacity(0.1), lineWidth: 1)
-        )
+        .background(Material.ultraThin)
+        .cornerRadius(16)
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.1), lineWidth: 1))
     }
 }
 
