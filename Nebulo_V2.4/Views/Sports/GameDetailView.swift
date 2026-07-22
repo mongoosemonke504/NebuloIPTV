@@ -132,6 +132,17 @@ final class PlayerSheetHost: ObservableObject {
 /// rendering live and undimmed behind the cards, lets the cards run flush to
 /// the screen's real bottom edge, and hands corner + dismiss control back to
 /// us. Drag down from the top of the card to dismiss.
+/// The black backdrop behind the card, isolated as its own leaf so fading it
+/// re-renders one `Color` instead of the presenter (and the whole detail
+/// carousel it builds). See `GameDetailPresenter.dragY`.
+private struct BackdropTint: View {
+    @ObservedObject var opacity: ScrollProgress
+    var body: some View {
+        Color.black.opacity(opacity.value)
+            .ignoresSafeArea()
+    }
+}
+
 struct GameDetailPresenter: View {
     let request: GameDetailRequest
     @ObservedObject var viewModel: ChannelViewModel
@@ -139,11 +150,30 @@ struct GameDetailPresenter: View {
     let accentColor: Color
     let onDismiss: () -> Void
 
+    /// The card's translation, and the backdrop's opacity, both held in
+    /// observable boxes rather than plain `@State`.
+    ///
+    /// This is the single most important thing about this view's performance.
+    /// As `@State` they re-ran this body on every frame of a drag — and this
+    /// body constructs `GameDetailView`, whose init calls
+    /// `scoreViewModel.detailPagingList`: it walks every live game, builds
+    /// dictionaries and a set, and allocates a `GameDetailRequest` per game.
+    /// SwiftUI then re-diffed all three mounted detail pages underneath. All of
+    /// that, 120 times a second, to move one layer.
+    ///
+    /// Held via `@State` (which does NOT subscribe this view to the object) and
+    /// observed only by the leaf modifier that applies them, a frame of the
+    /// drag now re-renders nothing but an offset and an opacity.
+    ///
     /// Starts one full screen down so the card slides UP into place on appear
     /// while the black backdrop is already painted behind it. The presenter
     /// itself mounts with no transition (see ContentView), which is what keeps
     /// the backdrop from travelling with the card.
-    @State private var dragY: CGFloat = UIScreen.main.bounds.height
+    @State private var dragY: ScrollProgress = {
+        let box = ScrollProgress()
+        box.value = UIScreen.main.bounds.height
+        return box
+    }()
     /// True while the detail's vertical scroll is at its top — the dismiss
     /// drag only engages then, so mid-content scrolling is never hijacked.
     @State private var atTop = ValueBox(true)
@@ -156,7 +186,7 @@ struct GameDetailPresenter: View {
     /// The gap-filling black backdrop's opacity. Fades in on appear at the same
     /// pace it fades out, held solid through the whole swipe, then faded out
     /// once the card is fully off-screen so the Sports Hub reappears.
-    @State private var tintOpacity: CGFloat = 0
+    @State private var tintOpacity = ScrollProgress()
     @StateObject private var playerHost = PlayerSheetHost()
 
     var body: some View {
@@ -165,8 +195,7 @@ struct GameDetailPresenter: View {
             // the Sports Hub stays faintly visible behind it but isn't easy to
             // read through. Stays solid through the whole swipe, then fades out
             // once the card is gone so the hub comes back.
-            Color.black.opacity(tintOpacity)
-                .ignoresSafeArea()
+            BackdropTint(opacity: tintOpacity)
 
             GameDetailView(request: request, viewModel: viewModel, scoreViewModel: scoreViewModel, accentColor: accentColor)
                 .environment(\.gameDetailDismiss, onDismiss)
@@ -177,7 +206,7 @@ struct GameDetailPresenter: View {
                 // is being dragged to dismiss — normal top bounce stays.
                 .environment(\.gameDetailDragActive, dragEngaged)
                 .environmentObject(playerHost)
-                .offset(y: dragY)
+                .scrollProgressOffset(dragY)
                 // No compositingGroup: for a pure translation it forces the
                 // whole heavy subtree to re-flatten every frame, which made the
                 // slide less smooth than the (ungrouped) player card. Letting
@@ -219,14 +248,14 @@ struct GameDetailPresenter: View {
         // while the card itself slides up. The drag-close animates dragY
         // off-screen itself and then drops the view, so this never runs on close.
         .onAppear {
-            withAnimation(.easeOut(duration: 0.14)) { tintOpacity = 0.78 }
+            withAnimation(.easeOut(duration: 0.14)) { tintOpacity.set(0.78) }
             // Start the slide one runloop turn later, once this page of the
             // pager has actually been built and laid out. Animating on the
             // same frame the view mounts makes the first frames of the slide
             // compete with that initial layout, which is what cost frames on
             // the way in — the lighter player-stats card never had to.
             DispatchQueue.main.async {
-                withAnimation(.smooth(duration: 0.3)) { dragY = 0 }
+                withAnimation(.smooth(duration: 0.3)) { dragY.set(0) }
             }
         }
     }
@@ -254,7 +283,7 @@ struct GameDetailPresenter: View {
                     dragEngaged.value = true
                     dragBaseline.value = v.translation.height
                 }
-                dragY = max(0, v.translation.height - dragBaseline.value)
+                dragY.set(max(0, v.translation.height - dragBaseline.value))
             }
             .onEnded { v in
                 let engaged = dragEngaged.value
@@ -267,16 +296,16 @@ struct GameDetailPresenter: View {
                     // backdrop, THEN fade that black out to reveal the hub, and
                     // only then tear the live view down (off-screen, unseen).
                     let target = UIScreen.main.bounds.height + 120
-                    withAnimation(.easeOut(duration: 0.34)) { dragY = target }
+                    withAnimation(.easeOut(duration: 0.34)) { dragY.set(target) }
                     // Start fading the black early (while the card is still
                     // sliding) and quickly, so the hub is already back by the
                     // time the card clears the bottom.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        withAnimation(.easeOut(duration: 0.14)) { tintOpacity = 0 }
+                        withAnimation(.easeOut(duration: 0.14)) { tintOpacity.set(0) }
                     }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) { onDismiss() }
                 } else {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { dragY = 0 }
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { dragY.set(0) }
                 }
             }
     }
@@ -389,20 +418,33 @@ struct GameDetailView: View {
         _currentID = State(initialValue: request.id)
     }
 
+    /// Split out of the pager body: inlined, the sport branch plus the modifier
+    /// chain applied to it pushed the expression past what the type-checker
+    /// will solve in reasonable time.
+    @ViewBuilder
+    private func pageContent(for page: GameDetailRequest) -> some View {
+        if page.sport == .tennis {
+            TennisDetailContentView(request: page, viewModel: viewModel, accentColor: accentColor)
+        } else if page.sport == .mma {
+            MMADetailContentView(request: page, viewModel: viewModel, accentColor: accentColor)
+        } else {
+            GameDetailContentView(
+                request: page,
+                viewModel: viewModel,
+                scoreViewModel: scoreViewModel,
+                accentColor: accentColor,
+                onPageGame: pageGame,
+                isActive: page.id == currentID
+            )
+        }
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 9) {
                     ForEach(pages) { page in
-                        Group {
-                            if page.sport == .tennis {
-                                TennisDetailContentView(request: page, viewModel: viewModel, accentColor: accentColor)
-                            } else if page.sport == .mma {
-                                MMADetailContentView(request: page, viewModel: viewModel, accentColor: accentColor)
-                            } else {
-                                GameDetailContentView(request: page, viewModel: viewModel, scoreViewModel: scoreViewModel, accentColor: accentColor, onPageGame: pageGame)
-                            }
-                        }
+                        pageContent(for: page)
                         .background(Color(white: 0.10))
                         .containerRelativeFrame(.horizontal)
                         // Round ONLY the top corners: the card runs flush
@@ -475,6 +517,10 @@ struct GameDetailContentView: View {
     @ObservedObject var scoreViewModel: ScoreViewModel
     let accentColor: Color
     let onPageGame: (Int) -> Void
+    /// False for the two cards peeking in from the edges. They hold back their
+    /// first fetch briefly so the decode-and-publish doesn't land in the middle
+    /// of the open animation — see the `.task` below.
+    let isActive: Bool
 
     @StateObject private var detail: GameDetailViewModel
     @ObservedObject private var activityManager = GameActivityManager.shared
@@ -532,12 +578,13 @@ struct GameDetailContentView: View {
         case table = "Table"
     }
 
-    init(request: GameDetailRequest, viewModel: ChannelViewModel, scoreViewModel: ScoreViewModel, accentColor: Color, onPageGame: @escaping (Int) -> Void = { _ in }) {
+    init(request: GameDetailRequest, viewModel: ChannelViewModel, scoreViewModel: ScoreViewModel, accentColor: Color, onPageGame: @escaping (Int) -> Void = { _ in }, isActive: Bool = true) {
         self.request = request
         self.viewModel = viewModel
         self.scoreViewModel = scoreViewModel
         self.accentColor = accentColor
         self.onPageGame = onPageGame
+        self.isActive = isActive
         _detail = StateObject(wrappedValue: GameDetailViewModel(request: request))
     }
 
@@ -704,6 +751,15 @@ struct GameDetailContentView: View {
         }
         .preferredColorScheme(.dark)
         .task(id: request.id) {
+            // The tapped card loads immediately. The two peeking neighbours
+            // wait out the open animation first: all three mount at once, and
+            // a response landing mid-slide publishes into a full rebuild of a
+            // heavy page. They still preload, so paging to one stays instant —
+            // the wait is shorter than any realistic round trip anyway.
+            if !isActive {
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                guard !Task.isCancelled else { return }
+            }
             await detail.refreshLoop()
         }
     }

@@ -34,12 +34,27 @@ class ScoreViewModel: ObservableObject {
     /// instantly at launch, refreshed in the background at most once a week.
     @Published private(set) var teamCatalog: [TeamCatalogService.Entry] = []
     /// When set, the sports hub presents the match detail sheet for this game.
-    @Published var detailRequest: GameDetailRequest?
+    @Published var detailRequest: GameDetailRequest? { didSet { dropPagingSnapshotIfClosed() } }
     /// Deep-link presentation (Live Activity tap): separate from
     /// `detailRequest` because the hub's sheet only exists while the Sports
     /// section is on screen — this one presents from the app root over
     /// whatever is showing.
-    @Published var deepLinkRequest: GameDetailRequest?
+    @Published var deepLinkRequest: GameDetailRequest? { didSet { dropPagingSnapshotIfClosed() } }
+    /// The carousel's page list for the detail that's currently open, held for
+    /// as long as it stays open. `detailPagingList` is called from
+    /// `GameDetailView.init`, which SwiftUI re-runs whenever the app root's
+    /// body re-evaluates — and the root observes both view models, so that
+    /// happens repeatedly while the card is being dragged. Recomputing this
+    /// walks every live game and allocates a request per game each time.
+    ///
+    /// Holding it also makes the list actually behave as the snapshot it was
+    /// always documented to be: recomputed, it could reshuffle underneath the
+    /// user when a score refresh changed the live set mid-session.
+    private var pagingSnapshot: (key: String, list: [GameDetailRequest])?
+
+    private func dropPagingSnapshotIfClosed() {
+        if detailRequest == nil && deepLinkRequest == nil { pagingSnapshot = nil }
+    }
     /// Deep link that arrived before the scoreboards finished loading
     /// (cold launch from a Live Activity tap) — resolved after the next
     /// score fetch lands.
@@ -104,6 +119,7 @@ class ScoreViewModel: ObservableObject {
     /// pages through its own sport's scoreboard. F1 is skipped — it has no
     /// detail page. Always contains `request` itself.
     func detailPagingList(from request: GameDetailRequest) -> [GameDetailRequest] {
+        if let snapshot = pagingSnapshot, snapshot.key == request.id { return snapshot.list }
         var list = liveOrderForPaging()
         if !list.contains(where: { $0.id == request.game.id }) {
             if request.sport.isSoccer {
@@ -121,6 +137,7 @@ class ScoreViewModel: ObservableObject {
             out.append(game.id == request.game.id ? request : makeDetailRequest(for: game, sport: sport))
         }
         if !seen.contains(request.game.id) { out = [request] }
+        pagingSnapshot = (request.id, out)
         return out
     }
 
