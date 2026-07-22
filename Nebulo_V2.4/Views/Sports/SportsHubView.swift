@@ -1432,6 +1432,23 @@ struct SportSelectorView: View {
                     proxy.scrollTo("__all__", anchor: nil)
                 }
             }
+            // Opening the section: centre the active chip so the ones either
+            // side of it are visible, rather than starting hard against the
+            // leading edge. Centred here specifically — swipes keep `anchor:
+            // nil` above, which scrolls the minimum needed and would otherwise
+            // drag the whole row around on every change. Unanimated, since this
+            // is the row's starting position rather than a move from one.
+            .onAppear {
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    if allMode?.wrappedValue ?? false {
+                        proxy.scrollTo("__all__", anchor: .center)
+                    } else {
+                        proxy.scrollTo(selectedSport, anchor: .center)
+                    }
+                }
+            }
         }
     }
 }
