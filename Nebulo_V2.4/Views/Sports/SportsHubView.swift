@@ -9,6 +9,28 @@ import UserNotifications
 private enum SportsTab: Hashable {
     case all
     case sport(SportType)
+
+    /// Key the hub's last tab is remembered under, so returning to Sports lands
+    /// back where the user left it instead of resetting to "All".
+    static let storageKey = "sportsHubLastTab"
+
+    /// Stable string form. `SportType` is a String enum, so a sport tab stores
+    /// as its raw value and "all" can't collide with one.
+    var storedValue: String {
+        switch self {
+        case .all: return "all"
+        case .sport(let sport): return sport.rawValue
+        }
+    }
+
+    /// Restores a stored tab, falling back to `.all` for an unknown or missing
+    /// value — including a sport the user has since hidden.
+    static func restored(from stored: String?, allowing available: [SportType]) -> SportsTab {
+        guard let stored, stored != "all",
+              let sport = SportType(rawValue: stored),
+              available.contains(sport) else { return .all }
+        return .sport(sport)
+    }
 }
 
 struct SportsHubView: View {
@@ -22,10 +44,19 @@ struct SportsHubView: View {
     @State private var todaysEventCount: Int = 0
     @State private var liveChannelCount: Int = 0
 
-    /// Current tab — `.all` is the default "Live Now" overview.
+    /// Current tab — `.all` is the "Live Now" overview.
     /// Driving a single TabView with `.page` style lets the user swipe
     /// directly between "All" and any individual sport without tapping chips.
-    @State private var sportsTab: SportsTab = .all
+    ///
+    /// Seeded from the last tab the user was on, so returning to Sports lands
+    /// where they left it. Read straight out of UserDefaults here rather than
+    /// restored in `onAppear`, which would render "All" for a frame first and
+    /// visibly snap across. Validated against `orderedSports` on appear, since
+    /// the stored sport may since have been hidden.
+    @State private var sportsTab: SportsTab = SportsTab.restored(
+        from: UserDefaults.standard.string(forKey: SportsTab.storageKey),
+        allowing: SportType.allCases
+    )
 
     /// 0 at rest, 1 once the big title has scrolled away. Tracked 1:1 with
     /// the scroll offset (no canned animation) — drives the title fade and
@@ -216,6 +247,9 @@ struct SportsHubView: View {
             // the same frames as the slide animation is what made the chip
             // switch look choppy.
             .onChangeCompat(of: sportsTab) { tab in
+                // Remembered here rather than in selectTab, so a swipe between
+                // tabs is recorded the same as a chip tap.
+                UserDefaults.standard.set(tab.storedValue, forKey: SportsTab.storageKey)
                 guard case .sport(let s) = tab else { return }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                     guard sportsTab == tab else { return }
@@ -258,6 +292,13 @@ struct SportsHubView: View {
             recomputeStats()
         }
         .onAppear {
+            // The remembered tab was restored without knowing which sports are
+            // visible (that needs the view model). Drop back to All if it names
+            // a sport the user has since hidden, so the hub can't open on a tab
+            // with no chip to match it.
+            if case .sport(let sport) = sportsTab, !orderedSports.contains(sport) {
+                sportsTab = .all
+            }
             if scoreViewModel.isLoading {
                 withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
                     isRefreshingAnimation = true
@@ -1414,7 +1455,6 @@ struct SportSelectorView: View {
                 .padding(.horizontal)
                 .padding(.vertical, 10)
             }
-            .onAppear { proxy.scrollTo(selectedSport, anchor: nil) }
             // anchor nil = scroll the MINIMUM needed to bring the chip fully
             // into view, and not at all if it's already visible — centring
             // on every swipe dragged the whole row around unnecessarily.
