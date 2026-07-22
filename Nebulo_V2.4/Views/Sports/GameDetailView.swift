@@ -157,9 +157,6 @@ struct GameDetailPresenter: View {
     /// pace it fades out, held solid through the whole swipe, then faded out
     /// once the card is fully off-screen so the Sports Hub reappears.
     @State private var tintOpacity: CGFloat = 0
-    /// Drives hiding the pager's peeking neighbour pages for the duration of a
-    /// dismiss, so only the card actually leaving is composited each frame.
-    @State private var dismissing = false
     @StateObject private var playerHost = PlayerSheetHost()
 
     var body: some View {
@@ -171,7 +168,7 @@ struct GameDetailPresenter: View {
             Color.black.opacity(tintOpacity)
                 .ignoresSafeArea()
 
-            GameDetailView(request: request, viewModel: viewModel, scoreViewModel: scoreViewModel, accentColor: accentColor, collapseNeighbors: dismissing)
+            GameDetailView(request: request, viewModel: viewModel, scoreViewModel: scoreViewModel, accentColor: accentColor)
                 .environment(\.gameDetailDismiss, onDismiss)
                 // The content reports when it's scrolled to the top; only then
                 // does a downward drag grab the whole card to dismiss.
@@ -256,16 +253,13 @@ struct GameDetailPresenter: View {
                           v.translation.height > abs(v.translation.width) * 1.3 else { return }
                     dragEngaged.value = true
                     dragBaseline.value = v.translation.height
-                    // One re-render here, at the moment the drag takes over,
-                    // buys every subsequent frame of the drag and the slide.
-                    dismissing = true
                 }
                 dragY = max(0, v.translation.height - dragBaseline.value)
             }
             .onEnded { v in
                 let engaged = dragEngaged.value
                 dragEngaged.value = false
-                guard engaged else { dismissing = false; return }
+                guard engaged else { return }
                 let travel = v.translation.height - dragBaseline.value
                 let predicted = v.predictedEndTranslation.height - dragBaseline.value
                 if travel > 120 || predicted > 400 {
@@ -282,10 +276,7 @@ struct GameDetailPresenter: View {
                     }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) { onDismiss() }
                 } else {
-                    // Springing back: bring the neighbours in only once the card
-                    // has settled, so their re-render never lands mid-animation.
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { dragY = 0 }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { dismissing = false }
                 }
             }
     }
@@ -378,16 +369,12 @@ struct GameDetailView: View {
 
     private let pages: [GameDetailRequest]
     @State private var currentID: String?
-    /// While the card is being dragged/animated off, the peeking neighbour
-    /// pages are hidden — see the pager body.
-    private let collapseNeighbors: Bool
 
     @MainActor
-    init(request: GameDetailRequest, viewModel: ChannelViewModel, scoreViewModel: ScoreViewModel, accentColor: Color, collapseNeighbors: Bool = false) {
+    init(request: GameDetailRequest, viewModel: ChannelViewModel, scoreViewModel: ScoreViewModel, accentColor: Color) {
         self.viewModel = viewModel
         self.scoreViewModel = scoreViewModel
         self.accentColor = accentColor
-        self.collapseNeighbors = collapseNeighbors
         // A window around the tapped game, not the whole scoreboard — a
         // 100+ page lazy carousel makes the initial scroll-to-page landing
         // unreliable, and nobody swipes farther than this anyway.
@@ -431,13 +418,6 @@ struct GameDetailView: View {
                         )
                         .overlay(alignment: .top) { CardGrabber() }
                         .allowsHitTesting(page.id == currentID)
-                        // Dismissing: drop the two peeking neighbours out of the
-                        // render pass. Only a ~19pt sliver of each is on screen,
-                        // so hiding them is invisible, but it stops two more
-                        // full-size pages being composited on every frame of the
-                        // slide. Opacity (not a branch) so they keep their state
-                        // and their loaded data — a spring-back must not refetch.
-                        .opacity(collapseNeighbors && page.id != currentID ? 0 : 1)
                         .id(page.id)
                     }
                 }
