@@ -120,7 +120,12 @@ class ScoreViewModel: ObservableObject {
     /// detail page. Always contains `request` itself.
     func detailPagingList(from request: GameDetailRequest) -> [GameDetailRequest] {
         if let snapshot = pagingSnapshot, snapshot.key == request.id { return snapshot.list }
-        var list = liveOrderForPaging()
+        // Only build the Live Now ordering when the tapped game is actually
+        // live — otherwise it gets bucketed and sorted purely to be discarded.
+        var list: [ESPNEvent] = []
+        if allLiveGames.contains(where: { $0.id == request.game.id }) {
+            list = liveOrderForPaging()
+        }
         if !list.contains(where: { $0.id == request.game.id }) {
             if request.sport.isSoccer {
                 list = filteredSectionsMap[request.sport]?.flatMap { $0.games } ?? []
@@ -128,18 +133,47 @@ class ScoreViewModel: ObservableObject {
                 list = filteredGames[request.sport] ?? []
             }
         }
+        // Window the RAW list around the tapped game before any per-game work,
+        // then dedupe and drop F1 within that window. sportType(for:) and
+        // makeDetailRequest are the expensive parts — the latter does a nested
+        // competition lookup per game — and running either across a whole
+        // scoreboard (the fallback list for anything not live) cost about a
+        // second on the main thread before the card could even appear. The
+        // slack covers entries about to be dropped as F1 or as duplicates.
+        guard let target = list.firstIndex(where: { $0.id == request.game.id }) else {
+            let only = [request]
+            pagingSnapshot = (request.id, only)
+            return only
+        }
+        let slack = Self.pagingWindow + 8
+        let windowed = list[max(0, target - slack)...min(list.count - 1, target + slack)]
+
         var seen = Set<String>()
-        var out: [GameDetailRequest] = []
-        for game in list {
+        var events: [(game: ESPNEvent, sport: SportType)] = []
+        for game in windowed {
             let sport = sportType(for: game)
             guard sport != .f1 else { continue }
             guard seen.insert(game.id).inserted else { continue }
-            out.append(game.id == request.game.id ? request : makeDetailRequest(for: game, sport: sport))
+            events.append((game, sport))
         }
-        if !seen.contains(request.game.id) { out = [request] }
+        guard let index = events.firstIndex(where: { $0.game.id == request.game.id }) else {
+            let only = [request]
+            pagingSnapshot = (request.id, only)
+            return only
+        }
+        // Only the window the carousel can actually reach gets a request built.
+        let lo = max(0, index - Self.pagingWindow)
+        let hi = min(events.count - 1, index + Self.pagingWindow)
+        let out = events[lo...hi].map { entry in
+            entry.game.id == request.game.id ? request : makeDetailRequest(for: entry.game, sport: entry.sport)
+        }
         pagingSnapshot = (request.id, out)
         return out
     }
+
+    /// How far the detail carousel can page in either direction. Nobody swipes
+    /// further than this, and a 100+ page lazy carousel lands unreliably.
+    private static let pagingWindow = 12
 
     /// `allLiveGames` flattened into the exact order the Live Now page
     /// displays: grouped by sport, groups ordered by first appearance.
@@ -680,10 +714,27 @@ class ScoreViewModel: ObservableObject {
         if newIDs != oldIDs {
             self.allLiveGames = sorted
             self.allLiveGameIDsKey &+= 1
+            // The live set changed — warm the games most likely to be tapped so
+            // the first detail card opens already populated instead of on a
+            // spinner. Only fires on a real change, and the store skips
+            // anything already cached or in flight.
+            warmTopGameSummaries()
         } else if !newIDs.isEmpty {
             // Same id list — refresh the array so detail/score changes flow
             // through to subscribers, but don't bump the key (no tasks fire).
             self.allLiveGames = sorted
+        }
+    }
+
+    /// Prefetches the detail summaries for the first few live games — the ones
+    /// at the top of Live Now, which is where almost every card is opened from.
+    /// Deliberately a small slice: this is a head start, not a mirror of the
+    /// whole scoreboard, and each summary is a sizeable download and decode.
+    private func warmTopGameSummaries(limit: Int = 6) {
+        for game in allLiveGames.prefix(limit) {
+            let sport = sportType(for: game)
+            guard sport != .f1 else { continue }
+            GameSummaryStore.shared.prefetch(makeDetailRequest(for: game, sport: sport))
         }
     }
 

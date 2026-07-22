@@ -132,6 +132,42 @@ final class PlayerSheetHost: ObservableObject {
 /// rendering live and undimmed behind the cards, lets the cards run flush to
 /// the screen's real bottom edge, and hands corner + dismiss control back to
 /// us. Drag down from the top of the card to dismiss.
+/// A game card's background on its own: the dark base plus the two team-colour
+/// washes, exactly as `GameDetailContentView.backgroundLayer` paints them.
+///
+/// Stands in for a peeking neighbour while the card is opening. Only a ~10pt
+/// sliver of a neighbour is ever on screen and that sliver is pure background,
+/// so this is indistinguishable from the real page — but it costs two gradients
+/// instead of building and laying out an entire detail page, which is what was
+/// standing between the tap and the first frame of the animation.
+///
+/// The colours come straight off the scoreboard event, so there is nothing to
+/// fetch and nothing to wait for.
+private struct GameCardBackdrop: View {
+    let request: GameDetailRequest
+
+    private func teamColor(_ competitor: ESPNCompetitor?) -> Color {
+        guard let hex = competitor?.team?.color, !hex.isEmpty else { return Color(white: 0.22) }
+        return Color(hex: hex.hasPrefix("#") ? hex : "#\(hex)") ?? Color(white: 0.22)
+    }
+
+    var body: some View {
+        ZStack {
+            Color(white: 0.10)
+            LinearGradient(
+                colors: [teamColor(request.game.awayCompetitor).opacity(0.65), .clear],
+                startPoint: .topLeading,
+                endPoint: UnitPoint(x: 0.65, y: 0.75)
+            )
+            LinearGradient(
+                colors: [teamColor(request.game.homeCompetitor).opacity(0.55), .clear],
+                startPoint: .topTrailing,
+                endPoint: UnitPoint(x: 0.35, y: 0.75)
+            )
+        }
+    }
+}
+
 /// The black backdrop behind the card, isolated as its own leaf so fading it
 /// re-renders one `Color` instead of the presenter (and the whole detail
 /// carousel it builds). See `GameDetailPresenter.dragY`.
@@ -187,6 +223,10 @@ struct GameDetailPresenter: View {
     /// pace it fades out, held solid through the whole swipe, then faded out
     /// once the card is fully off-screen so the Sports Hub reappears.
     @State private var tintOpacity = ScrollProgress()
+    /// Gates the peeking neighbours' real content — see `GameCardBackdrop`.
+    /// A plain flag with no latch: worst case it is stale-true on a reopen,
+    /// which only forfeits the optimisation. Nothing can get stuck off-screen.
+    @State private var neighborsReady = false
     @StateObject private var playerHost = PlayerSheetHost()
 
     var body: some View {
@@ -197,7 +237,13 @@ struct GameDetailPresenter: View {
             // once the card is gone so the hub comes back.
             BackdropTint(opacity: tintOpacity)
 
-            GameDetailView(request: request, viewModel: viewModel, scoreViewModel: scoreViewModel, accentColor: accentColor)
+            GameDetailView(
+                request: request,
+                viewModel: viewModel,
+                scoreViewModel: scoreViewModel,
+                accentColor: accentColor,
+                neighborsReady: neighborsReady
+            )
                 .environment(\.gameDetailDismiss, onDismiss)
                 // The content reports when it's scrolled to the top; only then
                 // does a downward drag grab the whole card to dismiss.
@@ -247,16 +293,25 @@ struct GameDetailPresenter: View {
         // with the card) at the same easeOut(0.14) pace it fades out on close,
         // while the card itself slides up. The drag-close animates dragY
         // off-screen itself and then drops the view, so this never runs on close.
+        // Both start the instant the overlay mounts — no deferral. Waiting for
+        // the carousel to finish arriving before starting the slide made the
+        // open feel like it lagged the tap, and the latch that guarded it left
+        // the card parked off-screen behind the backdrop (which covers the
+        // screen and swallows every touch) whenever this view's state outlived
+        // a previous presentation — constantly, for live games, whose frequent
+        // score updates churn this view.
         .onAppear {
-            withAnimation(.easeOut(duration: 0.14)) { tintOpacity.set(0.78) }
-            // Start the slide one runloop turn later, once this page of the
-            // pager has actually been built and laid out. Animating on the
-            // same frame the view mounts makes the first frames of the slide
-            // compete with that initial layout, which is what cost frames on
-            // the way in — the lighter player-stats card never had to.
-            DispatchQueue.main.async {
-                withAnimation(.smooth(duration: 0.3)) { dragY.set(0) }
-            }
+            withAnimation(.easeOut(duration: 0.12)) { tintOpacity.set(0.78) }
+            // A spring rather than .smooth: smooth eases IN, so the card
+            // barely moves for the first few frames and the tap reads as
+            // having not registered. A high-damping spring leaves at speed and
+            // settles without overshoot — faster off the mark and shorter
+            // overall, while still arriving softly.
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.92)) { dragY.set(0) }
+            // Re-armed here so a reopen gets the fast path too, then released
+            // once the card has landed and the build cost is invisible.
+            neighborsReady = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { neighborsReady = true }
         }
     }
 
@@ -398,12 +453,16 @@ struct GameDetailView: View {
 
     private let pages: [GameDetailRequest]
     @State private var currentID: String?
+    /// False only for the brief window between the tap and the card landing,
+    /// while the neighbours stand in as their own background.
+    private let neighborsReady: Bool
 
     @MainActor
-    init(request: GameDetailRequest, viewModel: ChannelViewModel, scoreViewModel: ScoreViewModel, accentColor: Color) {
+    init(request: GameDetailRequest, viewModel: ChannelViewModel, scoreViewModel: ScoreViewModel, accentColor: Color, neighborsReady: Bool = true) {
         self.viewModel = viewModel
         self.scoreViewModel = scoreViewModel
         self.accentColor = accentColor
+        self.neighborsReady = neighborsReady
         // A window around the tapped game, not the whole scoreboard — a
         // 100+ page lazy carousel makes the initial scroll-to-page landing
         // unreliable, and nobody swipes farther than this anyway.
@@ -423,7 +482,12 @@ struct GameDetailView: View {
     /// will solve in reasonable time.
     @ViewBuilder
     private func pageContent(for page: GameDetailRequest) -> some View {
-        if page.sport == .tennis {
+        if !neighborsReady && page.id != currentID {
+            // Opening: the neighbours are their own real background, which is
+            // all their visible sliver ever shows. Building all three detail
+            // pages before the first frame is what made the tap feel unanswered.
+            GameCardBackdrop(request: page)
+        } else if page.sport == .tennis {
             TennisDetailContentView(request: page, viewModel: viewModel, accentColor: accentColor)
         } else if page.sport == .mma {
             MMADetailContentView(request: page, viewModel: viewModel, accentColor: accentColor)
@@ -433,8 +497,7 @@ struct GameDetailView: View {
                 viewModel: viewModel,
                 scoreViewModel: scoreViewModel,
                 accentColor: accentColor,
-                onPageGame: pageGame,
-                isActive: page.id == currentID
+                onPageGame: pageGame
             )
         }
     }
@@ -473,6 +536,9 @@ struct GameDetailView: View {
             .onAppear {
                 // The scrollPosition binding's initial value alone lands on
                 // the wrong page in a lazy carousel — anchor it explicitly.
+                // This jump realises and measures pages, so the presenter is
+                // told to start the slide only after it has been processed,
+                // rather than racing it.
                 proxy.scrollTo(currentID, anchor: .center)
             }
             .onChange(of: currentID) { _, _ in
@@ -517,10 +583,6 @@ struct GameDetailContentView: View {
     @ObservedObject var scoreViewModel: ScoreViewModel
     let accentColor: Color
     let onPageGame: (Int) -> Void
-    /// False for the two cards peeking in from the edges. They hold back their
-    /// first fetch briefly so the decode-and-publish doesn't land in the middle
-    /// of the open animation — see the `.task` below.
-    let isActive: Bool
 
     @StateObject private var detail: GameDetailViewModel
     @ObservedObject private var activityManager = GameActivityManager.shared
@@ -578,13 +640,12 @@ struct GameDetailContentView: View {
         case table = "Table"
     }
 
-    init(request: GameDetailRequest, viewModel: ChannelViewModel, scoreViewModel: ScoreViewModel, accentColor: Color, onPageGame: @escaping (Int) -> Void = { _ in }, isActive: Bool = true) {
+    init(request: GameDetailRequest, viewModel: ChannelViewModel, scoreViewModel: ScoreViewModel, accentColor: Color, onPageGame: @escaping (Int) -> Void = { _ in }) {
         self.request = request
         self.viewModel = viewModel
         self.scoreViewModel = scoreViewModel
         self.accentColor = accentColor
         self.onPageGame = onPageGame
-        self.isActive = isActive
         _detail = StateObject(wrappedValue: GameDetailViewModel(request: request))
     }
 
@@ -751,15 +812,6 @@ struct GameDetailContentView: View {
         }
         .preferredColorScheme(.dark)
         .task(id: request.id) {
-            // The tapped card loads immediately. The two peeking neighbours
-            // wait out the open animation first: all three mount at once, and
-            // a response landing mid-slide publishes into a full rebuild of a
-            // heavy page. They still preload, so paging to one stays instant —
-            // the wait is shorter than any realistic round trip anyway.
-            if !isActive {
-                try? await Task.sleep(nanoseconds: 400_000_000)
-                guard !Task.isCancelled else { return }
-            }
             await detail.refreshLoop()
         }
     }

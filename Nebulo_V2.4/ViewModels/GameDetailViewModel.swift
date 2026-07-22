@@ -188,6 +188,81 @@ struct GDFootballSituation {
     let lastPlayText: String?
 }
 
+// MARK: - Summary cache / prefetch
+
+/// Process-wide store of fetched game summaries, plus a prefetcher the Sports
+/// Hub drives so the first card a user opens is already populated.
+///
+/// `GameDetailViewModel` deliberately uses an ephemeral URLSession with
+/// `reloadIgnoringLocalCacheData` — live scores must never be served from the
+/// URL cache — so without this every open, and every reopen, started on a
+/// spinner and paid a full round trip. Holding decoded summaries here keeps
+/// that policy for the network while making a reopen instant: the card renders
+/// from the cache immediately and the refresh loop still runs behind it, so
+/// what's on screen is never more than one refresh stale.
+///
+/// Memory-only and deliberately so: these are large decoded object graphs, and
+/// they're only worth keeping while the app is warm. Capped, and cleared under
+/// memory pressure.
+@MainActor
+final class GameSummaryStore {
+    static let shared = GameSummaryStore()
+
+    /// Enough to cover a hub screen's worth of games and the carousel around
+    /// whichever one is open, without holding the whole scoreboard.
+    private let capacity = 40
+
+    private var cache: [String: GameSummary] = [:]
+    /// Insertion order, so the oldest entry is the one evicted at capacity.
+    private var order: [String] = []
+    /// Games with a prefetch in flight, so a scroll that re-triggers the hub's
+    /// prefetch doesn't start the same request twice.
+    private var inFlight: Set<String> = []
+
+    private init() {
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.clear() }
+        }
+    }
+
+    func summary(for gameID: String) -> GameSummary? { cache[gameID] }
+
+    func store(_ summary: GameSummary, for gameID: String) {
+        if cache[gameID] == nil {
+            order.append(gameID)
+            if order.count > capacity, let oldest = order.first {
+                order.removeFirst()
+                cache[oldest] = nil
+            }
+        }
+        cache[gameID] = summary
+    }
+
+    func clear() {
+        cache.removeAll()
+        order.removeAll()
+    }
+
+    /// Warms a game in the background. Cheap to call repeatedly — already
+    /// cached or already in flight both no-op.
+    func prefetch(_ request: GameDetailRequest) {
+        let id = request.game.id
+        guard cache[id] == nil, !inFlight.contains(id),
+              let url = GameDetailViewModel.summaryURL(for: request) else { return }
+        inFlight.insert(id)
+        Task { [weak self] in
+            let fetched = try? await GameDetailViewModel.prefetchSummary(url: url)
+            guard let self else { return }
+            if let fetched { self.store(fetched, for: id) }
+            self.inFlight.remove(id)
+        }
+    }
+}
+
 // MARK: - View model
 
 @MainActor
@@ -207,9 +282,20 @@ final class GameDetailViewModel: ObservableObject {
 
     init(request: GameDetailRequest) {
         self.request = request
+        // Reopening a game — or opening one the hub already prefetched — starts
+        // fully populated instead of on a spinner. The refresh still runs, so
+        // this is a head start, not stale data being pinned.
+        if let cached = GameSummaryStore.shared.summary(for: request.game.id) {
+            self.summary = cached
+            self.isLoading = false
+        }
     }
 
-    private var summaryURL: URL? {
+    private var summaryURL: URL? { Self.summaryURL(for: request) }
+
+    /// Static so the prefetcher can build the same URL without standing up a
+    /// whole view model per game.
+    nonisolated static func summaryURL(for request: GameDetailRequest) -> URL? {
         let path: String?
         if let code = request.leagueCode {
             path = "soccer/\(code)"
@@ -243,6 +329,7 @@ final class GameDetailViewModel: ObservableObject {
         do {
             let fetched = try await Self.fetchSummary(url: url)
             summary = fetched
+            GameSummaryStore.shared.store(fetched, for: request.game.id)
             failed = false
             prefetchPlayerImages()
             resolveSoccerHeadshots()
@@ -316,6 +403,11 @@ final class GameDetailViewModel: ObservableObject {
     nonisolated private static func fetchSummary(url: URL) async throws -> GameSummary {
         let (data, _) = try await session.data(from: url)
         return try JSONDecoder().decode(GameSummary.self, from: data)
+    }
+
+    /// Same fetch, exposed for `GameSummaryStore`'s background warming.
+    nonisolated static func prefetchSummary(url: URL) async throws -> GameSummary {
+        try await fetchSummary(url: url)
     }
 
     // MARK: Header
