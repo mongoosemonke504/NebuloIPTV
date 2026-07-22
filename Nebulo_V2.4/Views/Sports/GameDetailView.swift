@@ -541,6 +541,10 @@ struct GameDetailContentView: View {
         _detail = StateObject(wrappedValue: GameDetailViewModel(request: request))
     }
 
+    /// Coordinate space anchored to this card, so the chip-dock probes measure
+    /// positions that don't move when the whole card is slid up or down.
+    private static let cardSpace = "gdCard"
+
     private var isSoccer: Bool { request.leagueCode != nil || request.sport.isSoccer }
 
     private var hasBoxScore: Bool {
@@ -576,7 +580,10 @@ struct GameDetailContentView: View {
                             )
                                 .padding(.horizontal, -9)
                                 .offset(y: -55)
-                                .scrollProgressReveal(collapseProgress)
+                                // Pure decoration and the one material on the
+                                // card, so it's culled rather than drawn
+                                // invisibly while the page sits at the top.
+                                .scrollProgressReveal(collapseProgress, cullWhenHidden: true)
                         }
                         .scrollProgressOffset(headerPin)
                         .padding(.bottom, -14)
@@ -614,7 +621,7 @@ struct GameDetailContentView: View {
                                     .padding(.vertical, 6)
                                     .scrollProgressOffset(chipStick)
                             }
-                            .background(GlobalOffsetProbe(id: "gdChips"))
+                            .background(GlobalOffsetProbe(id: "gdChips", space: .named(Self.cardSpace)))
                             .zIndex(1)
                         }
                         tabPager
@@ -670,7 +677,7 @@ struct GameDetailContentView: View {
             .onScrollPhaseChange { _, newPhase in
                 scrollIdle.value = newPhase == .idle
             }
-            .background(GlobalOffsetProbe(id: "gdContainer"))
+            .background(GlobalOffsetProbe(id: "gdContainer", space: .named(Self.cardSpace)))
             // Overlay, not safeAreaInset: the bar takes no layout space, so
             // nothing jumps when it appears — content just slides under it.
             .overlay(alignment: .top) {
@@ -685,6 +692,9 @@ struct GameDetailContentView: View {
                     )
             }
         }
+        // Anchors the probes above: both are measured relative to this, so the
+        // open/dismiss translation leaves their readings untouched.
+        .coordinateSpace(name: Self.cardSpace)
         .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
             // A player carousel over the page can shift the probes' reported
             // frames; freeze the chip dock while one is up.

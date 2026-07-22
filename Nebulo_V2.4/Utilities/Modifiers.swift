@@ -219,11 +219,19 @@ struct ScrollOffsetProbe: View {
 /// to the scroll view's own frame moving during a header collapse.
 struct GlobalOffsetProbe: View {
     let id: String
+    /// Which space the offset is measured in. Defaults to `.global`, but a
+    /// caller that gets translated as a whole — the game detail card, slid up
+    /// and down by the open/dismiss — should pass a space anchored inside
+    /// itself. Measured globally, a uniform translation rewrites the preference
+    /// on every frame of that slide and re-runs the preference plumbing across
+    /// the tree, even though the value the reader actually wants (a difference
+    /// between two probes moving in lockstep) never changed.
+    var space: CoordinateSpace = .global
     var body: some View {
         GeometryReader { g in
             Color.clear.preference(
                 key: SectionScrollOffsetsKey.self,
-                value: [id: g.frame(in: .global).minY]
+                value: [id: g.frame(in: space).minY]
             )
         }
     }
@@ -271,16 +279,35 @@ extension View {
 /// for the content beneath it.
 struct ScrollProgressReveal: ViewModifier {
     @ObservedObject var progress: ScrollProgress
+
+    /// While fully transparent, drop the content out of the render pass
+    /// entirely instead of drawing it at opacity 0. Worth it for the header
+    /// scrim, which is a `.regularMaterial` — a material samples and blurs the
+    /// backdrop every frame even when invisible, and a dismiss only engages at
+    /// the top of the page, precisely where the scrim is hidden. All three
+    /// pager cards were paying for a full-width backdrop blur throughout the
+    /// open and close for something nobody could see.
+    ///
+    /// Opt-in, and only safe for pure decoration: a culled view stops laying
+    /// out, so anything measuring itself (or measured through a `.background`
+    /// chained after this modifier) must keep rendering.
+    var cullWhenHidden = false
+
+    @ViewBuilder
     func body(content: Content) -> some View {
-        content
-            .opacity(Double(progress.value))
-            .allowsHitTesting(progress.value > 0.5)
+        if cullWhenHidden && progress.value <= 0.001 {
+            EmptyView()
+        } else {
+            content
+                .opacity(Double(progress.value))
+                .allowsHitTesting(progress.value > 0.5)
+        }
     }
 }
 
 extension View {
-    func scrollProgressReveal(_ progress: ScrollProgress) -> some View {
-        modifier(ScrollProgressReveal(progress: progress))
+    func scrollProgressReveal(_ progress: ScrollProgress, cullWhenHidden: Bool = false) -> some View {
+        modifier(ScrollProgressReveal(progress: progress, cullWhenHidden: cullWhenHidden))
     }
 }
 
