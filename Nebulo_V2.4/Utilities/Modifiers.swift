@@ -346,13 +346,58 @@ struct PinnedHeaderGradient: View {
     }
 }
 
-/// Game-detail compact-header vignette — one continuous scrim (dark + blur)
+/// Game-detail compact-header vignette — one continuous scrim (tint + blur)
 /// with no cutout. It's rendered BEHIND the tab chips (lower z-order) so the
 /// vignette, blur and all, passes continuously behind them while the chips
 /// themselves stay bright on top.
+///
+/// The tint reproduces the detail card's OWN background — the dark base plus
+/// the away/home team-colour washes flooding in from the top corners — instead
+/// of a flat black band, so the pinned header reads as a continuation of the
+/// card rather than a separate panel laid over it.
 struct GameHeaderScrim: View {
+    var awayColor: Color = .black
+    var homeColor: Color = .black
+    var height: CGFloat = 340
+    var fadeStart: CGFloat = 0.16
+
     var body: some View {
-        CompactHeaderScrim(height: 340, fadeStart: 0.16, tintOverride: .black)
+        ZStack(alignment: .top) {
+            Rectangle().fill(.regularMaterial)
+            // Rendered at the card's full height and then clipped to the scrim,
+            // so the wash lines up with the identical gradient painted by
+            // GameDetailView.backgroundLayer directly beneath it. Building it at
+            // the scrim's own height instead would compress the falloff and
+            // leave a visible seam where the two meet.
+            ZStack {
+                Color(white: 0.10)
+                LinearGradient(
+                    colors: [awayColor.opacity(0.65), .clear],
+                    startPoint: .topLeading,
+                    endPoint: UnitPoint(x: 0.65, y: 0.75)
+                )
+                LinearGradient(
+                    colors: [homeColor.opacity(0.55), .clear],
+                    startPoint: .topTrailing,
+                    endPoint: UnitPoint(x: 0.35, y: 0.75)
+                )
+            }
+            .frame(height: UIScreen.main.bounds.height)
+            .opacity(0.8)
+        }
+        .frame(height: height)
+        .clipped()
+        .mask(
+            LinearGradient(
+                stops: [
+                    .init(color: .black, location: 0),
+                    .init(color: .black, location: fadeStart),
+                    .init(color: .clear, location: 1)
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+        )
+        .allowsHitTesting(false)
     }
 }
 

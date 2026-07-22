@@ -153,10 +153,10 @@ struct GameDetailPresenter: View {
     /// scrolls up to the top and keeps going doesn't make the card jump.
     @State private var dragEngaged = ValueBox(false)
     @State private var dragBaseline = ValueBox<CGFloat>(0)
-    /// The gap-filling black backdrop's opacity. Held solid through the whole
-    /// swipe, then faded out once the card is fully off-screen so the Sports
-    /// Hub reappears.
-    @State private var tintOpacity: CGFloat = 0.78
+    /// The gap-filling black backdrop's opacity. Fades in on appear at the same
+    /// pace it fades out, held solid through the whole swipe, then faded out
+    /// once the card is fully off-screen so the Sports Hub reappears.
+    @State private var tintOpacity: CGFloat = 0
     @StateObject private var playerHost = PlayerSheetHost()
 
     var body: some View {
@@ -214,10 +214,12 @@ struct GameDetailPresenter: View {
         }
         .animation(.smooth(duration: 0.3), value: playerHost.soccer)
         .animation(.smooth(duration: 0.3), value: playerHost.box)
-        // Drives the OPEN: the backdrop is already solid at this point, so only
-        // the card travels up. The drag-close animates dragY off-screen itself
-        // and then drops the view, so this never runs on close.
+        // Drives the OPEN: the backdrop fades up in place (never travelling
+        // with the card) at the same easeOut(0.14) pace it fades out on close,
+        // while the card itself slides up. The drag-close animates dragY
+        // off-screen itself and then drops the view, so this never runs on close.
         .onAppear {
+            withAnimation(.easeOut(duration: 0.14)) { tintOpacity = 0.78 }
             withAnimation(.smooth(duration: 0.3)) { dragY = 0 }
         }
     }
@@ -561,7 +563,10 @@ struct GameDetailContentView: View {
                     Color.clear
                         .frame(height: 0)
                         .overlay(alignment: .top) {
-                            GameHeaderScrim()
+                            GameHeaderScrim(
+                                awayColor: detail.awaySide.color,
+                                homeColor: detail.homeSide.color
+                            )
                                 .padding(.horizontal, -9)
                                 .offset(y: -55)
                                 .scrollProgressReveal(collapseProgress)
