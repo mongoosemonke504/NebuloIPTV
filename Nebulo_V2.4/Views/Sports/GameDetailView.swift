@@ -157,6 +157,9 @@ struct GameDetailPresenter: View {
     /// pace it fades out, held solid through the whole swipe, then faded out
     /// once the card is fully off-screen so the Sports Hub reappears.
     @State private var tintOpacity: CGFloat = 0
+    /// Drives hiding the pager's peeking neighbour pages for the duration of a
+    /// dismiss, so only the card actually leaving is composited each frame.
+    @State private var dismissing = false
     @StateObject private var playerHost = PlayerSheetHost()
 
     var body: some View {
@@ -168,7 +171,7 @@ struct GameDetailPresenter: View {
             Color.black.opacity(tintOpacity)
                 .ignoresSafeArea()
 
-            GameDetailView(request: request, viewModel: viewModel, scoreViewModel: scoreViewModel, accentColor: accentColor)
+            GameDetailView(request: request, viewModel: viewModel, scoreViewModel: scoreViewModel, accentColor: accentColor, collapseNeighbors: dismissing)
                 .environment(\.gameDetailDismiss, onDismiss)
                 // The content reports when it's scrolled to the top; only then
                 // does a downward drag grab the whole card to dismiss.
@@ -220,7 +223,14 @@ struct GameDetailPresenter: View {
         // off-screen itself and then drops the view, so this never runs on close.
         .onAppear {
             withAnimation(.easeOut(duration: 0.14)) { tintOpacity = 0.78 }
-            withAnimation(.smooth(duration: 0.3)) { dragY = 0 }
+            // Start the slide one runloop turn later, once this page of the
+            // pager has actually been built and laid out. Animating on the
+            // same frame the view mounts makes the first frames of the slide
+            // compete with that initial layout, which is what cost frames on
+            // the way in — the lighter player-stats card never had to.
+            DispatchQueue.main.async {
+                withAnimation(.smooth(duration: 0.3)) { dragY = 0 }
+            }
         }
     }
 
@@ -246,13 +256,16 @@ struct GameDetailPresenter: View {
                           v.translation.height > abs(v.translation.width) * 1.3 else { return }
                     dragEngaged.value = true
                     dragBaseline.value = v.translation.height
+                    // One re-render here, at the moment the drag takes over,
+                    // buys every subsequent frame of the drag and the slide.
+                    dismissing = true
                 }
                 dragY = max(0, v.translation.height - dragBaseline.value)
             }
             .onEnded { v in
                 let engaged = dragEngaged.value
                 dragEngaged.value = false
-                guard engaged else { return }
+                guard engaged else { dismissing = false; return }
                 let travel = v.translation.height - dragBaseline.value
                 let predicted = v.predictedEndTranslation.height - dragBaseline.value
                 if travel > 120 || predicted > 400 {
@@ -269,7 +282,10 @@ struct GameDetailPresenter: View {
                     }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) { onDismiss() }
                 } else {
+                    // Springing back: bring the neighbours in only once the card
+                    // has settled, so their re-render never lands mid-animation.
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { dragY = 0 }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { dismissing = false }
                 }
             }
     }
@@ -362,12 +378,16 @@ struct GameDetailView: View {
 
     private let pages: [GameDetailRequest]
     @State private var currentID: String?
+    /// While the card is being dragged/animated off, the peeking neighbour
+    /// pages are hidden — see the pager body.
+    private let collapseNeighbors: Bool
 
     @MainActor
-    init(request: GameDetailRequest, viewModel: ChannelViewModel, scoreViewModel: ScoreViewModel, accentColor: Color) {
+    init(request: GameDetailRequest, viewModel: ChannelViewModel, scoreViewModel: ScoreViewModel, accentColor: Color, collapseNeighbors: Bool = false) {
         self.viewModel = viewModel
         self.scoreViewModel = scoreViewModel
         self.accentColor = accentColor
+        self.collapseNeighbors = collapseNeighbors
         // A window around the tapped game, not the whole scoreboard — a
         // 100+ page lazy carousel makes the initial scroll-to-page landing
         // unreliable, and nobody swipes farther than this anyway.
@@ -411,6 +431,13 @@ struct GameDetailView: View {
                         )
                         .overlay(alignment: .top) { CardGrabber() }
                         .allowsHitTesting(page.id == currentID)
+                        // Dismissing: drop the two peeking neighbours out of the
+                        // render pass. Only a ~19pt sliver of each is on screen,
+                        // so hiding them is invisible, but it stops two more
+                        // full-size pages being composited on every frame of the
+                        // slide. Opacity (not a branch) so they keep their state
+                        // and their loaded data — a spring-back must not refetch.
+                        .opacity(collapseNeighbors && page.id != currentID ? 0 : 1)
                         .id(page.id)
                     }
                 }
@@ -2994,6 +3021,111 @@ private struct HorizontalPanOverlay: UIViewRepresentable {
 
 /// FotMob-style momentum ribbon: the area above the midline (home on top)
 /// fills in the home color, below in the away color. Points are lightly
+/// Direction-aware scrub input for the chart.
+///
+/// Horizontal drags scrub; vertical drags are left entirely to the page's
+/// scroll view. Neither is expressible with a SwiftUI gesture here:
+///
+///  * A `LongPressGesture.sequenced(before: DragGesture)` takes exclusive
+///    ownership of the touch once it activates, and there is no way to hand it
+///    back — clearing scrub state stops the marker updating but the recogniser
+///    keeps swallowing the scroll.
+///  * `.simultaneousGesture` makes a gesture simultaneous with other *SwiftUI*
+///    gestures, not with a UIScrollView's internal pan.
+///
+/// So this is a UIKit pan that only begins when the drag is predominantly
+/// horizontal. On a vertical drag it fails immediately, which both frees the
+/// vertical scroll view and satisfies the failure requirement installed on the
+/// horizontal pager below — so up/down scrolls and left/right scrubs.
+private struct ScrubTouchOverlay: UIViewRepresentable {
+    /// Location within the chart.
+    var onChanged: (CGPoint) -> Void
+    var onEnded: () -> Void
+
+    func makeUIView(context: Context) -> UIView {
+        let view = ScrubHostView()
+        view.backgroundColor = .clear
+        let pan = UIPanGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handle(_:))
+        )
+        pan.delegate = context.coordinator
+        view.addGestureRecognizer(pan)
+        view.scrubRecognizer = pan
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onChanged = onChanged
+        context.coordinator.onEnded = onEnded
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(onChanged: onChanged, onEnded: onEnded) }
+
+    /// Makes the enclosing horizontal pager wait on the scrub recogniser, so a
+    /// sideways drag that starts on the chart scrubs instead of paging to the
+    /// next game. Only scroll views that actually scroll horizontally are
+    /// touched, so the vertical page scroll is never delayed.
+    final class ScrubHostView: UIView {
+        weak var scrubRecognizer: UIPanGestureRecognizer?
+        private var wired = false
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard window != nil, !wired else { return }
+            // One turn later: the pager's contentSize isn't final yet at the
+            // moment the view is added, and that's what identifies its axis.
+            DispatchQueue.main.async { [weak self] in self?.wireFailureRequirements() }
+        }
+
+        private func wireFailureRequirements() {
+            guard !wired, let scrubRecognizer else { return }
+            var ancestor = superview
+            while let current = ancestor {
+                if let scroll = current as? UIScrollView,
+                   scroll.contentSize.width > scroll.bounds.width + 1 {
+                    scroll.panGestureRecognizer.require(toFail: scrubRecognizer)
+                    wired = true
+                }
+                ancestor = current.superview
+            }
+        }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onChanged: (CGPoint) -> Void
+        var onEnded: () -> Void
+
+        init(onChanged: @escaping (CGPoint) -> Void, onEnded: @escaping () -> Void) {
+            self.onChanged = onChanged
+            self.onEnded = onEnded
+        }
+
+        @objc func handle(_ recognizer: UIPanGestureRecognizer) {
+            switch recognizer.state {
+            case .began, .changed:
+                onChanged(recognizer.location(in: recognizer.view))
+            default:
+                onEnded()
+            }
+        }
+
+        /// Claim the touch only when it's clearly sideways. Returning false
+        /// fails the recogniser, which releases the pager and the vertical
+        /// scroll view for this touch.
+        func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+            guard let pan = recognizer as? UIPanGestureRecognizer else { return false }
+            let velocity = pan.velocity(in: pan.view)
+            return abs(velocity.x) > abs(velocity.y)
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+        ) -> Bool { true }
+    }
+}
+
 /// smoothed so the raw per-play win-probability feed doesn't render as
 /// jagged noise. The x-axis spans the WHOLE game; `progress` says how much
 /// has been played, so a live game's curve stops partway with empty track
@@ -3045,31 +3177,24 @@ struct MomentumChart: View {
                     scrubOverlay(values, fraction: fraction, in: size)
                 }
             }
-            .simultaneousGesture(scrubGesture(in: size), isEnabled: interactive)
+            .overlay {
+                if interactive {
+                    ScrubTouchOverlay(
+                        onChanged: { location in
+                            // Only ever called for horizontal drags — the
+                            // recogniser fails on vertical ones, so there's no
+                            // direction check to do here.
+                            if scrubFraction == nil { ChannelViewModel.shared.triggerSelectionHaptic() }
+                            scrubFraction = min(max(location.x / max(size.width, 1), 0), span)
+                        },
+                        onEnded: { scrubFraction = nil }
+                    )
+                }
+            }
         }
     }
 
     // MARK: Scrubbing
-
-    /// Hold-then-drag: the chart only takes the touch after a short press
-    /// with the finger essentially still. A vertical swipe moves past the
-    /// hold's distance limit almost immediately, so page scrolling and
-    /// sheet dismissal keep working when the gesture starts on the chart.
-    private func scrubGesture(in size: CGSize) -> some Gesture {
-        LongPressGesture(minimumDuration: 0.25, maximumDistance: 8)
-            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
-            .onChanged { value in
-                switch value {
-                case .second(true, let drag):
-                    if scrubFraction == nil { ChannelViewModel.shared.triggerSelectionHaptic() }
-                    let x = drag?.location.x ?? size.width * span
-                    scrubFraction = min(max(x / max(size.width, 1), 0), span)
-                default:
-                    break
-                }
-            }
-            .onEnded { _ in scrubFraction = nil }
-    }
 
     @ViewBuilder
     private func scrubOverlay(_ values: [Double], fraction: CGFloat, in size: CGSize) -> some View {
