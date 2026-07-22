@@ -55,6 +55,19 @@ extension EnvironmentValues {
     }
 }
 
+/// Set while a dismiss drag owns the card, so the card's own scroll view stops
+/// panning. Without it a drag from the grey grab bar slides the card AND
+/// scrolls its content under the finger at the same time.
+private struct GameDetailScrollLockKey: EnvironmentKey {
+    static let defaultValue: FlagBox? = nil
+}
+extension EnvironmentValues {
+    var gameDetailScrollLock: FlagBox? {
+        get { self[GameDetailScrollLockKey.self] }
+        set { self[GameDetailScrollLockKey.self] = newValue }
+    }
+}
+
 /// Player-carousel counterparts of `gameDetailAtTop` / `gameDetailDragActive`.
 private struct PlayerSheetAtTopKey: EnvironmentKey {
     static let defaultValue: (Bool) -> Void = { _ in }
@@ -219,6 +232,11 @@ struct GameDetailPresenter: View {
     /// scrolls up to the top and keeps going doesn't make the card jump.
     @State private var dragEngaged = ValueBox(false)
     @State private var dragBaseline = ValueBox<CGFloat>(0)
+    /// Freezes the card's own scroll view for the duration of a dismiss drag.
+    /// Observable rather than a plain ValueBox because the scroll view has to
+    /// re-render to pick it up — but only that leaf does, so engaging the drag
+    /// doesn't rebuild the card mid-gesture.
+    @State private var scrollLock = FlagBox()
     /// The gap-filling black backdrop's opacity. Fades in on appear at the same
     /// pace it fades out, held solid through the whole swipe, then faded out
     /// once the card is fully off-screen so the Sports Hub reappears.
@@ -251,6 +269,7 @@ struct GameDetailPresenter: View {
                 // Lets the content cancel its rubber-band only while the card
                 // is being dragged to dismiss — normal top bounce stays.
                 .environment(\.gameDetailDragActive, dragEngaged)
+                .environment(\.gameDetailScrollLock, scrollLock)
                 .environmentObject(playerHost)
                 .scrollProgressOffset(dragY)
                 // No compositingGroup: for a pure translation it forces the
@@ -337,12 +356,16 @@ struct GameDetailPresenter: View {
                           v.translation.height > abs(v.translation.width) * 1.3 else { return }
                     dragEngaged.value = true
                     dragBaseline.value = v.translation.height
+                    // The card is leaving — stop its content scrolling under
+                    // the finger for the rest of the drag.
+                    scrollLock.set(true)
                 }
                 dragY.set(max(0, v.translation.height - dragBaseline.value))
             }
             .onEnded { v in
                 let engaged = dragEngaged.value
                 dragEngaged.value = false
+                scrollLock.set(false)
                 guard engaged else { return }
                 let travel = v.translation.height - dragBaseline.value
                 let predicted = v.predictedEndTranslation.height - dragBaseline.value
@@ -592,6 +615,9 @@ struct GameDetailContentView: View {
     /// True while the presenter's dismiss drag is engaged — only then do we
     /// cancel the top rubber-band.
     @Environment(\.gameDetailDragActive) private var dragActive
+    /// Set while the presenter's dismiss drag owns the card — freezes this
+    /// scroll view so a pull from the grab bar doesn't scroll the content too.
+    @Environment(\.gameDetailScrollLock) private var scrollLock
     /// Owned by the presenter — a tapped player publishes its stats carousel
     /// here so it renders full-screen above the whole detail.
     @EnvironmentObject private var playerHost: PlayerSheetHost
@@ -752,6 +778,7 @@ struct GameDetailContentView: View {
                 .scrollProgressOffset(bounceCancel)
             }
             .scrollPosition($scrollTarget)
+            .scrollLocked(scrollLock)
             // Scroll-linked, not threshold + animation: the bar's opacity
             // maps directly onto the offset (fading in over 105→155pt, where
             // the big score header scrolls out) so it moves with the finger

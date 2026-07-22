@@ -104,7 +104,13 @@ struct SportsHubView: View {
     /// Measured height of the stats-header block (title + counts + padding).
     /// Scrolling to exactly this offset lands on the "compact" state where
     /// the chip bar pins. Class box: layout writes must not re-render.
-    final class HubMetrics { var headerHeight: CGFloat = 96 }
+    final class HubMetrics {
+        var headerHeight: CGFloat = 96
+        /// Live vertical scroll offset. Kept here (not in @State) for the same
+        /// reason as headerHeight: it updates every scroll frame and must not
+        /// re-render the hub.
+        var scrollY: CGFloat = 0
+    }
     @State private var hubMetrics = HubMetrics()
 
     /// Central tab switch: derives the slide direction from chip order and
@@ -120,10 +126,16 @@ struct SportsHubView: View {
         let newIdx = tabs.firstIndex(of: newTab) ?? 0
         slideFromTrailing = newIdx > oldIdx
         isSliding = true
-        // Deep-scrolled → land on the compact offset (chips pinned, no big
-        // title); near the top → true top. Raw offsets, so this works no
-        // matter which rows the lazy list has materialised.
-        let targetY: CGFloat = statsProgress.value >= 0.99 ? hubMetrics.headerHeight : 0
+        // Land no lower than the compact anchor (chips pinned, big title gone)
+        // and otherwise stay exactly where we are, so the page never moves
+        // vertically while it's sliding horizontally.
+        //
+        // This used to key off statsProgress >= 0.99, which saturates at 40pt
+        // scrolled while the compact anchor sits at headerHeight (~96pt): every
+        // switch between those two points yanked the page DOWN to 96, and every
+        // switch below 40pt yanked it UP to 0. That vertical jump landing on
+        // the same frame as the horizontal slide was the jank.
+        let targetY = min(hubMetrics.scrollY, hubMetrics.headerHeight)
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) {
@@ -211,6 +223,7 @@ struct SportsHubView: View {
             .scrollPosition($hubScrollPos)
             .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
                 guard let y = offsets["sports"] else { return }
+                hubMetrics.scrollY = max(0, -y)
                 statsProgress.set(min(max(-y / 40, 0), 1))
             }
             // Horizontal swipe anywhere on the list turns the page. Fires

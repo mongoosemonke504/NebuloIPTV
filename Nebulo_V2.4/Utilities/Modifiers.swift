@@ -254,6 +254,42 @@ final class ScrollProgress: ObservableObject {
     }
 }
 
+/// Boolean twin of `ScrollProgress`, and there for the same reason: a screen
+/// holds it via `@State` (which does NOT subscribe the screen to it), so
+/// flipping it re-renders only the leaf that reads it rather than the whole
+/// view that owns it.
+final class FlagBox: ObservableObject {
+    @Published var value: Bool = false
+
+    /// Assigns only on a real change, so repeat writes don't publish.
+    func set(_ newValue: Bool) {
+        if newValue != value { value = newValue }
+    }
+}
+
+/// Freezes a scroll view while the flag is set. Used to stop a card's content
+/// scrolling under the finger during a drag that is dismissing the whole card.
+struct ScrollLocked: ViewModifier {
+    @ObservedObject var flag: FlagBox
+    func body(content: Content) -> some View {
+        content.scrollDisabled(flag.value)
+    }
+}
+
+extension View {
+    /// Optional so callers can pass an environment value straight through —
+    /// substituting a fresh `FlagBox` for nil would mint a new object on every
+    /// render and observe nothing.
+    @ViewBuilder
+    func scrollLocked(_ flag: FlagBox?) -> some View {
+        if let flag {
+            modifier(ScrollLocked(flag: flag))
+        } else {
+            self
+        }
+    }
+}
+
 /// Applies an opacity derived from a `ScrollProgress` without coupling the
 /// enclosing screen body to the value. The `@ObservedObject` lives on the
 /// modifier, so only this modifier re-renders as the value changes — the
