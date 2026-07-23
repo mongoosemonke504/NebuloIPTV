@@ -41,6 +41,9 @@ struct PlayerInfoPanel: View {
     @State private var selectedTab: InfoTab = .channels
     @State private var showFullDescription = false
     @State private var showRecordingSheet = false
+    /// A finished recording tapped in the Recordings tab, played over the live
+    /// player via a full-screen cover.
+    @State private var recordingToPlay: Recording?
 
     /// 0 at rest, 1 once the active tab's list has been scrolled. Tracked
     /// 1:1 with the scroll offset (same mechanism as the section headers):
@@ -603,7 +606,8 @@ struct PlayerInfoPanel: View {
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(sorted.enumerated()), id: \.element.id) { idx, rec in
-                        RecordingRow(recording: rec, recordingManager: recordingManager)
+                        RecordingRow(recording: rec, recordingManager: recordingManager,
+                                     onPlay: { recordingToPlay = rec })
                         if idx < sorted.count - 1 {
                             Divider().background(Color.white.opacity(0.07)).padding(.leading, 18)
                         }
@@ -615,6 +619,12 @@ struct PlayerInfoPanel: View {
             }
         }
         .scrollPosition($recordingsScroll)
+        // Play a finished recording over the live player. RecordingPlayerView
+        // owns the .ts duration/scrubbing fix, so this reuses it wholesale
+        // rather than swapping the shared engine to the local file by hand.
+        .fullScreenCover(item: $recordingToPlay) { rec in
+            RecordingPlayerView(recording: rec, viewModel: viewModel)
+        }
         .onScrollGeometryChange(for: CGFloat.self) { geo in
             geo.contentOffset.y + geo.contentInsets.top
         } action: { _, scrolled in
@@ -976,6 +986,10 @@ private struct ScheduleRow: View {
 private struct RecordingRow: View {
     let recording: Recording
     @ObservedObject var recordingManager: RecordingManager
+    /// Fired when a completed recording's row is tapped — plays it.
+    var onPlay: (() -> Void)? = nil
+
+    private var isPlayable: Bool { recording.status == .completed }
 
     private var dateLabel: String {
         let f = DateFormatter(); f.dateStyle = .short; f.timeStyle = .short
@@ -993,11 +1007,19 @@ private struct RecordingRow: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            // Status indicator
-            Circle()
-                .fill(statusColor)
-                .frame(width: 8, height: 8)
-                .padding(.leading, 18)
+            // A completed recording shows a play glyph in place of the status
+            // dot so it reads as tappable; others keep the status dot.
+            if isPlayable {
+                Image(systemName: "play.circle.fill")
+                    .font(.system(size: 18))
+                    .foregroundStyle(.white)
+                    .padding(.leading, 14)
+            } else {
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 8, height: 8)
+                    .padding(.leading, 18)
+            }
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(recording.displayName)
@@ -1027,5 +1049,13 @@ private struct RecordingRow: View {
             .padding(.trailing, 4)
         }
         .padding(.vertical, 10)
+        // Whole-row tap plays a completed recording. onTapGesture rather than a
+        // Button so it never swallows the delete button's own tap.
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard isPlayable, SwipeTapGuard.tapsAllowed else { return }
+            ChannelViewModel.shared.triggerSelectionHaptic()
+            onPlay?()
+        }
     }
 }

@@ -263,14 +263,23 @@ struct MainViewModifiers: ViewModifier {
         let categories = Binding<[StreamCategory]>(get: { viewModel.categories }, set: { viewModel.categories = $0 })
 
         content
-            .applyIf(!showMultiView) { view in
-                // The system navigation bar is permanently hidden in this
-                // stack: toggling it per-screen made UIKit animate the bar in
-                // (Back + gear visibly sliding down) every time a section
-                // opened. All chrome is drawn in-view instead — the shared
-                // gear below, and each section's Back pill via StandardLayout.
-                view.toolbar(.hidden, for: .navigationBar)
-                .safeAreaInset(edge: .bottom, spacing: 0) {
+            // The system navigation bar is permanently hidden in this stack:
+            // toggling it per-screen made UIKit animate the bar in (Back + gear
+            // visibly sliding down) every time a section opened. All chrome is
+            // drawn in-view instead — the shared gear, and each section's Back
+            // pill via StandardLayout.
+            //
+            // These modifiers are applied UNCONDITIONALLY, and only the search
+            // bar's presence is gated inside the inset. Previously the whole
+            // block was wrapped in `applyIf(!showMultiView)`, an if/else
+            // ViewBuilder — so opening multi-view changed `content`'s structural
+            // identity and rebuilt the home ScrollView underneath, throwing away
+            // its scroll position. Entering a section (Sports, etc.) never
+            // toggled this, which is why those kept their scroll and multi-view
+            // didn't.
+            .toolbar(.hidden, for: .navigationBar)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if !showMultiView {
                     // Fallback action (VoiceOver / non-touch activation) —
                     // touch opens via the touch-down gesture below, which
                     // will already have set showSearch by release.
