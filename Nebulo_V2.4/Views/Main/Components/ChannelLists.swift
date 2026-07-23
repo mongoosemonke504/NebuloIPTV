@@ -102,33 +102,8 @@ struct HorizontalPreviewList: View {
                         playAction(c)
                     }) {
                         VStack(alignment: .leading, spacing: 8) {
-                            ZStack {
-                                // Blurred backdrop + accent glow, rasterised once
-                                // via drawingGroup so the two blurs don't
-                                // re-composite on the GPU every scroll frame —
-                                // the same optimisation the featured hero card
-                                // uses. Isolated to the blur layers so the sharp
-                                // logo on top and the glass below stay live.
-                                ZStack {
-                                    CachedAsyncImage(urlString: c.icon ?? "", size: CGSize(width: 200, height: 112))
-                                        .blur(radius: 20)
-                                        .opacity(0.08 + 0.92 * glowStrength)
-                                        .clipped()
-                                    Circle()
-                                        .fill(accentColor.opacity(min(1.0, 0.85 * glowStrength)))
-                                        .frame(width: 100, height: 100)
-                                        .blur(radius: 30)
-                                }
-                                .frame(width: 200, height: 112)
-                                .drawingGroup()
+                            HorizontalChannelCardArt(icon: c.icon, glowStrength: glowStrength)
 
-                                CachedAsyncImage(urlString: c.icon ?? "", size: nil)
-                                    .padding(16)
-                            }
-                            .frame(width: 200, height: 112)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .modifier(GlassEffect(cornerRadius: 12, isSelected: false, accentColor: nil))
-                            
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(c.name)
                                     .font(.subheadline.weight(.bold))
@@ -145,7 +120,7 @@ struct HorizontalPreviewList: View {
                                         .font(.caption)
                                 }
                             }
-                            .frame(width: 192, height: 40, alignment: .topLeading) 
+                            .frame(width: 192, height: 40, alignment: .topLeading)
                             .padding(.horizontal, 4)
                         }
                     }.buttonStyle(.plain)
@@ -170,6 +145,43 @@ struct HorizontalPreviewList: View {
                 dismissButton: .default(Text("OK"))
             )
         }
+    }
+}
+
+/// The artwork tile for a horizontal channel card: blurred logo backdrop plus a
+/// glow drawn from the logo's own brand colour (not the accent colour), so each
+/// channel's shelf card carries its own hue.
+private struct HorizontalChannelCardArt: View {
+    let icon: String?
+    let glowStrength: Double
+    @State private var glow: Color?
+
+    var body: some View {
+        ZStack {
+            // Blurred backdrop + logo-derived glow, rasterised once via
+            // drawingGroup so the two blurs don't re-composite on the GPU every
+            // scroll frame. Isolated to the blur layers so the sharp logo on
+            // top and the glass below stay live.
+            ZStack {
+                CachedAsyncImage(urlString: icon ?? "", size: CGSize(width: 200, height: 112))
+                    .blur(radius: 20)
+                    .opacity(0.08 + 0.92 * glowStrength)
+                    .clipped()
+                Circle()
+                    .fill((glow ?? Color(white: 0.55)).opacity(min(1.0, 0.85 * glowStrength)))
+                    .frame(width: 100, height: 100)
+                    .blur(radius: 30)
+            }
+            .frame(width: 200, height: 112)
+            .drawingGroup()
+
+            CachedAsyncImage(urlString: icon ?? "", size: nil)
+                .padding(16)
+        }
+        .frame(width: 200, height: 112)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .modifier(GlassEffect(cornerRadius: 12, isSelected: false, accentColor: nil))
+        .task(id: icon) { glow = await LogoGlow.color(for: icon) }
     }
 }
 
@@ -213,6 +225,10 @@ struct ChannelRow: View, Equatable {
         return mins == 0 ? "\(hours)h" : "\(hours)h \(mins)m"
     }
 
+    // Logo-derived glow behind the tile — carries the channel's brand hue
+    // instead of a flat accent, matching the featured/shelf cards.
+    @State private var glow: Color?
+
     var body: some View {
         Button(action: {
             ChannelViewModel.shared.triggerSelectionHaptic()
@@ -220,16 +236,23 @@ struct ChannelRow: View, Equatable {
         }) {
             HStack(spacing: 14) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .fill(Color.primary.opacity(0.10))
                     CachedAsyncImage(urlString: channel.icon ?? "", size: nil)
                         .padding(8)
                 }
                 .frame(width: logoSize, height: logoSize)
-                .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 13, style: .continuous)
-                        .stroke(Color.primary.opacity(0.12), lineWidth: 0.5)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(Color.white.opacity(0.14), lineWidth: 0.5)
+                )
+                // Soft brand-colour halo spilling out behind the logo tile.
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill((glow ?? .clear).opacity(0.5))
+                        .blur(radius: 14)
+                        .padding(-3)
                 )
 
                 VStack(alignment: .leading, spacing: 3) {
@@ -248,14 +271,16 @@ struct ChannelRow: View, Equatable {
                             GeometryReader { geo in
                                 ZStack(alignment: .leading) {
                                     Capsule()
-                                        .fill(Color.primary.opacity(0.08))
+                                        .fill(Color.white.opacity(0.12))
+                                    // Live progress is always red — matching the
+                                    // channel-tap preview's now-playing bar.
                                     Capsule()
-                                        .fill(accentColor)
+                                        .fill(Color.red)
                                         .frame(width: geo.size.width * progress)
                                 }
                             }
-                            .frame(height: 2.5)
-                            .padding(.top, 3)
+                            .frame(height: 3)
+                            .padding(.top, 4)
                             .padding(.trailing, 4)
                         }
                     }
@@ -267,36 +292,53 @@ struct ChannelRow: View, Equatable {
                         starIcon
                             .font(.subheadline.weight(.semibold))
                             .symbolRenderingMode(.hierarchical)
-                            .foregroundStyle(isFavorite ? accentColor : Color.primary.opacity(0.22))
+                            .foregroundStyle(isFavorite ? .yellow : Color.primary.opacity(0.22))
                             .frame(width: 32, height: 32)
                             .contentShape(Rectangle())
                     }.buttonStyle(.plain)
 
                     if let label = timeLeftLabel {
                         Text(label)
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.tertiary)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.55))
                             .monospacedDigit()
                     }
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 14)
             .padding(.vertical, 11)
+            // Each channel is now a distinct card rather than a bare list row.
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.white.opacity(0.05))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Color.white.opacity(0.07), lineWidth: 0.5)
+                    )
+            )
+            .padding(.horizontal, 14)
+            .padding(.vertical, 4)
             .contentShape(Rectangle())
         }
         .buttonStyle(ChannelRowButtonStyle())
-        .frame(minHeight: isCompact ? 66 : 76)
-        .frame(maxWidth: .infinity)
+        .task(id: channel.icon) { glow = await LogoGlow.color(for: channel.icon) }
     }
 }
 
 private struct ChannelRowButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .background(
-                Color.white.opacity(configuration.isPressed ? 0.06 : 0)
-                    .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
+            // Visible pressed feedback: the card brightens and dips slightly so
+            // a tap plainly registers.
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.white.opacity(configuration.isPressed ? 0.10 : 0))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 4)
+                    .allowsHitTesting(false)
             )
+            .scaleEffect(configuration.isPressed ? 0.975 : 1.0)
+            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
     }
 }
 /// Tap-through preview for a channel in the category lists: what's on now

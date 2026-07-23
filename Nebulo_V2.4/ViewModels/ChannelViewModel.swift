@@ -1954,7 +1954,7 @@ class ChannelViewModel: ObservableObject {
                     c.isHidden = s.isHidden
                     c.order = s.order
                     
-                    if let custom = renames[originalID] { c.name = custom }
+                    if let custom = renames[originalID + idOffset] { c.name = custom }
                     else { c.name = s.name } 
                     mutable[i] = c
                 } else {
