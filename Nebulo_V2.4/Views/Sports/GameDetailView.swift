@@ -68,6 +68,21 @@ extension EnvironmentValues {
     }
 }
 
+/// The current global-space Y of the tab chips' top edge. The dismiss drag
+/// engages anywhere above this, so the whole header (score, watch button) acts
+/// as a drag handle — not just the grey grabber. Content reports it; the
+/// presenter reads it. Moves with the scroll, so the handle shrinks to the
+/// pinned bar as the header scrolls away.
+private struct GameDetailChipTopKey: EnvironmentKey {
+    static let defaultValue: ValueBox<CGFloat>? = nil
+}
+extension EnvironmentValues {
+    var gameDetailChipTop: ValueBox<CGFloat>? {
+        get { self[GameDetailChipTopKey.self] }
+        set { self[GameDetailChipTopKey.self] = newValue }
+    }
+}
+
 /// Player-carousel counterparts of `gameDetailAtTop` / `gameDetailDragActive`.
 private struct PlayerSheetAtTopKey: EnvironmentKey {
     static let defaultValue: (Bool) -> Void = { _ in }
@@ -237,6 +252,10 @@ struct GameDetailPresenter: View {
     /// re-render to pick it up — but only that leaf does, so engaging the drag
     /// doesn't rebuild the card mid-gesture.
     @State private var scrollLock = FlagBox()
+    /// Global-space top edge of the visible page's tab chips — the boundary of
+    /// the header drag-handle zone. Seeded generously so an early drag (before
+    /// the first measurement lands) still grabs the header.
+    @State private var chipTopY = ValueBox<CGFloat>(320)
     /// The gap-filling black backdrop's opacity. Fades in on appear at the same
     /// pace it fades out, held solid through the whole swipe, then faded out
     /// once the card is fully off-screen so the Sports Hub reappears.
@@ -270,6 +289,7 @@ struct GameDetailPresenter: View {
                 // is being dragged to dismiss — normal top bounce stays.
                 .environment(\.gameDetailDragActive, dragEngaged)
                 .environment(\.gameDetailScrollLock, scrollLock)
+                .environment(\.gameDetailChipTop, chipTopY)
                 .environmentObject(playerHost)
                 .scrollProgressOffset(dragY)
                 // No compositingGroup: for a pure translation it forces the
@@ -347,11 +367,12 @@ struct GameDetailPresenter: View {
             .onChanged { v in
                 if !dragEngaged.value {
                     // Engage on a clearly downward, vertical drag when either
-                    // the scroll is at its top OR the drag started on the grey
-                    // grab bar / compact header at the very top of the card —
-                    // so the grabber always closes, even when scrolled down.
-                    // Leaves mid-content scrolling and horizontal paging alone.
-                    guard atTop.value || v.startLocation.y < 110,
+                    // the scroll is at its top OR the drag started anywhere
+                    // above the tab chips — so the whole header (score, watch
+                    // button, grabber) closes the card, not just the grey bar,
+                    // in any scroll state. Leaves mid-content scrolling and
+                    // horizontal paging alone.
+                    guard atTop.value || v.startLocation.y < (chipTopY.value),
                           v.translation.height > 0,
                           v.translation.height > abs(v.translation.width) * 1.3 else { return }
                     dragEngaged.value = true
@@ -618,6 +639,9 @@ struct GameDetailContentView: View {
     /// Set while the presenter's dismiss drag owns the card — freezes this
     /// scroll view so a pull from the grab bar doesn't scroll the content too.
     @Environment(\.gameDetailScrollLock) private var scrollLock
+    /// The presenter reads this to size the header drag-handle zone; this view
+    /// keeps it updated with the chips' live global-space top.
+    @Environment(\.gameDetailChipTop) private var chipTopReport
     /// Owned by the presenter — a tapped player publishes its stats carousel
     /// here so it renders full-screen above the whole detail.
     @EnvironmentObject private var playerHost: PlayerSheetHost
@@ -678,6 +702,14 @@ struct GameDetailContentView: View {
     /// Coordinate space anchored to this card, so the chip-dock probes measure
     /// positions that don't move when the whole card is slid up or down.
     private static let cardSpace = "gdCard"
+
+    /// Writes the chips' global top into the presenter's drag-handle box, but
+    /// only from the on-screen page — a peeking neighbour's chips sit far off to
+    /// the side, so their large horizontal offset excludes them.
+    private func reportChipTop(_ frame: CGRect) {
+        guard frame.minX > -60, frame.minX < 100 else { return }
+        chipTopReport?.value = frame.minY
+    }
 
     private var isSoccer: Bool { request.leagueCode != nil || request.sport.isSoccer }
 
@@ -756,6 +788,18 @@ struct GameDetailContentView: View {
                                     .scrollProgressOffset(chipStick)
                             }
                             .background(GlobalOffsetProbe(id: "gdChips", space: .named(Self.cardSpace)))
+                            // Report the chips' live global top so the presenter
+                            // can treat everything above them as a drag handle.
+                            // Only the on-screen page writes — a neighbour's
+                            // chips sit off to the side (large |minX|).
+                            .background(
+                                GeometryReader { g in
+                                    let f = g.frame(in: .global)
+                                    Color.clear
+                                        .onAppear { reportChipTop(f) }
+                                        .onChangeCompat(of: f.minY) { _ in reportChipTop(f) }
+                                }
+                            )
                             .zIndex(1)
                         }
                         tabPager

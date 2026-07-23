@@ -529,14 +529,17 @@ struct RecordingsView: View {
             } else {
                 VStack(spacing: 10) {
                     ForEach(scheduledRecordings) { recording in
-                        ScheduledRecordingRow(recording: recording)
-                            .contextMenu {
-                                Button(role: .destructive) {
-                                    manager.deleteRecording(recording)
-                                } label: {
-                                    Label("Cancel Recording", systemImage: "trash")
-                                }
+                        ScheduledRecordingRow(
+                            recording: recording,
+                            onCancel: { manager.deleteRecording(recording) }
+                        )
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                manager.deleteRecording(recording)
+                            } label: {
+                                Label("Cancel Recording", systemImage: "trash")
                             }
+                        }
                     }
                 }
             }
@@ -712,20 +715,67 @@ struct RecordingGroupCard: View {
 
 struct ScheduledRecordingRow: View {
     let recording: Recording
+    var onCancel: () -> Void = {}
+
+    // Live countdown to the scheduled start, refreshed every 30s.
+    @State private var now = Date()
+    private let ticker = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+
+    // Swipe-to-cancel: the row slides left to reveal a red Cancel action; a
+    // long pull past the threshold cancels outright.
+    @State private var dragX: CGFloat = 0
+    @State private var revealed = false
+    private let actionWidth: CGFloat = 96
+
+    private static let timeFmt: DateFormatter = {
+        let f = DateFormatter(); f.timeStyle = .short; return f
+    }()
+    private static let dayFmt: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "EEE, MMM d"; return f
+    }()
 
     var body: some View {
+        ZStack(alignment: .trailing) {
+            // Cancel action revealed behind the row.
+            Button(action: cancel) {
+                VStack(spacing: 4) {
+                    Image(systemName: "trash.fill").font(.system(size: 16, weight: .bold))
+                    Text("Cancel").font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundStyle(.white)
+                .frame(width: actionWidth)
+                .frame(maxHeight: .infinity)
+                .background(Color.red)
+            }
+            .buttonStyle(.plain)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .opacity(dragX < -4 ? 1 : 0)
+
+            rowContent
+                .offset(x: dragX)
+                .highPriorityGesture(swipe)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .onReceive(ticker) { now = $0 }
+    }
+
+    private var rowContent: some View {
         HStack(spacing: 14) {
+            // Countdown badge — mirrors the reminders row's icon block.
             ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(recording.categoryColor.opacity(0.25))
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(recording.categoryColor.opacity(0.2))
                     .frame(width: 52, height: 52)
-                Text(channelAbbrev)
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(recording.categoryColor)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(3)
-                    .minimumScaleFactor(0.6)
-                    .frame(width: 44)
+                VStack(spacing: 1) {
+                    Image(systemName: "record.circle")
+                        .font(.system(size: 15, weight: .bold))
+                    Text(countdownBadge)
+                        .font(.system(size: 9, weight: .heavy))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                }
+                .foregroundStyle(recording.categoryColor)
+                .frame(width: 46)
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -734,34 +784,78 @@ struct ScheduledRecordingRow: View {
                     .foregroundStyle(.white)
                     .lineLimit(1)
                 Text(scheduleSubtitle)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.55))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .lineLimit(1)
+                Text("\(recording.channelName) · \(durationString)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.4))
                     .lineLimit(1)
             }
 
-            Spacer()
+            Spacer(minLength: 8)
 
-            Image(systemName: "bell.fill")
+            Image(systemName: "calendar.badge.clock")
                 .font(.system(size: 17))
-                .foregroundStyle(.white.opacity(0.45))
+                .foregroundStyle(recording.categoryColor.opacity(0.8))
         }
         .padding(14)
+        .frame(maxWidth: .infinity)
         .modifier(GlassEffect(cornerRadius: 14, isSelected: false, accentColor: nil))
+        // Opaque backing so the red action never shows through the glass.
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.black.opacity(0.35)))
     }
 
-    private var channelAbbrev: String {
-        let name = recording.channelName
-        let words = name.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
-        if words.count >= 2 {
-            return words.prefix(2).map { String($0.prefix(4)).uppercased() }.joined(separator: "\n")
-        }
-        return String(name.prefix(5)).uppercased()
+    private var swipe: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onChanged { v in
+                guard abs(v.translation.width) > abs(v.translation.height) else { return }
+                let base = revealed ? -actionWidth : 0
+                dragX = min(0, max(-actionWidth - 40, base + v.translation.width))
+            }
+            .onEnded { v in
+                if v.translation.width < -(actionWidth + 20) {
+                    cancel()
+                } else if dragX < -actionWidth / 2 {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { dragX = -actionWidth }
+                    revealed = true
+                } else {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { dragX = 0 }
+                    revealed = false
+                }
+            }
+    }
+
+    private func cancel() {
+        withAnimation(.easeIn(duration: 0.2)) { dragX = -(actionWidth + 400) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { onCancel() }
+    }
+
+    /// Compact badge under the record dot: "2h", "45m", "3d", or "SOON".
+    private var countdownBadge: String {
+        let delta = recording.startTime.timeIntervalSince(now)
+        guard delta > 0 else { return "SOON" }
+        let mins = Int(delta / 60)
+        if mins < 60 { return "\(max(1, mins))m" }
+        if mins < 24 * 60 { return "\(mins / 60)h" }
+        return "\(mins / (24 * 60))d"
+    }
+
+    private var durationString: String {
+        let secs = Int(recording.endTime.timeIntervalSince(recording.startTime))
+        let h = secs / 3600, m = (secs % 3600) / 60
+        if h > 0 { return m > 0 ? "\(h)h \(m)m" : "\(h)h" }
+        return "\(max(1, m))m"
     }
 
     private var scheduleSubtitle: String {
-        let df = DateFormatter(); df.dateFormat = "EEE · h:mm a"
-        let tf = DateFormatter(); tf.dateFormat = "h:mm a"
-        return "\(df.string(from: recording.startTime)) – \(tf.string(from: recording.endTime))"
+        let cal = Calendar.current
+        let start = recording.startTime
+        let dayPrefix: String
+        if cal.isDateInToday(start) { dayPrefix = "Today" }
+        else if cal.isDateInTomorrow(start) { dayPrefix = "Tomorrow" }
+        else { dayPrefix = Self.dayFmt.string(from: start) }
+        return "\(dayPrefix) · \(Self.timeFmt.string(from: start)) – \(Self.timeFmt.string(from: recording.endTime))"
     }
 }
 
@@ -1063,6 +1157,10 @@ struct RecordingPlayerView: View {
                     showQuickSwitcher: $showQuickSwitcher
                 )
                 .ignoresSafeArea()
+                // Transparent cover, same as a live channel: while the player
+                // card is dragged down to close, the recordings list behind it
+                // shows through instead of a flat black backdrop.
+                .presentationBackground(.clear)
             } else {
                 ZStack {
                     Color.black.ignoresSafeArea()

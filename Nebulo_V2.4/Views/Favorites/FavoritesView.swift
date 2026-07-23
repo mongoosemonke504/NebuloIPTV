@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 // MARK: - Filter pills
 
@@ -1043,9 +1044,52 @@ struct FavoriteReminderRow: View {
     let onWatch: () -> Void
     let onRemove: () -> Void
 
+    // Re-render each minute so the "in 2h 14m" countdown stays honest without a
+    // per-second ticker.
+    @State private var now = Date()
+    private let minuteTick = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+
     private static let timeFmt: DateFormatter = {
-        let f = DateFormatter(); f.dateStyle = .short; f.timeStyle = .short; return f
+        let f = DateFormatter(); f.timeStyle = .short; return f
     }()
+    private static let dayFmt: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "EEE, MMM d"; return f
+    }()
+
+    /// The live/upcoming/final state as a coloured status word.
+    private var statusPill: (text: String, color: Color)? {
+        switch game.status.type.state {
+        case "in":   return ("LIVE", .red)
+        case "post": return ("FINAL", .white.opacity(0.5))
+        default:     return nil
+        }
+    }
+
+    /// Rich schedule line: exact time plus a relative countdown for upcoming
+    /// games ("Today · 7:10 PM · in 2h"), or the day for anything further out.
+    private var scheduleLine: String {
+        let date = game.gameDate
+        let cal = Calendar.current
+        switch game.status.type.state {
+        case "in":   return "Started " + Self.timeFmt.string(from: date)
+        case "post": return "Ended " + Self.dayFmt.string(from: date)
+        default: break
+        }
+        let time = Self.timeFmt.string(from: date)
+        let dayPrefix: String
+        if cal.isDateInToday(date) { dayPrefix = "Today" }
+        else if cal.isDateInTomorrow(date) { dayPrefix = "Tomorrow" }
+        else { dayPrefix = Self.dayFmt.string(from: date) }
+
+        let delta = date.timeIntervalSince(now)
+        guard delta > 0 else { return "\(dayPrefix) · \(time)" }
+        let mins = Int(delta / 60)
+        let countdown: String
+        if mins < 60 { countdown = "in \(max(1, mins))m" }
+        else if mins < 24 * 60 { countdown = "in \(mins / 60)h \(mins % 60)m" }
+        else { countdown = "in \(mins / (24 * 60))d" }
+        return "\(dayPrefix) · \(time) · \(countdown)"
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -1059,13 +1103,24 @@ struct FavoriteReminderRow: View {
                 )
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(game.shortName)
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                Text(Self.timeFmt.string(from: game.gameDate))
+                HStack(spacing: 6) {
+                    Text(game.shortName)
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    if let pill = statusPill {
+                        Text(pill.text)
+                            .font(.system(size: 9, weight: .black))
+                            .foregroundStyle(pill.color == .red ? .white : .black.opacity(0.7))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .background(Capsule().fill(pill.color == .red ? Color.red : Color.white.opacity(0.6)))
+                    }
+                }
+                Text(scheduleLine)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.6))
+                    .lineLimit(1)
             }
 
             Spacer()
@@ -1095,6 +1150,7 @@ struct FavoriteReminderRow: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
         )
+        .onReceive(minuteTick) { now = $0 }
         .contextMenu {
             Button(role: .destructive, action: onRemove) {
                 Label("Remove reminder", systemImage: "bell.slash")

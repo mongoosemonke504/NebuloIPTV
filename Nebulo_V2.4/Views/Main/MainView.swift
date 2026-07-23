@@ -3078,14 +3078,17 @@ struct LiveGameContextMenuModifier: ViewModifier {
                 Label("Add to Multi-View", systemImage: "square.grid.2x2")
             }
 
-            Button {
-                let query = "\(game.shortName) highlights"
-                if let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-                   let url = URL(string: "https://www.youtube.com/results?search_query=\(encoded)") {
-                    UIApplication.shared.open(url)
+            // Highlights only exist once the game is over.
+            if game.status.type.state == "post" {
+                Button {
+                    let query = "\(game.shortName) highlights"
+                    if let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+                       let url = URL(string: "https://www.youtube.com/results?search_query=\(encoded)") {
+                        UIApplication.shared.open(url)
+                    }
+                } label: {
+                    Label("Find Highlights", systemImage: "play.rectangle.fill")
                 }
-            } label: {
-                Label("Find Highlights", systemImage: "play.rectangle.fill")
             }
 
             Button {
