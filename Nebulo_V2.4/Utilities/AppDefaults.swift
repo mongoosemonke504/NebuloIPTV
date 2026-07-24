@@ -18,14 +18,14 @@ enum AppDefaults {
         "nebX1": 0.5, "nebY1": 0.0, "nebX2": 0.5, "nebY2": 0.5, "nebX3": 0.5, "nebY3": 1.0,
         "useCustomBackground": false, "customBackgroundBlur": 0.0,
         "glassOpacity": 0.15, "glassShade": 1.0, "featuredGlowStrength": 0.5,
-        "autoBuffer": true, "bufferTime": 10.0, "defaultPlayerEngine": "VLC",
+        "autoBuffer": true, "bufferTime": 10.0,
         "viewMode": "automatic", "showSupportPopup": true,
     ]
 
     static var snapshotKeys: [String] { Array(snapshotDefaults.keys).sorted() }
 
     private static let shippedJSON = """
-    {"autoBuffer":true,"bufferTime":10,"customAccentHex":"#FFFFFF","customBackgroundBlur":0,"defaultPlayerEngine":"VLC","featuredGlowStrength":0.5,"glassOpacity":0.15,"glassShade":1,"nebColor1":"#1A2538","nebColor2":"#11101A","nebColor3":"#1F1A24","nebX1":0.5,"nebX2":0.5,"nebX3":0.5,"nebY1":0,"nebY2":0.5,"nebY3":1,"showSupportPopup":true,"useCustomBackground":false,"viewMode":"automatic"}
+    {"autoBuffer":true,"bufferTime":10,"customAccentHex":"#FFFFFF","customBackgroundBlur":0,"featuredGlowStrength":0.5,"glassOpacity":0.15,"glassShade":1,"nebColor1":"#1A2538","nebColor2":"#11101A","nebColor3":"#1F1A24","nebX1":0.5,"nebX2":0.5,"nebX3":0.5,"nebY1":0,"nebY2":0.5,"nebY3":1,"showSupportPopup":true,"useCustomBackground":false,"viewMode":"automatic"}
     """
 
     static func register() {

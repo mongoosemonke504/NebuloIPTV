@@ -3,60 +3,9 @@ import Combine
 import UIKit
 import SwiftUI
 import MobileVLCKit
-import KSPlayer
 import AVFoundation
 import AVKit
 import MediaPlayer
-
-public class NebuloKSVideoPlayerView: IOSVideoPlayerView {
-    public var currentPlayingURL: URL?
-    var onStateChange: ((KSPlayerState) -> Void)?
-    var onTimeChange: ((TimeInterval, TimeInterval) -> Void)?
-    var onFinish: ((Error?) -> Void)?
-    
-    var allowNativeControls = false
-
-    public override func layoutSubviews() {
-        super.layoutSubviews()
-        if allowNativeControls { return }
-        func hideControls(in view: UIView) {
-            // Prevent hiding actual video layers
-            if view.layer is CAMetalLayer || view.layer is AVPlayerLayer { return }
-            let layerType = String(describing: type(of: view.layer))
-            if layerType.contains("AVPlayerLayer") || layerType.contains("Metal") { return }
-            
-            let viewType = String(describing: type(of: view))
-            // Only hide views that are clearly UI elements
-            let uiClasses = ["UILabel", "UIImageView", "UIButton", "UISlider", "UISwitch", "UIStepper"]
-            let isUIControl = uiClasses.contains(where: { viewType.contains($0) }) || 
-                               viewType.contains("Control") || 
-                               viewType.contains("Button")
-            
-            if isUIControl {
-                view.alpha = 0
-                view.isHidden = true
-                view.isUserInteractionEnabled = false
-            }
-            for sub in view.subviews { hideControls(in: sub) }
-        }
-        for sub in subviews { hideControls(in: sub) }
-    }
-
-    public override func player(layer: KSPlayerLayer, state: KSPlayerState) {
-        super.player(layer: layer, state: state)
-        onStateChange?(state)
-    }
-
-    public override func player(layer: KSPlayerLayer, currentTime: TimeInterval, totalTime: TimeInterval) {
-        super.player(layer: layer, currentTime: currentTime, totalTime: totalTime)
-        onTimeChange?(currentTime, totalTime)
-    }
-
-    public override func player(layer: KSPlayerLayer, finish error: Error?) {
-        super.player(layer: layer, finish: error)
-        onFinish?(error)
-    }
-}
 
 public class NebuloPlayerEngine: NSObject, ObservableObject {
     public static let shared = NebuloPlayerEngine()
@@ -133,60 +82,25 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     }
 
     public let renderView = PlayerRenderView()
-    public let useNativeBridge = false
-    
-    public var multiViewPlayers: [NebuloKSVideoPlayerView] = []
-    
+
     private var vlcMediaPlayer: VLCMediaPlayer = VLCMediaPlayer()
-    private var ksPlayerView = NebuloKSVideoPlayerView()
     private var pipController: AVPictureInPictureController?
 
-    private enum ActiveBackend { case none, ksplayer, vlc }
+    // VLC is the only playback backend. `.none` when nothing is loaded. (PiP
+    // uses a separate short-lived AVPlayer; see the PiP section.)
+    private enum ActiveBackend { case none, vlc }
     private var currentBackend: ActiveBackend = .none {
         didSet {
-            switch currentBackend {
-            case .ksplayer: activeBackendName = "KSPlayer"
-            case .vlc: activeBackendName = "VLC"
-            case .none: activeBackendName = "None"
-            }
+            activeBackendName = currentBackend == .vlc ? "VLC" : "None"
         }
     }
     private var isInteractionSeeking = false
     private var pendingSeekWorkItem: DispatchWorkItem?
-    private var playerConstraints: [NSLayoutConstraint] = []
     @Published public var userPaused = false
-    private var triedFallback = false
-    private var ksPlayerRetryCount = 0
     private var unexpectedPauseCount = 0
-    private let maxKSPlayerRetries = 10 
-    
+
     public private(set) var currentURL: URL?
-    
-    public func toggleBackend() {
-        guard let url = currentURL else { return }
-        
-        if currentBackend == .ksplayer {
-            
-            print("🔄 [NebuloEngine] Manually switching to VLC...")
-            ksPlayerView.pause()
-            ksPlayerView.removeFromSuperview()
-            playVLC(url: url)
-        } else if currentBackend == .vlc {
-            
-            if let streamURLString = currentURL?.absoluteString, 
-               RecordingManager.shared.recordings.contains(where: { $0.streamURL == streamURLString && $0.status == .recording }) {
-                print("⚠️ [NebuloEngine] Cannot switch to KSPlayer while recording.")
-                return
-            }
-            
-            print("🔄 [NebuloEngine] Manually switching to KSPlayer...")
-            vlcMediaPlayer.stop()
-            vlcMediaPlayer.drawable = nil
-            if attemptKSPlayerPlayback(url: url) {
-                currentBackend = .ksplayer
-            }
-        }
-    }
+
     public var onRequestTimeshiftURL: ((Date) async -> URL?)?
     private var lastPauseDate: Date?
     
@@ -239,8 +153,6 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         renderView.preservesSuperviewLayoutMargins = false
         // Fill overflows the container by design — never paint outside it.
         renderView.clipsToBounds = true
-        setupKSPlayer()
-        setupMultiViewPlayers()
         setupVLC()
         setupAudioSession()
         setupRemoteTransportControls()
@@ -294,22 +206,6 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                 side.play()
             }
         }
-    }
-    
-    private func setupMultiViewPlayers() {
-        ksPlayerView.allowNativeControls = false
-        ksPlayerView.backgroundColor = .black
-        multiViewPlayers.append(ksPlayerView)
-        for _ in 1..<4 {
-            let player = NebuloKSVideoPlayerView() 
-            player.allowNativeControls = false
-            player.backgroundColor = .black
-            multiViewPlayers.append(player)
-        }
-    }
-    
-    public func pauseAllMultiViewPlayers() {
-        for player in multiViewPlayers { player.pause() }
     }
     
     private func setupRemoteTransportControls() {
@@ -405,36 +301,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     }
     
     private func setupVLC() { vlcMediaPlayer.delegate = self }
-    
-    private func setupKSPlayer() {
-        ksPlayerView.onStateChange = { [weak self] state in self?.handleKSPlayerState(state) }
-        ksPlayerView.onTimeChange = { [weak self] current, total in
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                if self.isInteractionSeeking { return }
-                if current > 0 && current != self.currentTime {
-                    if self.isBuffering { self.isBuffering = false }
-                    if !self.isPlaying { self.isPlaying = true }
-                }
-                if !self.externalTimeManagement {
-                    self.currentTime = current
-                    self.duration = total
-                }
 
-                self.updatePlaybackState()
-            }
-        }
-        ksPlayerView.onFinish = { [weak self] error in if error != nil { self?.handleKSPlayerError() } }
-        
-        KSOptions.isAutoPlay = true
-        KSOptions.isSecondOpen = true 
-        KSOptions.maxBufferDuration = 100.0 
-        KSOptions.preferredForwardBufferDuration = 3.0
-        KSOptions.isAccurateSeek = false
-        
-        ksPlayerView.allowNativeControls = useNativeBridge
-    }
-    
     private func setupAudioSession() {
         // NON-mixable on purpose: a session with .mixWithOthers is treated
         // as secondary audio and never becomes the system's "Now Playing"
@@ -448,59 +315,37 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         setupAudioSession()
         if let current = currentURL, current == url, (isPlaying || isBuffering) { return }
         self.currentURL = url
-        self.ksPlayerRetryCount = 0
         self.unexpectedPauseCount = 0
         stop()
         self.isBuffering = true
         self.userPaused = false
         self.playbackFailed = false
-        self.triedFallback = false
         // Clear per-stream audio-track list so the next stream re-detects fresh tracks
         self.availableAudioTracks = []
         self.currentAudioTrack = nil
-        
+
         self.lastProgressValue = -1
         self.lastProgressCheckTime = Date()
-        
-        // Local file routing:
-        //  • .mp4  → KSPlayer (AVPlayer). MP4 has a moov atom seek table so
-        //            scrubbing is instant and accurate. No crashes.
-        //  • .ts   → VLC. Concatenated TS files lack a seek index and KSPlayer's
-        //            FFmpeg backend (MEPlayerItem) crashes with EXC_BAD_ACCESS when
-        //            the recording file handle is closed while it's still open.
-        //            VLC handles both conditions gracefully.
-        if url.isFileURL {
-            if url.pathExtension.lowercased() == "mp4" {
-                _ = attemptKSPlayerPlayback(url: url)
-                currentBackend = .ksplayer
-            } else {
-                playVLC(url: url)
-                // VLC often reports duration = -1 for concatenated .ts files until it
-                // has scanned to the end. Probe via AVURLAsset (which reads the TS
-                // container header) so the scrub bar has a valid total-time immediately.
-                probeAndSetDuration(from: url)
-            }
-            return
-        }
-        
-        
-        let defaultEngine = UserDefaults.standard.string(forKey: "defaultPlayerEngine") ?? "VLC"
-        if defaultEngine == "KSPlayer" {
-            attemptKSPlayerPlayback(url: url); currentBackend = .ksplayer; return
-        }
-        
+
+        // VLC plays everything — live streams and local recordings (.ts and the
+        // remuxed .mp4 alike). For local files, probe the duration via AVURLAsset
+        // since VLC often reports -1 for a concatenated .ts until it has scanned
+        // to the end.
         playVLC(url: url)
+        if url.isFileURL {
+            probeAndSetDuration(from: url)
+        }
     }
-    
+
     public func pause() {
         userPaused = true
         lastPauseDate = Date()
         if currentBackend == .vlc {
             if vlcMediaPlayer.isPlaying { vlcMediaPlayer.pause() }
             isPlaying = false
-        } else if currentBackend == .ksplayer { ksPlayerView.pause() }
+        }
     }
-    
+
     public func resume() {
          setupAudioSession()
          userPaused = false 
@@ -520,14 +365,10 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     }
     
     private func standardResume() {
-          if currentBackend == .vlc {
-             if !vlcMediaPlayer.isPlaying { vlcMediaPlayer.play() }
-             isPlaying = true
-         } else if currentBackend == .ksplayer {
-             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                 self.ksPlayerView.play()
-             }
-         }
+        if currentBackend == .vlc {
+            if !vlcMediaPlayer.isPlaying { vlcMediaPlayer.play() }
+            isPlaying = true
+        }
     }
     
     
@@ -556,36 +397,10 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     
     private func handleStuckBuffer() {
         guard let url = currentURL, !userPaused else { return }
-        print("🚨 [NebuloEngine] Buffer stuck for >20s or playback stalled.")
+        print("🚨 [NebuloEngine] Buffer stuck for >20s or playback stalled. Reloading VLC...")
         stopBufferWatchdog()
-        
-        if currentBackend == .ksplayer {
-            if ksPlayerRetryCount < maxKSPlayerRetries {
-                print("⚠️ [NebuloEngine] KSPlayer stalled. Reloading...")
-                ksPlayerRetryCount += 1
-                _ = attemptKSPlayerPlayback(url: url)
-            } else {
-                print("⚠️ [NebuloEngine] KSPlayer unstable. Falling back to VLC...")
-                let savedTime = currentTime
-                
-                DispatchQueue.main.async {
-                    self.ksPlayerView.pause()
-                    self.ksPlayerView.removeFromSuperview()
-                    
-                    self.playVLC(url: url)
-                    
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                        if self.currentBackend == .vlc {
-                            self.vlcMediaPlayer.time = VLCTime(int: Int32(savedTime * 1000))
-                        }
-                    }
-                }
-            }
-        } else {
-            
-            DispatchQueue.main.async {
-                self.play(url: url)
-            }
+        DispatchQueue.main.async {
+            self.play(url: url)
         }
     }
     
@@ -599,7 +414,6 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         vlcSuspendedForPiP = false
         if !isPiPSessionActive { teardownPiPPlayer() }
         if currentBackend == .vlc { vlcMediaPlayer.stop(); vlcMediaPlayer.drawable = nil }
-        else if currentBackend == .ksplayer { ksPlayerView.pause(); ksPlayerView.removeFromSuperview() }
         currentBackend = .none
         isPlaying = false; isBuffering = false; stopTicker(); currentTime = 0; duration = 0
         // A closed stream must not linger as "playing" on the Lock Screen /
@@ -631,8 +445,6 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                     ? (time + self.externalTimeOffset)
                     : time
                 self.vlcMediaPlayer.time = VLCTime(int: Int32(targetSec * 1000))
-            } else if self.currentBackend == .ksplayer {
-                self.ksPlayerView.seek(time: TimeInterval(time), completion: { _ in })
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.isInteractionSeeking = false }
         }
@@ -657,51 +469,9 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         }
     }
     
-    private func attemptKSPlayerPlayback(url: URL) -> Bool {
-        DispatchQueue.main.async { [weak self] in
-             guard let self = self else { return }
-            
-            
-            self.ksPlayerView.pause()
-            self.ksPlayerView.removeFromSuperview()
-            
-            let playerView = self.ksPlayerView
-            playerView.backgroundColor = UIColor.black
-            playerView.insetsLayoutMarginsFromSafeArea = false
-            playerView.preservesSuperviewLayoutMargins = false
-            
-            self.renderView.addSubview(playerView)
-            playerView.translatesAutoresizingMaskIntoConstraints = false
-            
-            
-            if !self.playerConstraints.isEmpty { 
-                NSLayoutConstraint.deactivate(self.playerConstraints)
-                self.playerConstraints.removeAll() 
-            }
-            
-            let newConstraints = [
-                playerView.topAnchor.constraint(equalTo: self.renderView.topAnchor),
-                playerView.bottomAnchor.constraint(equalTo: self.renderView.bottomAnchor),
-                playerView.leadingAnchor.constraint(equalTo: self.renderView.leadingAnchor),
-                playerView.trailingAnchor.constraint(equalTo: self.renderView.trailingAnchor)
-            ]
-            NSLayoutConstraint.activate(newConstraints)
-            self.playerConstraints = newConstraints
-            
-            
-            let resource = KSPlayerResource(url: url)
-            self.ksPlayerView.set(resource: resource)
-            self.ksPlayerView.currentPlayingURL = url
-            self.applyAspectRatio(self.currentAspectRatio)
-            
-        }
-        return true
-    }
-    
     private func playVLC(url: URL) {
         currentBackend = .vlc
-        ksPlayerView.removeFromSuperview()
-        
+
         DispatchQueue.main.async {
             self.renderView.isHidden = false
             self.renderView.alpha = 1.0
@@ -855,99 +625,13 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                     self.currentAudioTrack = match
                 }
             }
-        } else if currentBackend == .ksplayer {
+        }
+    }
 
-            if let player = ksPlayerView.playerLayer?.player {
-                let tracks = player.tracks(mediaType: AVMediaType.subtitle)
-                if !tracks.isEmpty && availableSubtitles.count != tracks.count {
-                    var subs: [VideoSubtitle] = []
-                    for (i, track) in tracks.enumerated() {
-                        subs.append(VideoSubtitle(id: "ks_\(i)", name: track.name, index: i))
-                    }
-                    self.availableSubtitles = subs
-                }
-                // Audio tracks (KSPlayer)
-                let audioTracks = player.tracks(mediaType: AVMediaType.audio)
-                if !audioTracks.isEmpty && availableAudioTracks.count != audioTracks.count {
-                    var tracks: [VideoAudioTrack] = []
-                    for (i, t) in audioTracks.enumerated() {
-                        tracks.append(VideoAudioTrack(id: "ks_\(i)", name: t.name, index: i))
-                    }
-                    self.availableAudioTracks = tracks
-                }
-                if currentAudioTrack == nil, let first = availableAudioTracks.first {
-                    self.currentAudioTrack = first
-                }
-            }
-        }
-    }
-    
-    private func handleKSPlayerState(_ state: KSPlayerState) {
-        DispatchQueue.main.async {
-            switch state {
-            case .buffering, .preparing: self.isBuffering = true
-            case .error: self.isBuffering = false; self.handleKSPlayerError()
-            case .paused:
-                self.isBuffering = false
-                if !self.userPaused {
-                    self.unexpectedPauseCount += 1
-                    if self.unexpectedPauseCount > 5 {
-                        print("🚨 [NebuloEngine] KSPlayer stuck in pause loop. Performing hard reload...")
-                        self.unexpectedPauseCount = 0
-                        self.handleKSPlayerError()
-                    } else {
-                        print("⚠️ [NebuloEngine] KSPlayer paused unexpectedly (\(self.unexpectedPauseCount)). Attempting auto-resume...")
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                            if !self.userPaused { self.resume() }
-                        }
-                    }
-                } else {
-                    self.isPlaying = false
-                    self.unexpectedPauseCount = 0
-                }
-            case .readyToPlay:
-                self.isBuffering = false
-                self.isPlaying = true
-                self.ksPlayerRetryCount = 0
-                self.unexpectedPauseCount = 0
-
-                self.applyAspectRatio(self.currentAspectRatio)
-            default: self.isBuffering = false; self.isPlaying = true
-            }
-        }
-    }
-    
-    private func handleKSPlayerError() {
-        guard currentBackend == .ksplayer, let url = currentURL else { return }
-        
-        if ksPlayerRetryCount < maxKSPlayerRetries {
-            ksPlayerRetryCount += 1
-            print("⚠️ [NebuloEngine] KSPlayer error/stall, performing hard reload (\(ksPlayerRetryCount)/\(maxKSPlayerRetries))...")
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-                guard let self = self, self.currentBackend == .ksplayer else { return }
-                
-                _ = self.attemptKSPlayerPlayback(url: url)
-            }
-        } else {
-            print("❌ [NebuloEngine] KSPlayer failed after \(maxKSPlayerRetries) retries.")
-            self.playbackFailed = true
-            self.ksPlayerView.pause()
-        }
-    }
-    
     public func selectSubtitle(_ subtitle: VideoSubtitle) {
         currentSubtitle = subtitle
         if currentBackend == .vlc {
             vlcMediaPlayer.currentVideoSubTitleIndex = Int32(subtitle.index)
-        } else if currentBackend == .ksplayer {
-            if let player = ksPlayerView.playerLayer?.player {
-                let tracks = player.tracks(mediaType: AVMediaType.subtitle)
-                if subtitle.index < tracks.count {
-                    let selectedTrack = tracks[subtitle.index]
-                    player.select(track: selectedTrack)
-                }
-            }
         }
     }
 
@@ -955,14 +639,6 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         currentAudioTrack = track
         if currentBackend == .vlc {
             vlcMediaPlayer.currentAudioTrackIndex = Int32(track.index)
-        } else if currentBackend == .ksplayer {
-            if let player = ksPlayerView.playerLayer?.player {
-                let tracks = player.tracks(mediaType: AVMediaType.audio)
-                if track.index < tracks.count {
-                    let selectedTrack = tracks[track.index]
-                    player.select(track: selectedTrack)
-                }
-            }
         }
     }
     
@@ -1164,11 +840,6 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     /// as it is.
     public func enablePictureInPicture() {
         guard AVPictureInPictureController.isPictureInPictureSupported() else { return }
-
-        if currentBackend == .ksplayer {
-            startSystemPiP()
-            return
-        }
         guard currentBackend == .vlc else { return }
 
         if let controller = pipController, let side = pipAVPlayer, pipStatusObservation == nil {
@@ -1204,28 +875,6 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         pipController = nil
     }
 
-    /// Finds the AVPlayerLayer inside KSPlayer's view tree (it's nested a
-    /// few layers deep, never the root layer) and starts PiP on it.
-    private func startSystemPiP() {
-        func findPlayerLayer(_ layer: CALayer) -> AVPlayerLayer? {
-            if let player = layer as? AVPlayerLayer { return player }
-            for sub in layer.sublayers ?? [] {
-                if let found = findPlayerLayer(sub) { return found }
-            }
-            return nil
-        }
-        guard let avPlayerLayer = findPlayerLayer(ksPlayerView.layer) else {
-            print("⚠️ [NebuloEngine] No AVPlayerLayer available for PiP (non-AVPlayer track).")
-            return
-        }
-        if pipController?.isPictureInPictureActive ?? false {
-            pipController?.stopPictureInPicture()
-        }
-        let controller = AVPictureInPictureController(playerLayer: avPlayerLayer)
-        controller?.delegate = self
-        self.pipController = controller
-        controller?.startPictureInPicture()
-    }
 
     private func applyAspectRatio(_ ratio: VideoAspectRatio) {
         // Fill/Stretch read the container's live bounds — main thread only.
@@ -1278,112 +927,6 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                     vlcMediaPlayer.videoCropGeometry = UnsafeMutablePointer<Int8>(mutating: ptr.baseAddress)
                 }
             }
-        } else if currentBackend == .ksplayer {
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                
-                
-                if self.ksPlayerView.superview != self.renderView {
-                    return
-                }
-                
-                NSLayoutConstraint.deactivate(self.playerConstraints); self.playerConstraints.removeAll()
-                let view = self.ksPlayerView; let container = self.renderView; var newConstraints: [NSLayoutConstraint] = []; 
-                
-                var gravityString = AVLayerVideoGravity.resizeAspect
-                
-                switch ratio {
-                case .fill:
-                    gravityString = .resizeAspectFill
-                    newConstraints = [
-                        view.topAnchor.constraint(equalTo: container.topAnchor),
-                        view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-                        view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-                        view.trailingAnchor.constraint(equalTo: container.trailingAnchor)
-                    ]
-                case .default: 
-                    gravityString = .resizeAspect
-                    newConstraints = [
-                        view.topAnchor.constraint(equalTo: container.topAnchor),
-                        view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-                        view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-                        view.trailingAnchor.constraint(equalTo: container.trailingAnchor)
-                    ]
-                case .sixteenNine:  
-                    gravityString = .resize
-                    let aspect = view.widthAnchor.constraint(equalTo: view.heightAnchor, multiplier: 16/9)
-                    aspect.priority = .required
-                    
-                    newConstraints = [
-                        view.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-                        view.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-                        view.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor),
-                        view.heightAnchor.constraint(lessThanOrEqualTo: container.heightAnchor),
-                        aspect
-                    ]
-                    
-                    
-                    let wMax = view.widthAnchor.constraint(equalTo: container.widthAnchor); wMax.priority = .defaultHigh
-                    let hMax = view.heightAnchor.constraint(equalTo: container.heightAnchor); hMax.priority = .defaultHigh
-                    newConstraints.append(contentsOf: [wMax, hMax])
-                    
-                case .fourThree:  
-                    gravityString = .resize
-                    let aspect = view.widthAnchor.constraint(equalTo: view.heightAnchor, multiplier: 4/3)
-                    aspect.priority = .required
-                    
-                    newConstraints = [
-                        view.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-                        view.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-                        view.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor),
-                        view.heightAnchor.constraint(lessThanOrEqualTo: container.heightAnchor),
-                        aspect
-                    ]
-                    
-                    let wMax = view.widthAnchor.constraint(equalTo: container.widthAnchor); wMax.priority = .defaultHigh
-                    let hMax = view.heightAnchor.constraint(equalTo: container.heightAnchor); hMax.priority = .defaultHigh
-                    newConstraints.append(contentsOf: [wMax, hMax])
-
-                case .stretch:
-                     // Full-bleed with distortion: pin every edge and let
-                     // the layer resize the frame into the container.
-                     gravityString = .resize
-                     newConstraints = [
-                         view.topAnchor.constraint(equalTo: container.topAnchor),
-                         view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-                         view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-                         view.trailingAnchor.constraint(equalTo: container.trailingAnchor)
-                     ]
-                }
-                
-                
-                func setGravity(_ gravity: AVLayerVideoGravity, on view: UIView) {
-                    if let layer = view.layer as? AVPlayerLayer { 
-                        layer.videoGravity = gravity
-                    } else {
-                        
-                         func findLayer(in layers: [CALayer]) -> AVPlayerLayer? {
-                            for layer in layers {
-                                if let pLayer = layer as? AVPlayerLayer { return pLayer }
-                                if let sub = layer.sublayers, let found = findLayer(in: sub) { return found }
-                            }
-                            return nil
-                        }
-                        if let sublayers = view.layer.sublayers, let playerLayer = findLayer(in: sublayers) {
-                             playerLayer.videoGravity = gravity
-                        }
-                    }
-                }
-                
-                setGravity(gravityString, on: view)
-                
-                NSLayoutConstraint.activate(newConstraints)
-                self.playerConstraints = newConstraints
-                
-                
-                container.setNeedsLayout()
-                container.layoutIfNeeded()
-            }
         }
     }
 }
@@ -1402,7 +945,9 @@ extension NebuloPlayerEngine: VLCMediaPlayerDelegate {
         case .error:
             self.isBuffering = false
             print("❌ [NebuloEngine] VLC Error")
-            if triedFallback || currentURL?.isFileURL == true {
+            // A local recording that errors has genuinely failed; a live
+            // stream error gets one reload attempt via the buffer recovery.
+            if currentURL?.isFileURL == true {
                 self.playbackFailed = true
             } else {
                 handleStuckBuffer()

@@ -1,6 +1,5 @@
 import SwiftUI
 import Combine
-import KSPlayer
 
 struct CustomVideoPlayerView: SwiftUI.View {
     let channel: StreamChannel
@@ -658,7 +657,6 @@ struct CustomVideoPlayerView: SwiftUI.View {
     }
     
     func setupPlayer() {
-        KSOptions.isAutoPlay = true
         let activeChannel = currentChannel ?? channel
         Task {
 

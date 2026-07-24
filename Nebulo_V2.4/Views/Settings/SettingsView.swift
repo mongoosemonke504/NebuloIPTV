@@ -216,26 +216,12 @@ struct AppearanceCard: View {
 struct PlaybackCard: View {
     @AppStorage("autoBuffer") private var autoBuffer = true
     @AppStorage("bufferTime") private var bufferTime = 10.0
-    @AppStorage("defaultPlayerEngine") private var defaultPlayerEngine = "VLC"
     @AppStorage("customAccentHex") private var customAccentHex = "#FFFFFF"
     @ObservedObject var viewModel: ChannelViewModel
-    
+
     var body: some View {
         SettingsCard {
             VStack(spacing: 16) {
-                HStack {
-                    Text("Default Player").font(.body).foregroundStyle(.primary)
-                    Spacer()
-                    Picker("Default Player", selection: $defaultPlayerEngine) {
-                        Text("KSPlayer").tag("KSPlayer")
-                        Text("VLC").tag("VLC")
-                    }
-                    .pickerStyle(.menu)
-                    .tint(.white.opacity(0.7))
-                }
-                
-                Divider().background(Color.white.opacity(0.1))
-                
                 SettingsToggle(title: "Haptic Feedback", isOn: $viewModel.hapticsEnabled)
                 
                 Divider().background(Color.white.opacity(0.1))

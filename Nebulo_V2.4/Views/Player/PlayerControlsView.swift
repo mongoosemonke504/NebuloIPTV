@@ -172,24 +172,6 @@ struct PlayerControlsView: View {
                                                 .foregroundStyle(.primary)
                                                 .lineLimit(1)
 
-
-                                            Button(action: {
-                                                if !isRecording {
-                                                    ChannelViewModel.shared.triggerSelectionHaptic()
-                                                    playerManager.toggleBackend()
-                                                }
-                                            }) {
-                                                Text(playerManager.activeBackendName)
-                                                    .font(.system(size: 9, weight: .black))
-                                                    .foregroundColor(.white.opacity(isRecording ? 0.3 : 0.6))
-                                                    .padding(.horizontal, 5)
-                                                    .padding(.vertical, 1)
-                                                    .background(Color.white.opacity(0.12))
-                                                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                                            }
-                                            .buttonStyle(.plain)
-                                            .disabled(isRecording)
-
                                             Spacer()
                                         }
 

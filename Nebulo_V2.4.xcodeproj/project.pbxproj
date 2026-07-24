@@ -9,7 +9,6 @@
 /* Begin PBXBuildFile section */
 		A1B2C3D4000000000000000C /* NebuloWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000001 /* NebuloWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		E165D43E2F1070EA00037231 /* VLCKitSPM in Frameworks */ = {isa = PBXBuildFile; productRef = E165D43D2F1070EA00037231 /* VLCKitSPM */; };
-		E165D4412F1070FE00037231 /* KSPlayer in Frameworks */ = {isa = PBXBuildFile; productRef = E165D4402F1070FE00037231 /* KSPlayer */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -80,7 +79,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				E165D43E2F1070EA00037231 /* VLCKitSPM in Frameworks */,
-				E165D4412F1070FE00037231 /* KSPlayer in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -151,7 +149,6 @@
 			name = Nebulo_V2.4;
 			packageProductDependencies = (
 				E165D43D2F1070EA00037231 /* VLCKitSPM */,
-				E165D4402F1070FE00037231 /* KSPlayer */,
 			);
 			productName = Nebulo_V2.4;
 			productReference = E1F2B43F2F0B9631004D9D5D /* Nebulo_V2.4.app */;
@@ -190,7 +187,6 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				E165D43C2F1070EA00037231 /* XCRemoteSwiftPackageReference "vlckit-spm" */,
-				E165D43F2F1070FE00037231 /* XCRemoteSwiftPackageReference "KSPlayer" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E1F2B4402F0B9631004D9D5D /* Products */;
@@ -556,14 +552,6 @@
 				kind = branch;
 			};
 		};
-		E165D43F2F1070FE00037231 /* XCRemoteSwiftPackageReference "KSPlayer" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/kingslay/KSPlayer";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.3.4;
-			};
-		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -571,11 +559,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E165D43C2F1070EA00037231 /* XCRemoteSwiftPackageReference "vlckit-spm" */;
 			productName = VLCKitSPM;
-		};
-		E165D4402F1070FE00037231 /* KSPlayer */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = E165D43F2F1070FE00037231 /* XCRemoteSwiftPackageReference "KSPlayer" */;
-			productName = KSPlayer;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

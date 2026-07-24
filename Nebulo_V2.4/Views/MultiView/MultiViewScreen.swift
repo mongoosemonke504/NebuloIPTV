@@ -1,5 +1,4 @@
 import SwiftUI
-import KSPlayer
 import MobileVLCKit
 import AVFoundation
 import AVKit
@@ -334,6 +333,7 @@ struct MultiViewScreen: View {
                             if let idx = viewModel.multiViewSlots.firstIndex(where: { $0?.id == channel.id }) {
                                 focusedIndex = idx
                             }
+                            
                         }
                         closeFullSearch()
                     },
@@ -1859,38 +1859,31 @@ struct SmartGridPlayer: UIViewRepresentable {
 
 // MARK: - Multi-View Player Pool
 
-/// Per-URL store of `NebuloKSVideoPlayerView` / `VLCMediaPlayer` instances
-/// that survives SwiftUI view rebuilds. Each `SmartGridPlayer` defers to
-/// this pool — when SwiftUI rebuilds (orientation flip, layout switch,
-/// count change), the pool detects an existing entry and re-parents the
-/// already-playing player into the new container UIView instead of
-/// re-creating it. Streams keep playing without reloading.
+/// Per-URL store of `VLCMediaPlayer` instances that survives SwiftUI view
+/// rebuilds. Each `SmartGridPlayer` defers to this pool — when SwiftUI rebuilds
+/// (orientation flip, layout switch, count change), the pool re-parents the
+/// already-playing player into the new container UIView instead of re-creating
+/// it, so streams keep playing without reloading.
 ///
 /// Lifecycle:
 ///   • `mount(url:, in:, isMuted:, isPlaying:)` — get-or-create, re-parent,
 ///     apply mute/play.
-///   • `reconcile(activeURLs:)` — release entries for URLs not currently in
-///     any multi-view slot.
+///   • `reconcile(activeURLs:)` — release entries for URLs not in any slot.
 ///   • `releaseAll()` — tear everything down (called on multi-view close).
 @MainActor
 final class MultiViewPlayerPool {
     static let shared = MultiViewPlayerPool()
     private init() {}
 
-    /// Per-URL playback state. Reference type so it can be captured weakly
-    /// by KSPlayer callbacks and the watchdog timer.
+    /// Per-URL playback state. Reference type so the watchdog timer can capture
+    /// it weakly.
     fileprivate final class Entry {
         let url: URL
-        var ksPlayer: NebuloKSVideoPlayerView?
         var vlcPlayer: VLCMediaPlayer?
-        var isVLCFallback = false
-        var retryCount = 0
         var wantsPlaying = true
-        /// Latest desired mute state. Stored on the entry so the deferred
-        /// play() callbacks and the watchdog can re-apply it after the
-        /// AVPlayer becomes ready — otherwise the very first applyMute call
-        /// would silently no-op (avPlayer == nil at mount time) and the
-        /// stream would start playing audio even when the card is muted.
+        /// Latest desired mute state, re-applied by the watchdog once VLC's
+        /// audio output exists (a mute set before the aout is created is
+        /// silently dropped).
         var wantsMuted: Bool = true
         var watchdog: Timer?
 
@@ -1899,13 +1892,11 @@ final class MultiViewPlayerPool {
 
     private var entries: [String: Entry] = [:]
 
-    /// Configures audio session + KSOptions exactly once per app launch
-    /// so we don't re-apply them on every mount.
+    /// Configures the audio session once per app launch.
     private var didConfigureGlobals = false
 
     /// Creates the player for `url` if needed, then re-parents it to
-    /// `container`. Safe to call repeatedly with the same URL — the pool
-    /// only spins up one player per URL.
+    /// `container`. Safe to call repeatedly with the same URL.
     func mount(url: URL, in container: UIView, isMuted: Bool, isPlaying: Bool) {
         configureGlobalsIfNeeded()
 
@@ -1916,7 +1907,7 @@ final class MultiViewPlayerPool {
         } else {
             entry = Entry(url: url)
             entries[key] = entry
-            startKSPlayer(for: entry)
+            startVLCPlayer(for: entry)
             startWatchdog(for: entry)
         }
 
@@ -1926,9 +1917,7 @@ final class MultiViewPlayerPool {
         applyMuteAndPlay(entry: entry, isMuted: isMuted, isPlaying: isPlaying)
     }
 
-    /// Releases every entry whose URL isn't in `activeURLs`. Call from
-    /// MultiViewScreen whenever `multiViewSlots` changes so we don't
-    /// keep streaming channels the user removed.
+    /// Releases every entry whose URL isn't in `activeURLs`.
     func reconcile(activeURLs: Set<String>) {
         for key in Array(entries.keys) where !activeURLs.contains(key) {
             if let entry = entries.removeValue(forKey: key) {
@@ -1950,203 +1939,58 @@ final class MultiViewPlayerPool {
         guard !didConfigureGlobals else { return }
         didConfigureGlobals = true
 
-        // `.mixWithOthers` lets all 4 streams hold AVPlayer instances
-        // simultaneously without auto-pausing each other.
+        // `.mixWithOthers` lets all 4 streams hold players simultaneously
+        // without auto-pausing each other.
         try? AVAudioSession.sharedInstance().setCategory(
             .playback,
             mode: .moviePlayback,
             options: [.allowAirPlay, .allowBluetoothA2DP, .mixWithOthers]
         )
         try? AVAudioSession.sharedInstance().setActive(true, options: .notifyOthersOnDeactivation)
-
-        KSOptions.isAutoPlay = true
-        KSOptions.isSecondOpen = true
     }
 
-    private func startKSPlayer(for entry: Entry) {
-        let player = NebuloKSVideoPlayerView()
-        player.translatesAutoresizingMaskIntoConstraints = false
-        player.backgroundColor = .black
-
-        let options = KSOptions()
-        let resource = KSPlayerResource(url: entry.url, options: options)
-        player.set(resource: resource)
-        // Belt-and-suspenders: explicit play() even with isAutoPlay = true.
+    private func startVLCPlayer(for entry: Entry) {
+        let player = VLCMediaPlayer()
+        let media = VLCMedia(url: entry.url)
+        media.addOptions([
+            "network-caching": 1500,
+            "clock-jitter": 0,
+            "clock-synchro": 0,
+            "avcodec-hw": "any",
+            "videotoolbox": 1
+        ])
+        player.media = media
         player.play()
-
-        // Capture entry weakly so we can self-reference state without
-        // creating a retain cycle; the pool's dictionary owns the strong
-        // reference and lives as long as the URL is in any slot.
-        player.onStateChange = { [weak entry] state in
-            guard let entry = entry else { return }
-            if state == .error {
-                Task { @MainActor in MultiViewPlayerPool.shared.handleKSFailure(for: entry) }
-            } else if state == .paused, entry.wantsPlaying {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak entry] in
-                    guard let entry = entry, entry.wantsPlaying else { return }
-                    entry.ksPlayer?.play()
-                }
-            }
-        }
-        player.onFinish = { [weak entry] error in
-            guard let entry = entry else { return }
-            if error != nil {
-                Task { @MainActor in MultiViewPlayerPool.shared.handleKSFailure(for: entry) }
-            } else if entry.wantsPlaying {
-                if let p = entry.ksPlayer {
-                    p.set(resource: KSPlayerResource(url: entry.url))
-                    p.play()
-                }
-            }
-        }
-        entry.ksPlayer = player
+        entry.vlcPlayer = player
     }
 
     private func startWatchdog(for entry: Entry) {
         entry.watchdog?.invalidate()
-        // Faster (0.3 s) watchdog to recover stalled streams quickly. With 4
-        // simultaneous players competing for bandwidth, individual streams
-        // pause more often, so we re-kick them aggressively. If the AVPlayer
-        // hasn't been initialised yet (KSPlayer still resolving the
-        // resource), we still call `play()` on the KSPlayer wrapper —
-        // play() is idempotent and queues the request until the player is
-        // ready.
-        //
-        // The watchdog also reaffirms the desired mute state every tick.
-        // applyMuteAndPlay only sets isMuted when the AVPlayer is ready, so
-        // for newly-mounted streams the very first mute call is a no-op
-        // and the stream would otherwise start playing audio in the
-        // background (every card audible at once). Reaffirming here means
-        // the right mute lands as soon as the AVPlayer exists.
+        // With 4 simultaneous streams competing for bandwidth, individual
+        // streams pause more often, so re-kick them. Also re-affirm the mute
+        // state every tick — the first applyMute can no-op before the audio
+        // output exists, which would otherwise leave every card audible.
         entry.watchdog = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak entry] _ in
-            guard let entry = entry, entry.wantsPlaying else { return }
-            if entry.isVLCFallback {
-                if let vp = entry.vlcPlayer {
-                    if let audio = vp.audio { audio.volume = entry.wantsMuted ? 0 : 100 }
-                    if !vp.isPlaying { vp.play() }
-                }
-            } else if let player = entry.ksPlayer {
-                if let avPlayer = player.playerLayer?.player {
-                    avPlayer.isMuted = entry.wantsMuted
-                    if let realPlayer = avPlayer as? AVPlayer {
-                        realPlayer.volume = entry.wantsMuted ? 0 : 1.0
-                    }
-                    if !avPlayer.isPlaying { player.play() }
-                } else {
-                    // AVPlayer not ready yet — keep kicking the wrapper.
-                    player.play()
-                }
-            }
+            guard let entry = entry, entry.wantsPlaying, let vp = entry.vlcPlayer else { return }
+            if let audio = vp.audio { audio.volume = entry.wantsMuted ? 0 : 100 }
+            if !vp.isPlaying { vp.play() }
         }
     }
 
     private func attachPlayerView(of entry: Entry, to container: UIView) {
-        if entry.isVLCFallback {
-            entry.vlcPlayer?.drawable = container
-            return
-        }
-        guard let player = entry.ksPlayer else { return }
-        // No-op if already parented to this container.
-        if player.superview === container { return }
-        player.removeFromSuperview()
-        container.addSubview(player)
-        NSLayoutConstraint.activate([
-            player.topAnchor.constraint(equalTo: container.topAnchor),
-            player.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            player.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            player.trailingAnchor.constraint(equalTo: container.trailingAnchor)
-        ])
-        container.layoutIfNeeded()
-        // Re-parenting triggers KSPlayer UIView lifecycle hooks that can
-        // internally pause the stream. Fire play() at several short
-        // intervals so playback resumes regardless of which hook runs or
-        // how long the KSPlayer state machine takes to settle. Reaffirm
-        // the desired mute state in the same callbacks so the AVPlayer
-        // never has a brief unmuted window between becoming ready and the
-        // next watchdog tick.
-        guard entry.wantsPlaying else { return }
-        for delay in [0.05, 0.15, 0.4, 0.9] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak entry] in
-                guard let e = entry, e.wantsPlaying, !e.isVLCFallback else { return }
-                if let av = e.ksPlayer?.playerLayer?.player {
-                    av.isMuted = e.wantsMuted
-                    if let realPlayer = av as? AVPlayer {
-                        realPlayer.volume = e.wantsMuted ? 0 : 1.0
-                    }
-                    if !av.isPlaying { e.ksPlayer?.play() }
-                }
-            }
-        }
+        entry.vlcPlayer?.drawable = container
     }
 
     private func applyMuteAndPlay(entry: Entry, isMuted: Bool, isPlaying: Bool) {
-        if entry.isVLCFallback {
-            guard let player = entry.vlcPlayer else { return }
-            if let audio = player.audio { audio.volume = isMuted ? 0 : 100 }
-            if isPlaying, !player.isPlaying { player.play() }
-            else if !isPlaying, player.isPlaying { player.pause() }
-            return
-        }
-        guard let player = entry.ksPlayer else { return }
-        // Apply mute/volume only when AVPlayer is ready — otherwise the
-        // setting will be applied by the deferred play() calls in
-        // attachPlayerView once the player initialises.
-        if let avPlayer = player.playerLayer?.player {
-            avPlayer.isMuted = isMuted
-            if let realPlayer = avPlayer as? AVPlayer { realPlayer.volume = isMuted ? 0 : 1.0 }
-        }
-        // Always issue play()/pause() on the KSPlayer wrapper directly. These
-        // calls are idempotent and queue the request until the AVPlayer is
-        // ready — required for streams still resolving their resource when
-        // the cell first appears (common with 3-4 simultaneous streams).
-        if isPlaying {
-            player.play()
-        } else {
-            player.pause()
-        }
-    }
-
-    fileprivate func handleKSFailure(for entry: Entry) {
-        if entry.retryCount < 1 {
-            entry.retryCount += 1
-            entry.ksPlayer?.set(resource: KSPlayerResource(url: entry.url))
-            entry.ksPlayer?.play()
-        } else {
-            switchToVLC(entry: entry)
-        }
-    }
-
-    private func switchToVLC(entry: Entry) {
-        DispatchQueue.main.async { [weak entry] in
-            guard let entry = entry else { return }
-            let container = entry.ksPlayer?.superview
-            entry.ksPlayer?.pause()
-            entry.ksPlayer?.removeFromSuperview()
-            entry.ksPlayer = nil
-            entry.isVLCFallback = true
-
-            let player = VLCMediaPlayer()
-            if let container = container { player.drawable = container }
-            let media = VLCMedia(url: entry.url)
-            media.addOptions([
-                "network-caching": 1500,
-                "clock-jitter": 0,
-                "clock-synchro": 0,
-                "avcodec-hw": "any",
-                "videotoolbox": 1
-            ])
-            player.media = media
-            player.play()
-            entry.vlcPlayer = player
-        }
+        guard let player = entry.vlcPlayer else { return }
+        if let audio = player.audio { audio.volume = isMuted ? 0 : 100 }
+        if isPlaying, !player.isPlaying { player.play() }
+        else if !isPlaying, player.isPlaying { player.pause() }
     }
 
     private func cleanup(_ entry: Entry) {
         entry.watchdog?.invalidate()
         entry.watchdog = nil
-        entry.ksPlayer?.pause()
-        entry.ksPlayer?.removeFromSuperview()
-        entry.ksPlayer = nil
         entry.vlcPlayer?.stop()
         entry.vlcPlayer?.drawable = nil
         entry.vlcPlayer = nil
