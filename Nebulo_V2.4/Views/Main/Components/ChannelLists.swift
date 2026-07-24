@@ -215,10 +215,112 @@ struct ContinueWatchingCard: View {
     }
 }
 
+/// One home shelf for a single category — the reference's "Popular - Movies"
+/// row: underlined header whose tap/chevron opens the full catalog page,
+/// over a horizontally scrolling shelf of the category's channels that play
+/// directly in place. Long-press the header for category actions (rename,
+/// colour), long-press a card for channel actions.
+struct HomeCategoryShelf: View {
+    let category: StreamCategory
+    let channels: [StreamChannel]
+    let viewModel: ChannelViewModel
+    let playAction: (StreamChannel) -> Void
+    let openCategory: () -> Void
+    let promptRename: () -> Void
+    let changeColor: () -> Void
+
+    @State private var channelForDescription: StreamChannel?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            NuvioSectionHeader(title: category.name, showsChevron: true, action: openCategory)
+                .contextMenu {
+                    Button { promptRename() } label: { Label("Rename", systemImage: "pencil") }
+                    Button { changeColor() } label: { Label("Change Color", systemImage: "paintpalette") }
+                    if viewModel.categoryColor(for: category.id) != nil {
+                        Button(role: .destructive) {
+                            viewModel.setCategoryColor(id: category.id, hex: nil)
+                        } label: {
+                            Label("Reset Color", systemImage: "arrow.counterclockwise")
+                        }
+                    }
+                }
+
+            // UIScrollView wrapper — same tap-lockout fix as the other
+            // home shelves (see TouchPassingHorizontalScroll).
+            TouchPassingHorizontalScroll {
+                HStack(spacing: 14) {
+                    ForEach(channels) { c in
+                        Button {
+                            guard SwipeTapGuard.tapsAllowed else { return }
+                            ChannelViewModel.shared.triggerSelectionHaptic()
+                            playAction(c)
+                        } label: {
+                            HomeChannelShelfCard(
+                                channel: c,
+                                program: viewModel.getCurrentProgram(for: c)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button { playAction(c) } label: { Label("Play", systemImage: "play.fill") }
+                            Button { viewModel.toggleFavorite(c.id) } label: { Label(viewModel.favoriteIDs.contains(c.id) ? "Unfavorite" : "Favorite", systemImage: viewModel.favoriteIDs.contains(c.id) ? "star.slash" : "star") }
+                            Button { viewModel.triggerRenameChannel(c) } label: { Label("Rename", systemImage: "pencil") }
+                            Button { viewModel.hideChannel(c.id) } label: { Label("Hide", systemImage: "eye.slash") }
+                            if let prog = viewModel.getCurrentProgram(for: c), let desc = prog.description, !desc.isEmpty {
+                                Button { channelForDescription = c } label: { Label("Description", systemImage: "text.alignleft") }
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal)
+            }
+            .frame(height: 166)
+        }
+        .alert(item: $channelForDescription) { channel in
+            Alert(
+                title: Text("Program Description"),
+                message: Text(viewModel.getCurrentProgram(for: channel)?.description ?? "No description available."),
+                dismissButton: .default(Text("OK"))
+            )
+        }
+    }
+}
+
+/// Shelf card for one channel on a home category shelf — 16:9 artwork tile
+/// with the name (and current program) in white below it, exactly the
+/// reference's shelf-card layout.
+struct HomeChannelShelfCard: View {
+    let channel: StreamChannel
+    let program: EPGProgram?
+    @AppStorage("featuredGlowStrength") private var glowStrength = 0.5
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HorizontalChannelCardArt(icon: channel.icon, glowStrength: glowStrength)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(channel.name)
+                    .font(NuvioTheme.cardTitleFont)
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                if let prog = program {
+                    Text(prog.title)
+                        .font(.caption)
+                        .foregroundStyle(NuvioTheme.secondaryText)
+                        .lineLimit(1)
+                }
+            }
+            .frame(width: 192, alignment: .topLeading)
+            .padding(.horizontal, 4)
+        }
+    }
+}
+
 /// The artwork tile for a horizontal channel card: blurred logo backdrop plus a
 /// glow drawn from the logo's own brand colour (not the accent colour), so each
 /// channel's shelf card carries its own hue.
-private struct HorizontalChannelCardArt: View {
+struct HorizontalChannelCardArt: View {
     let icon: String?
     let glowStrength: Double
     @State private var glow: Color?
@@ -246,8 +348,7 @@ private struct HorizontalChannelCardArt: View {
                 .padding(16)
         }
         .frame(width: 200, height: 112)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .modifier(GlassEffect(cornerRadius: 12, isSelected: false, accentColor: nil))
+        .nuvioCard()
         .task(id: icon) { glow = await LogoGlow.color(for: icon) }
     }
 }

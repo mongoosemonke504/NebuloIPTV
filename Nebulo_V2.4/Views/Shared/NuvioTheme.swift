@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 // MARK: - Nuvio design system
 // Design language copied from the user's reference recording (Stremio/Nuvio
@@ -256,58 +257,254 @@ enum NuvioTab: String, CaseIterable {
     }
 }
 
-/// The floating rounded dock from the reference recording: a translucent
-/// charcoal slab with icon-over-label tabs, the active tab wrapped in a
-/// lighter rounded pill. Pure presentation — the owner decides what each
-/// tab tap does, so all existing navigation machinery stays intact.
-struct NuvioTabDock: View {
+/// The Apple TV-style bottom bar with a CONTINUOUS Liquid Glass morph
+/// between its states. The two glass shapes are permanent views whose
+/// frames animate — the tab capsule squeezes into the circular Home button
+/// while the search circle stretches into the field — so nothing pops in
+/// from the middle; the glass simply reshapes, exactly like the native bar.
+/// While the keyboard is up, the Home circle tucks away and a circular ✕
+/// melts out beside the field; tapping it (or dismissing the keyboard)
+/// melts it back in.
+/// Pure presentation — the owner decides what each tab tap does, so all
+/// existing navigation machinery stays intact.
+struct NuvioBottomBar: View {
     let active: NuvioTab
+    var tint: Color = .white
+    let searchMode: Bool
+    @Binding var queryText: String
+    var fieldFocused: FocusState<Bool>.Binding
     let onSelect: (NuvioTab) -> Void
+    let onClearQuery: () -> Void
+    /// The ✕ beside the field: collapses the keyboard and clears the query.
+    let onCancelSearch: () -> Void
+
+    @Namespace private var ns
+
+    private static let mainTabs: [NuvioTab] = [.home, .sports, .favorites, .profile]
+
+    /// Keyboard up in search — the Home circle hides and the ✕ appears.
+    private var typing: Bool { searchMode && fieldFocused.wrappedValue }
 
     var body: some View {
-        HStack(spacing: 4) {
-            ForEach(NuvioTab.allCases, id: \.self) { tab in
+        Group {
+            if #available(iOS 26.0, *) {
+                // The container lets glass shapes melt into each other as
+                // they appear, disappear and reshape.
+                GlassEffectContainer(spacing: 10) { barContent }
+            } else {
+                barContent
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 2)
+        .animation(.spring(response: 0.38, dampingFraction: 0.8), value: searchMode)
+        .animation(.spring(response: 0.32, dampingFraction: 0.85), value: typing)
+    }
+
+    private var barContent: some View {
+        HStack(spacing: 10) {
+            // ── LEFT: tab capsule ⇄ Home circle (one persistent glass shape,
+            //    its frame animates) — tucked away while typing.
+            if !typing {
+                ZStack {
+                    tabsRow
+                        .opacity(searchMode ? 0 : 1)
+                    Image(systemName: "house.fill")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .opacity(searchMode ? 1 : 0)
+                }
+                .frame(maxWidth: searchMode ? 48 : .infinity)
+                .frame(height: searchMode ? 48 : 62)
+                .modifier(DockGlass(circular: false, morphID: "left", morphNS: ns))
+                .contentShape(Capsule())
+                .onTapGesture {
+                    guard searchMode else { return }
+                    ChannelViewModel.shared.triggerSelectionHaptic()
+                    onSelect(.home)
+                }
+                .transition(.opacity)
+            }
+
+            // ── RIGHT: search circle ⇄ field (one persistent glass shape).
+            ZStack {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 19, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .opacity(searchMode ? 0 : 1)
+
+                HStack(spacing: 9) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.6))
+                    TextField("Search", text: $queryText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 15))
+                        .foregroundColor(.white)
+                        .submitLabel(.search)
+                        .focused(fieldFocused)
+                    if !queryText.isEmpty {
+                        Button(action: onClearQuery) {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 17))
+                                .foregroundStyle(.white.opacity(0.5))
+                        }
+                        .buttonStyle(.plain)
+                        .transition(.scale.combined(with: .opacity))
+                    }
+                }
+                .padding(.horizontal, 16)
+                .opacity(searchMode ? 1 : 0)
+                .allowsHitTesting(searchMode)
+                .animation(.spring(response: 0.3, dampingFraction: 0.8), value: queryText.isEmpty)
+            }
+            .frame(maxWidth: searchMode ? .infinity : 58)
+            .frame(height: searchMode ? 48 : 58)
+            .modifier(DockGlass(circular: false, morphID: "right", morphNS: ns))
+            .contentShape(Capsule())
+            .onTapGesture {
+                ChannelViewModel.shared.triggerSelectionHaptic()
+                if searchMode {
+                    fieldFocused.wrappedValue = true
+                } else {
+                    onSelect(.search)
+                }
+            }
+
+            // ── ✕ while typing: closes the keyboard, then melts back into
+            //    the bar — reference behaviour.
+            if typing {
+                Button {
+                    ChannelViewModel.shared.triggerSelectionHaptic()
+                    onCancelSearch()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 48, height: 48)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .modifier(DockGlass(circular: true, morphID: "cancel", morphNS: ns))
+                .transition(.opacity)
+            }
+        }
+    }
+
+    /// The four main tabs with the gliding Liquid Glass selection blob.
+    private var tabsRow: some View {
+        HStack(spacing: 0) {
+            ForEach(Self.mainTabs, id: \.self) { tab in
                 Button {
                     ChannelViewModel.shared.triggerSelectionHaptic()
                     onSelect(tab)
                 } label: {
-                    VStack(spacing: 4) {
+                    VStack(spacing: 3) {
                         Image(systemName: tab.icon)
                             .font(.system(size: 19, weight: .semibold))
                             .frame(height: 22)
                         Text(tab.rawValue)
-                            .font(.system(size: 11.5, weight: .medium))
+                            .font(.system(size: 10.5, weight: .medium))
                             .lineLimit(1)
                             .minimumScaleFactor(0.8)
                     }
-                    .foregroundStyle(tab == active ? .white : Color.white.opacity(0.75))
+                    .foregroundStyle(tab == active ? tint : Color.white.opacity(0.8))
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 9)
-                    .background(
-                        RoundedRectangle(cornerRadius: 21, style: .continuous)
-                            .fill(tab == active ? NuvioTheme.chipSelected : .clear)
-                    )
-                    .contentShape(RoundedRectangle(cornerRadius: 21, style: .continuous))
+                    .padding(.vertical, 7)
+                    .background {
+                        // The selection blob glides between tabs — a Liquid
+                        // Glass lens like the system tab bar's.
+                        if tab == active {
+                            DockPillBlob()
+                                .matchedGeometryEffect(id: "dockPill", in: ns)
+                        }
+                    }
+                    .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(6)
-        .background(
-            RoundedRectangle(cornerRadius: 30, style: .continuous)
-                .fill(NuvioTheme.dockFill.opacity(0.92))
-                .background(
-                    .ultraThinMaterial,
-                    in: RoundedRectangle(cornerRadius: 30, style: .continuous)
-                )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 30, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
-        )
-        .padding(.horizontal, 24)
-        .padding(.bottom, 2)
-        .shadow(color: .black.opacity(0.45), radius: 18, x: 0, y: 8)
+        .padding(4)
+        // Slight overshoot — the system pill's springy glide.
+        .animation(.spring(response: 0.4, dampingFraction: 0.75), value: active)
+    }
+}
+
+/// Liquid Glass backing shared by the bar's shapes — the plain system glass
+/// (no tint), exactly as the reference's native tab bar renders it; ultra-
+/// thin material fallback below iOS 26. `morphID`/`morphNS` join the shape
+/// into the bar's GlassEffectContainer so state changes melt one glass
+/// shape into the other.
+struct DockGlass: ViewModifier {
+    var circular = false
+    var morphID: String? = nil
+    var morphNS: Namespace.ID? = nil
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            if circular {
+                glassed(content.glassEffect(.regular, in: Circle()))
+            } else {
+                glassed(content.glassEffect(.regular, in: Capsule()))
+            }
+        } else {
+            if circular {
+                content
+                    .background(.ultraThinMaterial)
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(Color.white.opacity(0.10), lineWidth: 0.5))
+            } else {
+                content
+                    .background(.ultraThinMaterial)
+                    .clipShape(Capsule())
+                    .overlay(Capsule().stroke(Color.white.opacity(0.10), lineWidth: 0.5))
+            }
+        }
+    }
+
+    @available(iOS 26.0, *)
+    @ViewBuilder
+    private func glassed(_ view: some View) -> some View {
+        if let morphID, let morphNS {
+            view
+                .glassEffectID(morphID, in: morphNS)
+                // The real liquid melt between the bar's states.
+                .glassEffectTransition(.matchedGeometry)
+        } else {
+            view
+        }
+    }
+}
+
+/// The dock's active-tab highlight — a Liquid Glass lens on iOS 26 (glass
+/// riding on the bar's glass, exactly like the system tab bar's selection
+/// blob), a plain lighter capsule below.
+private struct DockPillBlob: View {
+    var body: some View {
+        if #available(iOS 26.0, *) {
+            Capsule()
+                .fill(Color.white.opacity(0.05))
+                .glassEffect(.regular.tint(Color.white.opacity(0.08)), in: Capsule())
+        } else {
+            Capsule()
+                .fill(Color.white.opacity(0.14))
+        }
+    }
+}
+
+/// Stretchy-hero transform: while the user rubber-bands past the top, the
+/// hero scales up from its bottom edge so its artwork keeps covering the
+/// screen — no black gap above it. Observes its own leaf object so the
+/// per-frame overscroll updates re-render only this transform, never the
+/// carousel content.
+struct HeroStretch: ViewModifier {
+    @ObservedObject var pull: ScrollProgress
+    let height: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(1 + max(0, pull.value) / height, anchor: .bottom)
     }
 }
 

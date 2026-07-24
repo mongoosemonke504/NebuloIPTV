@@ -137,80 +137,15 @@ struct MainView: SwiftUI.View {
                   let c = viewModel.channels.first(where: { $0.id == id }) else { return }
             withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { selectedChannel = c }
         }
-        // Search lives in its own presented context: inside the main ZStack,
-        // the keyboard-driven relayout of the hierarchy underneath animated
-        // ACROSS the overlay as a dark full-screen cover sliding left→right
-        // on open. A fullScreenCover fully occludes the app, so whatever
-        // reflows behind it is invisible. Presented without animation.
-        .fullScreenCover(isPresented: $showSearch) {
-            SearchView(
-                viewModel: viewModel,
-                scoreViewModel: scoreViewModel,
-                accentColor: accentColor,
-                playAction: { channel in
-                    dismissSearch()
-                    playChannel(channel)
-                },
-                onCategorySelect: { cat in
-                    viewModel.lastSelectedHomeID = cat.id
-                    viewModel.lastSourceCategory = cat
-                    dismissSearch()
-                    withAnimation { selectedCategory = cat }
-                },
-                onDismiss: {
-                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                    dismissSearch(animated: true)
-                },
-                // Dock inside the search cover — other tabs dismiss the
-                // cover and land on their destination, so the cover reads
-                // as just another tab of the app.
-                onDockTab: { tab in
-                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                    dismissSearch()
-                    switch tab {
-                    case .home:
-                        withAnimation { selectedCategory = nil }
-                    case .sports:
-                        viewModel.lastSelectedHomeID = -3
-                        withAnimation { selectedCategory = StreamCategory(id: -3, name: "Sports") }
-                    case .favorites:
-                        viewModel.lastSelectedHomeID = -4
-                        withAnimation { selectedCategory = StreamCategory(id: -4, name: "Favorites") }
-                    case .profile:
-                        showSettings = true
-                    case .search:
-                        break
-                    }
-                }
-            )
-            // Match the environment the overlay had inside the ignoresSafeArea
-            // ZStack: SearchView measures device insets and tracks the
-            // keyboard manually, so automatic avoidance must stay off.
-            .ignoresSafeArea()
-            .ignoresSafeArea(.keyboard)
-            // Clear cover backing so the swipe-to-close dismiss can blur/fade
-            // the overlay away and reveal the screen underneath. SearchView's
-            // own opaque nebula covers everything at rest, so the open is
-            // unaffected — nothing behind shows until the user pulls it away.
-            .presentationBackground(.clear)
-        }
+        // Search now lives IN the main hierarchy (as a section overlay inside
+        // MainViewModifiers) so the bottom bar can perform the Liquid Glass
+        // morph between its dock and search states. The keyboard never rises
+        // during the section transition (no auto-focus), so the historic
+        // keyboard-relayout artifact that once forced a fullScreenCover
+        // cannot occur.
     }
 
-    /// Closes the search cover and clears the query. The plain close (X /
-    /// Cancel) slides down with the keyboard; hand-offs into playback or a
-    /// category dismiss instantly so the destination isn't hidden behind a
-    /// departing cover.
-    private func dismissSearch(animated: Bool = false) {
-        viewModel.searchText = ""
-        if animated {
-            showSearch = false
-        } else {
-            var t = Transaction()
-            t.disablesAnimations = true
-            withTransaction(t) { showSearch = false }
-        }
-    }
-    
+
     private var backgroundLayer: some View {
         NebulaBackgroundView(color1: Color(hex: nebColor1) ?? .purple, color2: Color(hex: nebColor2) ?? .blue, color3: Color(hex: nebColor3) ?? .pink, point1: UnitPoint(x: nebX1, y: nebY1), point2: UnitPoint(x: nebX2, y: nebY2), point3: UnitPoint(x: nebX3, y: nebY3))
             .ignoresSafeArea()
@@ -282,13 +217,23 @@ struct MainViewModifiers: ViewModifier {
     let playAction: (StreamChannel) -> Void
     var zoomNS: Namespace.ID? = nil
 
-    /// The dock shows on the root surfaces (Home, Sports hub, Favorites hub).
-    /// Drill-down pages (plain categories, Recently Watched, Recordings) hide
-    /// it and show a circular back chevron instead — same as the reference
-    /// app's catalog pages.
+    /// The search field's text lives HERE (the field is part of the bottom
+    /// bar so it can morph out of the dock); SearchView receives a binding
+    /// and keeps its own debounce.
+    @State private var searchQuery = ""
+    @FocusState private var searchFieldFocused: Bool
+
+    /// The section-switch tempo — quick plain crossfade, matching the
+    /// reference app's tab switches.
+    static let sectionAnimation: Animation = .easeOut(duration: 0.15)
+
+    /// The bar shows on the root surfaces (Home, Sports hub, Favorites hub,
+    /// Settings, Search). Drill-down pages (plain categories, Recently
+    /// Watched, Recordings) hide it and show a circular back chevron
+    /// instead — same as the reference app's catalog pages.
     private var dockVisible: Bool {
         guard let cat = selectedCategory else { return true }
-        return cat.id == -3 || cat.id == -4
+        return cat.id == -3 || cat.id == -4 || cat.id == -6
     }
 
     private var activeDockTab: NuvioTab {
@@ -296,32 +241,41 @@ struct MainViewModifiers: ViewModifier {
         switch selectedCategory?.id {
         case -3: return .sports
         case -4: return .favorites
+        case -6: return .profile
         default: return .home
         }
     }
 
+    /// Leaves search: clears the query and crossfades back, then navigates.
+    private func closeSearch() {
+        searchFieldFocused = false
+        searchQuery = ""
+        viewModel.searchText = ""
+        withAnimation(Self.sectionAnimation) { showSearch = false }
+    }
+
     private func handleDockTap(_ tab: NuvioTab) {
+        if showSearch && tab != .search {
+            closeSearch()
+        }
         switch tab {
         case .home:
             guard selectedCategory != nil else { return }
-            withAnimation { selectedCategory = nil }
+            withAnimation(Self.sectionAnimation) { selectedCategory = nil }
         case .search:
-            // Touch-down gesture on the dock has usually opened it already;
-            // this is the fallback (VoiceOver / non-touch activation).
             guard !showSearch else { return }
-            var t = Transaction()
-            t.disablesAnimations = true
-            withTransaction(t) { showSearch = true }
+            withAnimation(Self.sectionAnimation) { showSearch = true }
         case .sports:
             guard selectedCategory?.id != -3 else { return }
             viewModel.lastSelectedHomeID = -3
-            withAnimation { selectedCategory = StreamCategory(id: -3, name: "Sports") }
+            withAnimation(Self.sectionAnimation) { selectedCategory = StreamCategory(id: -3, name: "Sports") }
         case .favorites:
             guard selectedCategory?.id != -4 else { return }
             viewModel.lastSelectedHomeID = -4
-            withAnimation { selectedCategory = StreamCategory(id: -4, name: "Favorites") }
+            withAnimation(Self.sectionAnimation) { selectedCategory = StreamCategory(id: -4, name: "Favorites") }
         case .profile:
-            showSettings = true
+            guard selectedCategory?.id != -6 else { return }
+            withAnimation(Self.sectionAnimation) { selectedCategory = StreamCategory(id: -6, name: "Settings") }
         }
     }
 
@@ -347,47 +301,68 @@ struct MainViewModifiers: ViewModifier {
             // toggled this, which is why those kept their scroll and multi-view
             // didn't.
             .toolbar(.hidden, for: .navigationBar)
-            // Nuvio redesign: the floating tab dock replaces the old bottom
-            // search pill. It's an overlay (not a safeAreaInset) so content
-            // scrolls BEHIND the translucent slab exactly like the reference
-            // recording; each screen pads its own scrollable bottom instead.
-            // Hidden on drill-down pages (plain categories, Recently Watched,
-            // Recordings) — those show the circular back chevron, matching
-            // the reference's catalog pages which have no dock.
-            .overlay(alignment: .bottom) {
-                if !showMultiView && dockVisible {
-                    NuvioTabDock(active: activeDockTab) { tab in
-                        handleDockTap(tab)
-                    }
-                    // Open Search on touch-DOWN over its tab, not tap-release:
-                    // the section SNAPS in (no presentation animation) the
-                    // instant the finger lands, and SearchView's field takes
-                    // focus on the next tick — so the keyboard starts rising
-                    // the moment the section is on screen, together. An
-                    // animated cover couldn't do this: UIKit defers any
-                    // keyboard requested inside a presentation transition
-                    // until it finishes, which is why the keyboard kept
-                    // trailing the slide.
-                    .simultaneousGesture(
-                        DragGesture(minimumDistance: 0, coordinateSpace: .local)
-                            .onChanged { value in
-                                guard !showSearch else { return }
-                                // The dock lays its five tabs out equally —
-                                // Search is the second fifth of its width
-                                // (24pt outer margins + 6pt inner padding).
-                                let inner = UIScreen.main.bounds.width - 60
-                                let x = value.startLocation.x - 30
-                                let fifth = inner / 5
-                                guard x > fifth, x < fifth * 2 else { return }
-                                viewModel.triggerSelectionHaptic()
-                                var t = Transaction()
-                                t.disablesAnimations = true
-                                withTransaction(t) { showSearch = true }
-                            }
+            // Search section — IN the main hierarchy (not a cover) so the
+            // bottom bar can morph its glass between dock and search states,
+            // and so section switches into/out of search are the same quick
+            // crossfade as every other tab.
+            .overlay {
+                if showSearch {
+                    SearchView(
+                        viewModel: viewModel,
+                        scoreViewModel: scoreViewModel,
+                        accentColor: accentColor,
+                        queryText: $searchQuery,
+                        playAction: { channel in
+                            closeSearch()
+                            playAction(channel)
+                        },
+                        onCategorySelect: { cat in
+                            viewModel.lastSelectedHomeID = cat.id
+                            viewModel.lastSourceCategory = cat
+                            closeSearch()
+                            withAnimation(Self.sectionAnimation) { selectedCategory = cat }
+                        },
+                        onDismiss: { closeSearch() }
                     )
-                    // Invisible host for the keyboard pre-warm field — must
-                    // live in the main hierarchy so it can take first
-                    // responder BEFORE the search cover presents.
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+                }
+            }
+            .animation(Self.sectionAnimation, value: showSearch)
+            // The bottom bar: dock on the root sections, morphing into the
+            // Home-circle + search-field pair while search is open. Content
+            // scrolls BEHIND the glass; each screen pads its own scrollable
+            // bottom instead. Hidden on drill-down pages (plain categories,
+            // Recently Watched, Recordings) — those show the circular back
+            // chevron, matching the reference's catalog pages.
+            .overlay(alignment: .bottom) {
+                if !showMultiView && (dockVisible || showSearch) {
+                    NuvioBottomBar(
+                        active: activeDockTab,
+                        tint: accentColor,
+                        searchMode: showSearch,
+                        queryText: $searchQuery,
+                        fieldFocused: $searchFieldFocused,
+                        onSelect: { handleDockTap($0) },
+                        onClearQuery: {
+                            viewModel.triggerSelectionHaptic()
+                            searchQuery = ""
+                            viewModel.searchText = ""
+                        },
+                        onCancelSearch: {
+                            // ✕ beside the field: just collapses the keyboard
+                            // (the ✕ then melts back into the bar). The
+                            // query keeps its results — the in-field clear
+                            // handles erasing.
+                            searchFieldFocused = false
+                        }
+                    )
+                    // The system's keyboard avoidance lifts the bar exactly
+                    // to the keyboard top — no manual padding on top of it,
+                    // which was double-lifting the bar.
+                    // Invisible host for the keyboard pre-warm field — keeps
+                    // the system keyboard process warm so the search field's
+                    // first focus is instant.
                     .background(
                         KeyboardPrewarmField()
                             .frame(width: 1, height: 1)
@@ -462,6 +437,7 @@ struct MainViewModifiers: ViewModifier {
                 selectedRecording = nil
                 showMultiView = false
                 if showSearch {
+                    searchQuery = ""
                     viewModel.searchText = ""
                     var t = Transaction()
                     t.disablesAnimations = true
@@ -490,7 +466,7 @@ extension MainView {
     private func overlays(isL: Bool) -> some View {
         if showMultiView {
             MultiViewScreen(viewModel: viewModel, scoreViewModel: scoreViewModel, showMultiView: $showMultiView, accentColor: accentColor, onOpenSettings: { showSettings = true })
-                .transition(.blurFade)
+                .transition(.opacity)
                 .zIndex(50)
         }
 
@@ -617,6 +593,26 @@ struct StandardLayout: SwiftUI.View {
     /// Continue Watching channel objects, resolved from `recentIDs` once.
     @State private var cachedRecent: [StreamChannel] = []
 
+    /// Channels grouped per category for the home shelves — capped per shelf
+    /// so a giant playlist can't flood the home page. Rebuilt only when the
+    /// channel list or hidden set actually changes.
+    @State private var channelsByCategory: [Int: [StreamChannel]] = [:]
+
+    private var categoryShelfCacheKey: String {
+        "\(viewModel.channels.count)|\(viewModel.hiddenIDs.count)"
+    }
+
+    private func computeChannelsByCategory() -> [Int: [StreamChannel]] {
+        var dict: [Int: [StreamChannel]] = [:]
+        for c in viewModel.channels {
+            if viewModel.hiddenIDs.contains(c.id) { continue }
+            if dict[c.categoryID, default: []].count < 15 {
+                dict[c.categoryID, default: []].append(c)
+            }
+        }
+        return dict
+    }
+
     /// Live games shelf content for the home page — cached snapshot.
     @State private var cachedHomeLiveGames: [ESPNEvent] = []
 
@@ -640,14 +636,9 @@ struct StandardLayout: SwiftUI.View {
     /// scrolling the home screen doesn't re-render its whole body each frame.
     @State private var homeHeaderProgress = ScrollProgress()
 
-    /// Central home-chip switch (tap-only, no slide animation). The featured
-    /// list for the incoming page is computed synchronously so the carousel
-    /// swaps in the same frame instead of popping in a beat later.
-    private func setHomeGroup(_ newValue: HomeCategoryGroup?) {
-        guard newValue != selectedHomeGroup else { return }
-        selectedHomeGroup = newValue
-        cachedDisplayedFeatured = computeDisplayedFeatured()
-    }
+    /// Top-overscroll distance (rubber-band pull past the top). Drives the
+    /// hero's stretch so no black gap ever opens above it.
+    @State private var heroPull = ScrollProgress()
 
     /// Same idea for the hub sections (Sports/Favorites/Recordings): their
     /// scroll probes bubble up via preference, and this drives the compact
@@ -757,17 +748,7 @@ struct StandardLayout: SwiftUI.View {
                                 }
                             }
 
-                            // 2. Chip bar
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 10) {
-                                    ForEach([70, 60, 80, 65, 75, 55] as [CGFloat], id: \.self) { w in
-                                        SkeletonBox(width: w, height: 36, cornerRadius: 18)
-                                    }
-                                }.padding(.horizontal)
-                            }
-                            .frame(height: 44)
-
-                            // 3. Continue Watching shelf
+                            // 2. Continue Watching shelf
                             VStack(alignment: .leading, spacing: 14) {
                                 SkeletonBox(width: 180, height: 22).padding(.horizontal)
                                 ScrollView(.horizontal, showsIndicators: false) {
@@ -823,21 +804,39 @@ struct StandardLayout: SwiftUI.View {
                 // `userInteractionEnabled` from UIKit so the home screen is
                 // immediately tappable the moment the user navigates back.
                 Group {
+                    // The hub TABS have no swipe-back: each section is its
+                    // own place — you're in it or you're not, and the dock
+                    // is the only way between them.
                     if cat.id == -3 {
                         SportsHubView(viewModel: viewModel, accentColor: accentColor, playAction: playAction, onBack: handleBackNavigation, scoreViewModel: scoreViewModel)
-                            .transition(.blurFade)
-                            .modifier(SwipeBackModifier(onBack: handleBackNavigation))
+                            .transition(.opacity)
                     } else if cat.id == -4 {
                         FavoritesView(viewModel: viewModel, scoreViewModel: scoreViewModel, accentColor: accentColor, playAction: playAction, onBack: handleBackNavigation)
-                            .transition(.blurFade)
-                            .modifier(SwipeBackModifier(onBack: handleBackNavigation))
+                            .transition(.opacity)
                     } else if cat.id == -5 {
                         RecordingsView(viewModel: viewModel, playAction: playAction, onBack: handleBackNavigation)
-                            .transition(.blurFade)
+                            .transition(.opacity)
                             .modifier(SwipeBackModifier(onBack: handleBackNavigation))
+                    } else if cat.id == -6 {
+                        // Settings is a real SECTION now (Profile tab) —
+                        // in-hierarchy with the bar visible, crossfading
+                        // exactly like the other tabs.
+                        SettingsView(
+                            categories: Binding(
+                                get: { viewModel.categories },
+                                set: { viewModel.categories = $0 }
+                            ),
+                            accentColor: accentColor,
+                            viewModel: viewModel,
+                            scoreViewModel: scoreViewModel,
+                            playAction: playAction,
+                            onSave: { viewModel.saveCategorySettings() },
+                            isSection: true
+                        )
+                        .transition(.opacity)
                     } else {
                         CategoryDetailView(title: cat.name, channels: getChannelsToShow(for: cat), accentColor: accentColor, playAction: playAction, toggleFav: viewModel.toggleFavorite, promptRename: viewModel.triggerRenameChannel, hideChannel: viewModel.hideChannel, favoriteIDs: viewModel.favoriteIDs, viewModel: viewModel, showMultiView: $showMultiView, onBack: handleBackNavigation, onCategorySelect: { cat in withAnimation { selectedCategory = cat; searchText = "" } }, zoomNS: zoomNS)
-                            .transition(.blurFade)
+                            .transition(.opacity)
                             .modifier(SwipeBackModifier(onBack: handleBackNavigation))
                     }
                 }
@@ -863,7 +862,7 @@ struct StandardLayout: SwiftUI.View {
                     // the dock owns navigation — just the compact title that
                     // crossfades in as their big in-scroll title departs.
                     HStack {
-                        if cat.id != -3 && cat.id != -4 {
+                        if cat.id != -3 && cat.id != -4 && cat.id != -6 {
                             NuvioCircleButton(systemName: "chevron.left") {
                                 viewModel.triggerSelectionHaptic()
                                 handleBackNavigation()
@@ -941,6 +940,12 @@ struct StandardLayout: SwiftUI.View {
                                     playAction: playAction
                                 )
                                 .id(selectedHomeGroup?.rawValue ?? "for-you")
+                                // Rubber-banding past the top stretches the
+                                // hero from its bottom edge, so the artwork
+                                // keeps covering the screen instead of
+                                // revealing black above it.
+                                .modifier(HeroStretch(pull: heroPull,
+                                                      height: UIScreen.main.bounds.height * 0.60))
                             } else {
                                 // No featured content — clear the (ignored)
                                 // top safe area so the chips don't sit under
@@ -948,24 +953,7 @@ struct StandardLayout: SwiftUI.View {
                                 Color.clear.frame(height: 52)
                             }
 
-                            // 2. Genre chips — "For You" + each non-empty home category group.
-                            //    Tapping a chip filters the rest of the home page in-place
-                            //    (featured carousel, categories) without leaving the home
-                            //    view. Sports is intentionally not in the chip list — the
-                            //    dock tab + Live Now shelf already give the user
-                            //    two ways to reach the Sports hub from this screen.
-                            HomeFilterChips(
-                                // Routed through setHomeGroup so a chip tap
-                                // slides the content in the direction of the
-                                // chip order.
-                                groups: chipGroups,
-                                selected: Binding(
-                                    get: { selectedHomeGroup },
-                                    set: { setHomeGroup($0) }
-                                )
-                            )
-
-                            // 3. Continue Watching shelf — uses cached resolved channels
+                            // 2. Continue Watching shelf — uses cached resolved channels
                             //    instead of `first(where:)` per recent id (O(n*m) → O(n)).
                             if !cachedRecent.isEmpty {
                                 VStack(alignment: .leading, spacing: 14) {
@@ -990,35 +978,23 @@ struct StandardLayout: SwiftUI.View {
                                 }
                             }
 
-                            // 4. Quick Access — one unified flat panel
-                            VStack(alignment: .leading, spacing: 14) {
-                                NuvioSectionHeader(title: "Quick Access")
-
-                                QuickAccessPanel(
-                                    accentColor: accentColor,
-                                    sportsAction: {
-                                        viewModel.triggerSelectionHaptic()
-                                        viewModel.lastSelectedHomeID = -3
-                                        withAnimation { selectedCategory = StreamCategory(id: -3, name: "Sports") }
-                                    },
-                                    favoritesAction: {
-                                        viewModel.triggerSelectionHaptic()
-                                        viewModel.lastSelectedHomeID = -4
-                                        withAnimation { selectedCategory = StreamCategory(id: -4, name: "Favorites") }
-                                    },
-                                    recordingsAction: {
-                                        viewModel.triggerSelectionHaptic()
-                                        viewModel.lastSelectedHomeID = -5
-                                        withAnimation { selectedCategory = StreamCategory(id: -5, name: "Recordings") }
-                                    },
-                                    multiViewAction: {
-                                        viewModel.triggerSelectionHaptic()
-                                        viewModel.lastSelectedHomeID = -99
-                                        withAnimation { showMultiView = true }
-                                    }
-                                )
-                                .padding(.horizontal)
+                            // 3. Quick Access — two compact cards in the same
+                            //    language as the settings rows (dark circle
+                            //    glyph + bold label on a flat charcoal card),
+                            //    so they sit quietly between the shelves.
+                            HStack(spacing: 12) {
+                                QuickAccessCard(title: "Recordings", icon: "record.circle.fill") {
+                                    viewModel.triggerSelectionHaptic()
+                                    viewModel.lastSelectedHomeID = -5
+                                    withAnimation { selectedCategory = StreamCategory(id: -5, name: "Recordings") }
+                                }
+                                QuickAccessCard(title: "Multi-View", icon: "square.grid.2x2.fill") {
+                                    viewModel.triggerSelectionHaptic()
+                                    viewModel.lastSelectedHomeID = -99
+                                    withAnimation { showMultiView = true }
+                                }
                             }
+                            .padding(.horizontal)
 
                             // 6. Below Quick Access:
                             //    • "For You" view → "Live Now" sports games shelf, then all
@@ -1046,43 +1022,27 @@ struct StandardLayout: SwiftUI.View {
                                 }
                             }
 
-                            // 6. Category shelves — filtered by selected chip.
-                            ForEach(displayedGroupedCategories, id: \.0) { entry in
-                                let group = entry.0
-                                let cats = entry.1
-                                VStack(alignment: .leading, spacing: 14) {
-                                    NuvioSectionHeader(title: group.rawValue)
-
-                                    ScrollView(.horizontal, showsIndicators: false) {
-                                        HStack(spacing: 12) {
-                                            ForEach(cats) { cat in
-                                                Button(action: {
-                                                    viewModel.triggerSelectionHaptic()
-                                                    viewModel.lastSelectedHomeID = cat.id
-                                                    withAnimation { selectedCategory = cat }
-                                                }) {
-                                                    NuvioCategoryCard(
-                                                        title: cat.name,
-                                                        color: viewModel.categoryColor(for: cat.id)
-                                                    )
-                                                    .frame(width: 210)
-                                                }
-                                                .buttonStyle(PressableCardStyle())
-                                                .id(cat.id)
-                                                .contextMenu {
-                                                    Button { viewModel.triggerRenameCategory(cat) } label: { Label("Rename", systemImage: "pencil") }
-                                                    Button { categoryForColor = cat } label: { Label("Change Color", systemImage: "paintpalette") }
-                                                    if viewModel.categoryColor(for: cat.id) != nil {
-                                                        Button(role: .destructive) {
-                                                            viewModel.setCategoryColor(id: cat.id, hex: nil)
-                                                        } label: {
-                                                            Label("Reset Color", systemImage: "arrow.counterclockwise")
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        .padding(.horizontal)
+                            // 5. Category shelves — every CATEGORY is its own
+                            //    section, like the reference's "Popular -
+                            //    Movies" rows: underlined header (tap/chevron
+                            //    opens the full catalog page) over a shelf of
+                            //    that category's channels, playable in place.
+                            //    Lazy so off-screen shelves never build.
+                            LazyVStack(alignment: .leading, spacing: 30) {
+                                ForEach(cachedGrouped.flatMap { $0.1 }) { cat in
+                                    if let chans = channelsByCategory[cat.id], !chans.isEmpty {
+                                        HomeCategoryShelf(
+                                            category: cat,
+                                            channels: chans,
+                                            viewModel: viewModel,
+                                            playAction: playAction,
+                                            openCategory: {
+                                                viewModel.lastSelectedHomeID = cat.id
+                                                withAnimation { selectedCategory = cat }
+                                            },
+                                            promptRename: { viewModel.triggerRenameCategory(cat) },
+                                            changeColor: { categoryForColor = cat }
+                                        )
                                     }
                                 }
                             }
@@ -1120,6 +1080,9 @@ struct StandardLayout: SwiftUI.View {
                         if cachedRecent.isEmpty {
                             cachedRecent = viewModel.recentIDs.compactMap { idToChannel[$0] }
                         }
+                        if channelsByCategory.isEmpty {
+                            channelsByCategory = computeChannelsByCategory()
+                        }
                         if cachedHomeLiveGames.isEmpty {
                             cachedHomeLiveGames = scoreViewModel.allLiveGames
                         }
@@ -1151,6 +1114,9 @@ struct StandardLayout: SwiftUI.View {
                     }
                     .task(id: featuredCacheKey) {
                         cachedDisplayedFeatured = computeDisplayedFeatured()
+                    }
+                    .task(id: categoryShelfCacheKey) {
+                        channelsByCategory = computeChannelsByCategory()
                     }
                     .task(id: recentCacheKey) {
                         cachedRecent = viewModel.recentIDs.compactMap { idToChannel[$0] }
@@ -1186,6 +1152,8 @@ struct StandardLayout: SwiftUI.View {
                         // artwork, which the reference never does.
                         let start = UIScreen.main.bounds.height * 0.38
                         homeHeaderProgress.set(min(max((scrolled - start) / 60, 0), 1))
+                        // Top rubber-band distance → hero stretch.
+                        heroPull.set(max(0, -scrolled))
                     }
                     // Status-bar scrim — fades in once the hero has scrolled
                     // away so the clock/battery stay legible over passing
@@ -1207,9 +1175,9 @@ struct StandardLayout: SwiftUI.View {
                     .zIndex(0)
             }
         }
-        // easeOut, not a spring: the spring's overshoot read as sections
-        // "bouncing in" as they blur-faded into place.
-        .animation(.easeOut(duration: 0.3), value: selectedCategory)
+        // Quick plain crossfade between sections — the Apple TV app's
+        // tab-switch feel: no blur, no slide, no bounce.
+        .animation(.easeInOut(duration: 0.2), value: selectedCategory)
         // Re-enable detail interaction the moment any forward navigation fires,
         // so the arriving view is always fully tappable even if the user
         // navigates back and forward again within the 0.8 s reset window.
@@ -1323,15 +1291,6 @@ struct StandardLayout: SwiftUI.View {
             guard let cats = buckets[group], !cats.isEmpty else { return nil }
             return (group, cats)
         }
-    }
-
-    var chipGroups: [HomeCategoryGroup] {
-        var groups = cachedGrouped.compactMap { $0.0 == .international ? nil : $0.0 }
-        if let idx = groups.firstIndex(of: .sports) {
-            groups.remove(at: idx)
-            groups.insert(.sports, at: 0)
-        }
-        return groups
     }
 
     /// Cache key for `cachedDisplayedFeatured`. Hashes only the inputs that
@@ -1734,8 +1693,8 @@ struct SidebarLayout: SwiftUI.View {
                     
                     StandardLayout(viewModel: viewModel, scoreViewModel: scoreViewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $searchText, accentColor: accentColor, playAction: playAction, showMultiView: $showMultiView, showSettings: $showSettings, selectedRecording: .constant(nil), zoomNS: zoomNS)
                         .id("SearchOverride") 
-                } else if selectedCategory?.id == -3 { SportsHubView(viewModel: viewModel, accentColor: accentColor, playAction: playAction, onBack: nil, scoreViewModel: scoreViewModel).transition(.blurFade) }
-                else if selectedCategory?.id == -5 { RecordingsView(viewModel: viewModel, playAction: playAction, onBack: { withAnimation { selectedCategory = nil } }).transition(.blurFade) }
+                } else if selectedCategory?.id == -3 { SportsHubView(viewModel: viewModel, accentColor: accentColor, playAction: playAction, onBack: nil, scoreViewModel: scoreViewModel).transition(.opacity) }
+                else if selectedCategory?.id == -5 { RecordingsView(viewModel: viewModel, playAction: playAction, onBack: { withAnimation { selectedCategory = nil } }).transition(.opacity) }
                 else {
                     ScrollViewReader { proxy in
                         let channels = getChannelsToShow()
@@ -1792,7 +1751,7 @@ struct SidebarLayout: SwiftUI.View {
                                 .environment(\.defaultMinListRowHeight, 0)
                             }
                         }
-                        .transition(.blurFade)
+                        .transition(.opacity)
                         .onAppear {
                             if let last = viewModel.lastPlayedChannelID {
                                 DispatchQueue.main.async { proxy.scrollTo(last, anchor: .center) }
@@ -2465,157 +2424,31 @@ struct MatchupHeroContent: View {
     }
 }
 
-/// Four Quick Access destinations in a single unified glass panel.
-/// Hairline dividers separate each item. One continuous background is
-/// cleaner than four separate tiles fighting for attention.
-struct QuickAccessPanel: View {
-    let accentColor: Color
-    let sportsAction: () -> Void
-    let favoritesAction: () -> Void
-    let recordingsAction: () -> Void
-    let multiViewAction: () -> Void
+/// Quick Access — a Liquid Glass capsule button in the exact language of
+/// the bottom bar, so the two shortcuts read as part of the app's glass
+/// chrome rather than another card.
+struct QuickAccessCard: View {
+    let title: String
+    let icon: String
+    let action: () -> Void
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
-        HStack(spacing: 0) {
-            qaItem("Sports",     "sportscourt.fill",   sportsAction)
-            divider
-            qaItem("Favorites",  "star.fill",          favoritesAction)
-            divider
-            qaItem("Recordings", "record.circle.fill", recordingsAction)
-            divider
-            qaItem("Multi-View", "square.grid.2x2.fill", multiViewAction)
-        }
-        .modifier(PanelGlass(shape: shape))
-        // Pin the panel's tap target to its bounds so hit testing isn't
-        // affected by `.animation()` modifiers higher up the tree. Without
-        // this, returning from a CategoryDetailView could leave the trailing
-        // buttons un-hittable until the implicit spring animation settled.
-        .contentShape(shape)
-    }
-
-    private var divider: some View {
-        Rectangle()
-            .fill(Color.primary.opacity(0.12))
-            .frame(width: 0.5)
-            .padding(.vertical, 12)
-    }
-
-    @ViewBuilder
-    private func qaItem(_ title: String, _ icon: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 9) {
+            HStack(spacing: 9) {
                 Image(systemName: icon)
-                    .font(.system(size: 26, weight: .semibold))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(.primary)
+                    .font(.system(size: 17, weight: .semibold))
                 Text(title)
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.primary)
+                    .font(.system(size: 15, weight: .bold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
+            .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 22)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(PanelItemButtonStyle())
-    }
-}
-
-/// Subtle press highlight for items inside a shared panel — no scale effect
-/// (which would look wrong when only one quarter of the card moves).
-private struct PanelItemButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .background(
-                Color.white.opacity(configuration.isPressed ? 0.08 : 0)
-                    .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
-            )
-    }
-}
-
-/// Glass backing shared by the panel. Liquid Glass on iOS 26, ultra-thin
-/// material on earlier versions.
-///
-/// The previous implementation wrapped the result in `AnyView`, which forces
-/// SwiftUI to throw away and rebuild the entire view tree on every render —
-/// that broke hit testing for the trailing buttons in the Quick Access
-/// panel after returning from a detail view (the buttons were getting
-/// rebuilt while their tap targets were still mid-animation).
-private struct PanelGlass: ViewModifier {
-    let shape: RoundedRectangle
-
-    func body(content: Content) -> some View {
-        // Nuvio redesign: flat charcoal slab instead of glass, so the panel
-        // sits quietly on the pure-black canvas like the reference surfaces.
-        content
-            .background(shape.fill(NuvioTheme.card))
-            .clipShape(shape)
-            .overlay(shape.stroke(Color.white.opacity(0.06), lineWidth: 0.5))
-    }
-}
-
-/// Horizontal genre filter chips at the top of the home screen.
-/// "For You" is always first and represents the default mixed-genre view
-/// (selected = `nil`). The remaining chips are the home category groups
-/// that actually have channels — empty buckets are hidden so the row only
-/// shows what the user can actually filter to.
-///
-/// The chip row is rendered inside a `UIScrollView` wrapper rather than a
-/// SwiftUI `ScrollView`. SwiftUI's horizontal `ScrollView` leaves its pan
-/// gesture in a "tracking" state after a swipe, which then blocks taps on
-/// the chips themselves AND on sibling Quick Access buttons below until
-/// the app is restarted. Setting `delaysContentTouches = false` on the
-/// underlying UIScrollView (which SwiftUI doesn't expose) cleanly hands
-/// touches to the inner buttons immediately on every tap.
-struct HomeFilterChips: View {
-    let groups: [HomeCategoryGroup]
-    @Binding var selected: HomeCategoryGroup?
-
-    var body: some View {
-        TouchPassingHorizontalScroll {
-            HStack(spacing: 10) {
-                chip(title: "For You",
-                     isSelected: selected == nil,
-                     onTap: { withAnimation(.easeOut(duration: 0.25)) { selected = nil } })
-                ForEach(groups, id: \.self) { group in
-                    chip(title: group.rawValue,
-                         isSelected: selected == group,
-                         onTap: {
-                             withAnimation(.easeOut(duration: 0.25)) {
-                                 selected = (selected == group) ? nil : group
-                             }
-                         })
-                }
-            }
-            .padding(.horizontal)
-        }
-        .frame(height: 44)
-    }
-
-    @ViewBuilder
-    private func chip(title: String, isSelected: Bool, onTap: @escaping () -> Void) -> some View {
-        // `onTapGesture` instead of `Button` — Button installs a long-press
-        // gesture that conflicts with the scroll view's pan, making taps
-        // mid-scroll fail to register. `onTapGesture` is a plain tap and
-        // resolves immediately.
-        Text(title)
-            .font(.subheadline.weight(.semibold))
-            .padding(.vertical, 10)
-            .padding(.horizontal, 18)
-            // Opaque, background-derived fill — uniform with the pinned chip
-            // rows in the Sports and Favorites sections.
-            .backgroundTintedChip(isSelected: isSelected)
-            .overlay(
-                Capsule()
-                    .stroke(Color.white.opacity(isSelected ? 0 : 0.18), lineWidth: 0.5)
-            )
+            .frame(height: 54)
             .contentShape(Capsule())
-            .onTapGesture {
-                ChannelViewModel.shared.triggerSelectionHaptic()
-                onTap()
-            }
+        }
+        .buttonStyle(PressableCardStyle())
+        .modifier(DockGlass(circular: false))
     }
 }
 

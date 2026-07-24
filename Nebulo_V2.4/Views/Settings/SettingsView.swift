@@ -10,9 +10,13 @@ struct SettingsView: View {
     @Binding var categories: [StreamCategory]
     let accentColor: Color
     var viewModel: ChannelViewModel
-    @ObservedObject var scoreViewModel: ScoreViewModel 
+    @ObservedObject var scoreViewModel: ScoreViewModel
     let playAction: ((StreamChannel) -> Void)?
     let onSave: () -> Void
+    /// True when Settings renders as the Profile TAB (in-hierarchy, bar
+    /// visible) instead of a presented sheet: hides the Done button and
+    /// pads the bottom clear of the floating bar.
+    var isSection: Bool = false
     
     @AppStorage("xstreamURL") private var xstreamURL = ""
     @AppStorage("username") private var username = ""
@@ -112,11 +116,19 @@ struct SettingsView: View {
                         .padding(.top, 20)
                     }
                     .padding(20)
+                    .padding(.bottom, isSection ? 100 : 0)
                 }
             }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { onSave(); dismiss() }.fontWeight(.bold) } }
+            .toolbar {
+                if !isSection {
+                    ToolbarItem(placement: .topBarTrailing) { Button("Done") { onSave(); dismiss() }.fontWeight(.bold) }
+                }
+            }
+            // Section mode has no Done button — persist category edits
+            // whenever the tab goes away instead.
+            .onDisappear { if isSection { onSave() } }
             .sheet(isPresented: $showAddPlaylist) { AddPlaylistSheet(accountToEdit: accountToEdit) }
             .sheet(isPresented: $showImagePicker) { PhotoPicker(image: $inputImage) }
             .sheet(isPresented: $showFilePicker) { FilePicker(image: $inputImage) }

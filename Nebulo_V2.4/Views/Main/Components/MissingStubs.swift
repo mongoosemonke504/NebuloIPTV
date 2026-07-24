@@ -54,42 +54,33 @@ struct KeyboardPrewarmField: UIViewRepresentable {
     func updateUIView(_ uiView: UITextField, context: Context) {}
 }
 
-/// Full-screen search experience, matching the Nuvio reference design:
-///   • Giant heavy "Search" title with the outlined rounded search field
-///     directly beneath it, auto-focused so the keyboard and the overlay
-///     rise together.
-///   • Empty query  → "Discover" heading, live games, recents, Browse grid
+/// The Search SECTION, matching the reference design:
+///   • Giant heavy "Search" title; the field itself lives in the app's
+///     bottom bar (it morphs out of the dock), bound in via `queryText`.
+///   • Empty query  → live games, recents, Browse grid
 ///   • Typing       → All / Channels / EPG / Recordings scope chips,
 ///                    "TOP RESULT" hero card, then section lists
-///   • Its own floating tab dock (Search active) so the cover reads as a
-///     tab of the app, exactly like the reference.
 struct SearchView: View {
     @ObservedObject var viewModel: ChannelViewModel
     /// Optional so the multi-view search overlay can omit it. When present, the
     /// empty-query screen surfaces live games and recent channels.
     var scoreViewModel: ScoreViewModel? = nil
     let accentColor: Color
+    /// The query, owned by whoever renders the field (the main bottom bar,
+    /// or the multi-view overlay's own field).
+    @Binding var queryText: String
     let playAction: (StreamChannel) -> Void
     let onCategorySelect: (StreamCategory) -> Void
     let onDismiss: () -> Void
-    /// Dock tab hand-off — the owner dismisses this cover and navigates.
-    /// nil (multi-view overlay) hides the dock and shows a circular ✕ in
-    /// the chrome row instead.
-    var onDockTab: ((NuvioTab) -> Void)? = nil
+    /// Multi-view overlay: shows a circular ✕ in the chrome row.
+    var showsCloseButton: Bool = false
 
     private enum Scope: String, CaseIterable {
         case all = "All", channels = "Channels", epg = "EPG", recordings = "Recordings"
     }
 
     @State private var scope: Scope = .all
-    @FocusState private var fieldFocused: Bool
 
-    /// Local mirror of the query. The TextField binds HERE so keystrokes only
-    /// re-render this overlay — binding straight to viewModel.searchText
-    /// published the whole ChannelViewModel on every keystroke, re-rendering
-    /// the entire home screen behind the overlay and making typing crawl.
-    /// The debounced push below hands the query to the view model.
-    @State private var queryText = ""
     @State private var pushTask: Task<Void, Never>? = nil
     /// True between a keystroke and the debounced hand-off, so the results
     /// area shows the skeleton instead of flashing the browse content.
@@ -101,11 +92,6 @@ struct SearchView: View {
     /// Direction of the current scope change, so the results slide in from the
     /// correct edge — same directional slide as the Sports/Favorites hubs.
     @State private var scopeSlideFromTrailing = true
-
-    /// 0 at rest → 1 fully dismissed. Driven by the left-edge swipe-to-close:
-    /// the whole overlay blurs, fades and slides right as the finger pulls,
-    /// revealing the screen underneath (the cover is presented clear).
-    @State private var edgeDismiss: CGFloat = 0
 
     /// Browse content (live games, recents, categories) lands one runloop
     /// tick after the overlay: the first frame (nebula + title + field)
@@ -120,26 +106,10 @@ struct SearchView: View {
     /// object so scrolling doesn't re-render the whole overlay every frame.
     @State private var titleProgress = ScrollProgress()
 
-    /// Settings sheet presented from the chrome row's gear — over the search
-    /// cover, so closing settings lands back in search, exactly like the
-    /// gear in the Sports/Favorites sections keeps you in the section.
-    @State private var showSettings = false
-
     /// The probe's reading at rest. The chrome rides as a top safe-area
     /// inset, so the content's resting minY equals the inset height rather
     /// than 0 — progress is measured relative to this baseline.
     @State private var probeRestY: CGFloat? = nil
-
-    /// One dismissal per rubber-band pull — reset once the scroll returns
-    /// near rest so a long bounce can't fire twice.
-    @State private var pullDismissFired = ValueBox(false)
-
-    /// Manual keyboard tracking. This overlay is presented inside MainView's
-    /// `.ignoresSafeArea()` ZStack, which strips both the safe-area insets AND
-    /// SwiftUI's automatic keyboard avoidance — so the view measures the
-    /// device insets itself and pads the bottom search field by the keyboard
-    /// frame reported by UIKit.
-    @State private var keyboardHeight: CGFloat = 0
 
     // Same nebula palette as every other screen so search feels like part of
     // the app instead of a black sheet.
@@ -250,20 +220,10 @@ struct SearchView: View {
                         .scrollProgressOpacity(titleProgress) { 1 - Double($0) }
                         .background(ScrollOffsetProbe(space: "searchScroll", id: "search"))
 
-                    // Outlined rounded field directly under the title, like
-                    // the reference's Search page.
-                    searchField
-                        .padding(.bottom, 22)
-
                     Group {
                         if query.isEmpty {
                             if browseReady {
                                 VStack(alignment: .leading, spacing: 26) {
-                                    Text("Discover")
-                                        .font(.system(size: 30, weight: .heavy))
-                                        .foregroundStyle(.white)
-                                        .padding(.horizontal, 20)
-                                        .padding(.bottom, -6)
                                     liveGamesSection
                                     recentChannelsSection
                                     browseGrid
@@ -298,21 +258,6 @@ struct SearchView: View {
                 }
                 .coordinateSpace(name: "searchScroll")
                 .frame(maxWidth: .infinity)
-                // Pull-past-top to close, like dragging a sheet down: once
-                // the rubber-band overscroll passes 70pts the overlay
-                // dismisses. Latched so one long bounce fires exactly once.
-                .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                    geometry.contentOffset.y + geometry.contentInsets.top
-                } action: { _, scrolled in
-                    if scrolled >= -5 {
-                        pullDismissFired.value = false
-                    } else if scrolled < -70, !pullDismissFired.value {
-                        pullDismissFired.value = true
-                        viewModel.triggerSelectionHaptic()
-                        fieldFocused = false
-                        onDismiss()
-                    }
-                }
                 // Horizontal swipe on the results area steps through the
                 // scope chips (All → Channels → EPG → Recordings), matching
                 // the Sports and Favorites sections. Fires mid-drag for an
@@ -330,9 +275,7 @@ struct SearchView: View {
                             if abs(h) > abs(v) * 1.4 {
                                 SwipeTapGuard.suppress()
                             }
-                            // Left-edge swipes are reserved for swipe-to-close.
                             guard !scopeSwipeConsumed,
-                                  value.startLocation.x > 44,
                                   abs(h) > 50, abs(h) > abs(v) * 1.5,
                                   !HorizontalScrollActivity.isActive else { return }
                             scopeSwipeConsumed = true
@@ -363,63 +306,18 @@ struct SearchView: View {
                     }
                 }
 
-            // The floating dock, Search tab active — the cover reads as one
-            // of the app's tabs, exactly like the reference. Hidden while the
-            // keyboard is up (the keyboard covers it anyway) and absent for
-            // the multi-view overlay, which uses the chrome-row ✕ instead.
-            if let onDockTab, keyboardHeight == 0 {
-                VStack {
-                    Spacer()
-                    NuvioTabDock(active: .search) { tab in
-                        guard tab != .search else { return }
-                        fieldFocused = false
-                        onDockTab(tab)
-                    }
-                    .padding(.bottom, max(screenInsets.bottom, 8))
-                }
-                .transition(.opacity)
-            }
             }
         }
-        // Swipe-to-close: the whole overlay blurs and fades away as the finger
-        // pulls from the left edge — no slide — dissolving back into the screen
-        // underneath (the cover is presented with a clear background so it
-        // shows through).
-        .blur(radius: edgeDismiss * 18)
-        .opacity(Double(1 - edgeDismiss))
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 8, coordinateSpace: .global)
-                .onChanged { value in
-                    guard value.startLocation.x < 24,
-                          value.translation.width > 0,
-                          value.translation.width > abs(value.translation.height) else { return }
-                    edgeDismiss = min(1, value.translation.width / 240)
-                }
-                .onEnded { value in
-                    guard value.startLocation.x < 24, edgeDismiss > 0 else { return }
-                    if value.translation.width > 90 || value.predictedEndTranslation.width > 220 {
-                        fieldFocused = false
-                        viewModel.triggerHaptic(.light)
-                        withAnimation(.easeIn(duration: 0.22)) { edgeDismiss = 1 }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { onDismiss() }
-                    } else {
-                        withAnimation(.easeOut(duration: 0.2)) { edgeDismiss = 0 }
-                    }
-                }
-        )
         .onAppear {
-            queryText = viewModel.searchText
-            // The heavy browse shelves join one frame after the cover so
+            // The heavy browse shelves join one frame after the section so
             // their build can never stall the presentation itself.
             DispatchQueue.main.async {
                 var t = Transaction()
                 t.disablesAnimations = true
                 withTransaction(t) { browseReady = true }
             }
-            // The cover snaps in with no transition, so there is nothing for
-            // UIKit to defer the keyboard behind — focusing on the next tick
-            // starts the keyboard rise the instant the section is on screen.
-            DispatchQueue.main.async { fieldFocused = true }
+            // No auto-focus: the keyboard only rises when the user taps the
+            // search field, exactly like the reference's search tab.
         }
         .onChangeCompat(of: queryText) { newValue in
             scheduleSearchPush(newValue)
@@ -431,34 +329,8 @@ struct SearchView: View {
         .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
             guard let y = offsets["search"] else { return }
             if probeRestY == nil { probeRestY = y }
-            titleProgress.set(min(max(((probeRestY ?? y) - y) / 40, 0), 1))
-        }
-        // Keyboard height set WITHOUT withAnimation — the transaction leaked
-        // into unrelated layout (see browseReady note). The scoped .animation
-        // on the field container below animates just the field's rise.
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
-            guard let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
-            let screenH = UIScreen.main.bounds.height
-            keyboardHeight = max(0, screenH - frame.origin.y)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            keyboardHeight = 0
-        }
-        .sheet(isPresented: $showSettings) {
-            if let svm = scoreViewModel {
-                SettingsView(
-                    categories: Binding(
-                        get: { viewModel.categories },
-                        set: { viewModel.categories = $0 }
-                    ),
-                    accentColor: accentColor,
-                    viewModel: viewModel,
-                    scoreViewModel: svm,
-                    playAction: playAction,
-                    onSave: { viewModel.saveCategorySettings() }
-                )
-                .presentationDragIndicator(.visible)
-            }
+            let scrolled = (probeRestY ?? y) - y
+            titleProgress.set(min(max(scrolled / 40, 0), 1))
         }
     }
 
@@ -470,10 +342,10 @@ struct SearchView: View {
     private var chromeRow: some View {
         HStack {
             Spacer()
-            if onDockTab == nil {
+            if showsCloseButton {
                 NuvioCircleButton(systemName: "xmark") {
                     viewModel.triggerSelectionHaptic()
-                    fieldFocused = false
+                    hideKeyboard()
                     onDismiss()
                 }
             }
@@ -550,12 +422,12 @@ struct SearchView: View {
                                         viewModel.triggerSelectionHaptic()
                                         let h = game.homeCompetitor?.team?.shortDisplayName ?? game.homeCompetitor?.athlete?.shortName ?? ""
                                         let a = game.awayCompetitor?.team?.shortDisplayName ?? game.awayCompetitor?.athlete?.shortName ?? ""
-                                        fieldFocused = false
+                                        hideKeyboard()
                                         onDismiss()
                                         viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: svm.sportType(for: game), network: game.broadcastName)
                                     }
                                     .liveGameContextMenu(game: game, viewModel: viewModel, scoreViewModel: svm, beforeNavigate: {
-                                        fieldFocused = false
+                                        hideKeyboard()
                                         onDismiss()
                                     })
                             }
@@ -583,7 +455,7 @@ struct SearchView: View {
                         ForEach(recents) { channel in
                             Button {
                                 viewModel.triggerSelectionHaptic()
-                                fieldFocused = false
+                                hideKeyboard()
                                 playAction(channel)
                             } label: {
                                 VStack(spacing: 8) {
@@ -953,51 +825,11 @@ struct SearchView: View {
         }
     }
 
-    // MARK: - Search field (top, outlined — reference style)
-
-    private var searchField: some View {
-        HStack(spacing: 10) {
-            TextField("Search channels, shows...", text: $queryText)
-                .textFieldStyle(.plain)
-                .font(.system(size: 16))
-                .foregroundColor(.white)
-                .submitLabel(.search)
-                .focused($fieldFocused)
-            if !queryText.isEmpty {
-                Button {
-                    viewModel.triggerSelectionHaptic()
-                    queryText = ""
-                    pushTask?.cancel()
-                    pushPending = false
-                    viewModel.searchText = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 18))
-                        .foregroundStyle(.white.opacity(0.5))
-                }
-                .buttonStyle(.plain)
-                .transition(.scale.combined(with: .opacity))
-            }
-        }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 16)
-        .background(
-            RoundedRectangle(cornerRadius: 17, style: .continuous)
-                .fill(Color.white.opacity(0.02))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 17, style: .continuous)
-                .stroke(Color.white.opacity(0.55), lineWidth: 1.2)
-        )
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: queryText.isEmpty)
-        .padding(.horizontal, 20)
-        .contentShape(Rectangle())
-        .onTapGesture { fieldFocused = true }
-    }
 }
 
 /// Search overlay used by MultiViewScreen to add streams — same UI as the
-/// main SearchView, just with the multi-view call sites' signature.
+/// main SearchView plus its own bottom glass field (the multi-view sheet
+/// has no morphing bottom bar).
 struct SearchOverlayView: View {
     @ObservedObject var viewModel: ChannelViewModel
     @Binding var searchText: String
@@ -1006,13 +838,51 @@ struct SearchOverlayView: View {
     let onCategorySelect: (StreamCategory) -> Void
     let onDismiss: () -> Void
 
+    @State private var query = ""
+    @FocusState private var focused: Bool
+
     var body: some View {
         SearchView(
             viewModel: viewModel,
             accentColor: accentColor,
+            queryText: $query,
             playAction: playAction,
             onCategorySelect: onCategorySelect,
-            onDismiss: onDismiss
+            onDismiss: onDismiss,
+            showsCloseButton: true
         )
+        .overlay(alignment: .bottom) {
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.6))
+                TextField("Search", text: $query)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 16))
+                    .foregroundColor(.white)
+                    .submitLabel(.search)
+                    .focused($focused)
+                if !query.isEmpty {
+                    Button {
+                        viewModel.triggerSelectionHaptic()
+                        query = ""
+                        viewModel.searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 18))
+                            .foregroundStyle(.white.opacity(0.5))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 18)
+            .frame(height: 58)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .modifier(DockGlass(circular: false))
+            .contentShape(Capsule())
+            .onTapGesture { focused = true }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 12)
+        }
     }
 }
