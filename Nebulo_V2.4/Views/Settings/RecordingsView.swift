@@ -527,30 +527,37 @@ struct RecordingsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 10)
             } else {
-                VStack(spacing: 10) {
+                // A real List so the swipe-to-cancel is the exact native
+                // gesture the channel-hide swipe uses — same reveal, same
+                // spring, same row-collapse on delete. Scroll-disabled and
+                // sized to its rows so it sits inside the outer ScrollView.
+                List {
                     ForEach(scheduledRecordings) { recording in
-                        ScheduledRecordingRow(
-                            recording: recording,
-                            // Animate the removal so the row slides off and the
-                            // list collapses, like a List row deleted via swipe.
-                            onCancel: {
-                                withAnimation(.easeInOut(duration: 0.3)) {
+                        ScheduledRecordingRow(recording: recording)
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 5, leading: 0, bottom: 5, trailing: 0))
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button(role: .destructive) {
                                     manager.deleteRecording(recording)
+                                } label: {
+                                    Label("Cancel", systemImage: "trash.fill")
                                 }
                             }
-                        )
-                        .transition(.move(edge: .leading).combined(with: .opacity))
-                        .contextMenu {
-                            Button(role: .destructive) {
-                                withAnimation(.easeInOut(duration: 0.3)) {
+                            .contextMenu {
+                                Button(role: .destructive) {
                                     manager.deleteRecording(recording)
+                                } label: {
+                                    Label("Cancel Recording", systemImage: "trash")
                                 }
-                            } label: {
-                                Label("Cancel Recording", systemImage: "trash")
                             }
-                        }
                     }
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .scrollDisabled(true)
+                .environment(\.defaultMinListRowHeight, 0)
+                .frame(height: CGFloat(scheduledRecordings.count) * 92)
             }
         }
     }
@@ -724,17 +731,10 @@ struct RecordingGroupCard: View {
 
 struct ScheduledRecordingRow: View {
     let recording: Recording
-    var onCancel: () -> Void = {}
 
     // Live countdown to the scheduled start, refreshed every 30s.
     @State private var now = Date()
     private let ticker = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
-
-    // Swipe-to-cancel: the row slides left to reveal a red Cancel action; a
-    // long pull past the threshold cancels outright.
-    @State private var dragX: CGFloat = 0
-    @State private var revealed = false
-    private let actionWidth: CGFloat = 96
 
     private static let timeFmt: DateFormatter = {
         let f = DateFormatter(); f.timeStyle = .short; return f
@@ -743,55 +743,39 @@ struct ScheduledRecordingRow: View {
         let f = DateFormatter(); f.dateFormat = "EEE, MMM d"; return f
     }()
 
+    // Same card shape as the favorites reminder row: an icon block, a title
+    // with a status pill, and a rich schedule line, on a dark rounded card.
     var body: some View {
-        ZStack(alignment: .trailing) {
-            // Cancel action revealed behind the row.
-            Button(action: cancel) {
-                VStack(spacing: 4) {
-                    Image(systemName: "trash.fill").font(.system(size: 16, weight: .bold))
-                    Text("Cancel").font(.system(size: 12, weight: .semibold))
-                }
-                .foregroundStyle(.white)
-                .frame(width: actionWidth)
-                .frame(maxHeight: .infinity)
-                .background(Color.red)
-            }
-            .buttonStyle(.plain)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .opacity(dragX < -4 ? 1 : 0)
-
-            rowContent
-                .offset(x: dragX)
-                .highPriorityGesture(swipe)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .onReceive(ticker) { now = $0 }
-    }
-
-    private var rowContent: some View {
-        HStack(spacing: 14) {
-            // Countdown badge — mirrors the reminders row's icon block.
+        HStack(spacing: 12) {
+            // Channel logo chip — identical to the favorites reminder card.
             ZStack {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(recording.categoryColor.opacity(0.2))
-                    .frame(width: 52, height: 52)
-                VStack(spacing: 1) {
-                    Image(systemName: "record.circle")
-                        .font(.system(size: 15, weight: .bold))
-                    Text(countdownBadge)
-                        .font(.system(size: 9, weight: .heavy))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.6)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.white.opacity(0.08))
+                if let icon = recording.channelIcon, !icon.isEmpty {
+                    CachedAsyncImage(urlString: icon, size: CGSize(width: 40, height: 40))
+                        .padding(6)
+                } else {
+                    Image(systemName: "record.circle.fill")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(recording.categoryColor)
                 }
-                .foregroundStyle(recording.categoryColor)
-                .frame(width: 46)
             }
+            .frame(width: 48, height: 48)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(recording.displayName)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(recording.displayName)
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    Text(countdownPill)
+                        .font(.system(size: 9, weight: .black))
+                        .foregroundStyle(.black.opacity(0.75))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1.5)
+                        .background(Capsule().fill(recording.categoryColor))
+                }
                 Text(scheduleSubtitle)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.6))
@@ -803,52 +787,29 @@ struct ScheduledRecordingRow: View {
             }
 
             Spacer(minLength: 8)
-
-            Image(systemName: "calendar.badge.clock")
-                .font(.system(size: 17))
-                .foregroundStyle(recording.categoryColor.opacity(0.8))
         }
-        .padding(14)
-        .frame(maxWidth: .infinity)
-        .modifier(GlassEffect(cornerRadius: 14, isSelected: false, accentColor: nil))
-        // Opaque backing so the red action never shows through the glass.
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.black.opacity(0.35)))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.black.opacity(0.45))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+        )
+        .onReceive(ticker) { now = $0 }
     }
 
-    private var swipe: some Gesture {
-        DragGesture(minimumDistance: 12)
-            .onChanged { v in
-                guard abs(v.translation.width) > abs(v.translation.height) else { return }
-                let base = revealed ? -actionWidth : 0
-                dragX = min(0, max(-actionWidth - 40, base + v.translation.width))
-            }
-            .onEnded { v in
-                if v.translation.width < -(actionWidth + 20) {
-                    cancel()
-                } else if dragX < -actionWidth / 2 {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { dragX = -actionWidth }
-                    revealed = true
-                } else {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { dragX = 0 }
-                    revealed = false
-                }
-            }
-    }
-
-    private func cancel() {
-        // The parent animates the actual removal (row slides off + list
-        // collapses via a move/opacity transition), matching a List swipe.
-        onCancel()
-    }
-
-    /// Compact badge under the record dot: "2h", "45m", "3d", or "SOON".
-    private var countdownBadge: String {
+    /// Countdown pill next to the title: "IN 2H", "IN 45M", "IN 3D", "SOON".
+    private var countdownPill: String {
         let delta = recording.startTime.timeIntervalSince(now)
         guard delta > 0 else { return "SOON" }
         let mins = Int(delta / 60)
-        if mins < 60 { return "\(max(1, mins))m" }
-        if mins < 24 * 60 { return "\(mins / 60)h" }
-        return "\(mins / (24 * 60))d"
+        if mins < 60 { return "IN \(max(1, mins))M" }
+        if mins < 24 * 60 { return "IN \(mins / 60)H" }
+        return "IN \(mins / (24 * 60))D"
     }
 
     private var durationString: String {
@@ -1109,10 +1070,18 @@ struct RecordingsCategoryView: View {
 // infoChannel resolves to the real live channel so EPG / schedule data is live.
 
 struct RecordingPlayerView: View {
-    let recording: Recording
+    /// The recording being played. Held in @State so tapping a different
+    /// recording in the info panel's Recordings tab swaps it in place — the
+    /// player re-sets-up on the new file rather than opening a second cover.
+    @State private var recording: Recording
     /// Pass the app's ChannelViewModel so the info panel below the player
     /// can show EPG schedule, related channels, and recordings.
     var viewModel: ChannelViewModel? = nil
+
+    init(recording: Recording, viewModel: ChannelViewModel? = nil) {
+        _recording = State(initialValue: recording)
+        self.viewModel = viewModel
+    }
 
     @Environment(\.dismiss) var dismiss
     @ObservedObject private var manager = RecordingManager.shared
@@ -1160,6 +1129,15 @@ struct RecordingPlayerView: View {
                     channel: ch,
                     viewModel: viewModel,          // enables the portrait split info panel
                     onDismiss: { dismiss() },
+                    // Tapping another recording in the info panel swaps it in
+                    // place: changing `recording` rebuilds `recordingChannel`,
+                    // and the player re-sets-up on the new file (its channel
+                    // prop changed) — closing the current one and opening the
+                    // new one without a second cover.
+                    onPlayRecording: { newRec in
+                        guard newRec.id != recording.id else { return }
+                        recording = newRec
+                    },
                     isRecordingPlayback: true,
                     // forceFullscreen: false (default) — portrait split layout shows
                     // the info panel below, same as a live channel.
@@ -1197,7 +1175,10 @@ struct RecordingPlayerView: View {
         // duration with metadata, then advance currentTime ourselves via a wall-clock
         // ticker while the player is playing. Seeks just set currentTime to the
         // target — the manual ticker continues from there.
-        .task {
+        //
+        // Keyed on the recording id so swapping to another recording re-runs the
+        // duration override and restarts the ticker for the new file.
+        .task(id: recording.id) {
             try? await Task.sleep(nanoseconds: 800_000_000) // 0.8s — after play() fires
             // currentRecording (not the captured struct) so we pick up the
             // actual recorded duration even if it was finalized just before

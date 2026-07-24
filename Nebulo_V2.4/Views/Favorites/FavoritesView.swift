@@ -104,6 +104,10 @@ struct FavoritesView: View {
     /// One filter switch per drag — set mid-drag when the swipe fires,
     /// cleared on finger-lift.
     @State private var swipeConsumed = false
+    /// Global frame of the reminders List. Horizontal swipes that begin inside
+    /// it are left to the List's own row swipe-to-remove, so the filter pager
+    /// doesn't steal them and flip to the next chip.
+    @State private var reminderListFrame: CGRect = .zero
 
     /// Steps to the previous/next filter pill. Driven by the horizontal swipe.
     /// No haptic — swipes stay silent; haptics belong to deliberate taps.
@@ -188,6 +192,9 @@ struct FavoritesView: View {
             .simultaneousGesture(
                 DragGesture(minimumDistance: 10, coordinateSpace: .global)
                     .onChanged { value in
+                        // A swipe that starts on a reminder row belongs to that
+                        // row's swipe-to-remove — don't page the filter.
+                        if reminderListFrame.contains(value.startLocation) { return }
                         let dx = value.translation.width
                         let dy = value.translation.height
                         // As soon as the drag reads as horizontal, open the
@@ -542,7 +549,11 @@ struct FavoritesView: View {
             )
             .padding(.horizontal, 20)
 
-            VStack(spacing: 10) {
+            // Same native List swipe as the scheduled recordings / channel-hide
+            // gesture: swipe a reminder to reveal Remove, same reveal and
+            // row-collapse. Scroll-disabled and sized to its rows so it nests
+            // in the outer scroll view.
+            List {
                 ForEach(reminderGames) { game in
                     FavoriteReminderRow(
                         game: game,
@@ -550,9 +561,27 @@ struct FavoritesView: View {
                         onWatch: { playFromGame(game, sport: scoreViewModel.sportType(for: game)) },
                         onRemove: { scoreViewModel.toggleReminder(game) }
                     )
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 5, leading: 20, bottom: 5, trailing: 20))
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button(role: .destructive) {
+                            scoreViewModel.toggleReminder(game)
+                        } label: {
+                            Label("Remove", systemImage: "trash.fill")
+                        }
+                    }
                 }
             }
-            .padding(.horizontal, 20)
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .scrollDisabled(true)
+            .environment(\.defaultMinListRowHeight, 0)
+            .frame(height: CGFloat(reminderGames.count) * 86)
+            .captureGlobalFrame { reminderListFrame = $0 }
+            // Cleared when the section isn't shown, so its old frame can't
+            // create a dead zone on another filter page.
+            .onDisappear { reminderListFrame = .zero }
         }
     }
 
@@ -1100,16 +1129,39 @@ struct FavoriteReminderRow: View {
         return "\(dayPrefix) · \(time) · \(countdown)"
     }
 
+    /// The broadcast channel's logo, resolved from the game's network name to
+    /// one of the user's channels. Same leading visual as a scheduled
+    /// recording row, so the two cards read identically.
+    private var channelLogoURL: String? {
+        guard let broadcast = game.broadcastName, !broadcast.isEmpty else { return nil }
+        return ChannelViewModel.shared.channels.first {
+            $0.name.localizedCaseInsensitiveContains(broadcast)
+                || broadcast.localizedCaseInsensitiveContains($0.name)
+        }?.icon
+    }
+
+    /// Leading logo chip — the channel the game is on, matching the recordings
+    /// section's card exactly.
+    private var logoChip: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.white.opacity(0.08))
+            if let url = channelLogoURL, !url.isEmpty {
+                CachedAsyncImage(urlString: url, size: CGSize(width: 40, height: 40))
+                    .padding(6)
+            } else {
+                Image(systemName: "bell.fill")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(.yellow)
+            }
+        }
+        .frame(width: 48, height: 48)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "bell.fill")
-                .font(.system(size: 18, weight: .bold))
-                .foregroundStyle(.yellow)
-                .frame(width: 48, height: 48)
-                .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Color.yellow.opacity(0.18))
-                )
+            logoChip
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
