@@ -143,6 +143,11 @@ class ChannelViewModel: ObservableObject {
     private var onRenameConfirm: ((String) -> Void)?
     private var renamedChannels: [Int: String] = [:]
     private var renamedCategories: [Int: String] = [:]
+    /// Bumped whenever a category's NAME changes (rename). The home shelves
+    /// cache their grouped categories keyed on `categories.count`, which a
+    /// rename doesn't change — so without a separate signal the renamed name
+    /// only appeared after a relaunch rebuilt the cache from scratch.
+    @Published var categoryRevision: Int = 0
     private var searchTask: Task<Void, Never>?
     private var settingsPrefix: String = ""
     var activeMultiViewCount: Int { multiViewSlots.compactMap { $0 }.count }
@@ -1884,6 +1889,7 @@ class ChannelViewModel: ObservableObject {
         renamedCategories[id] = newName
         if let encoded = try? JSONEncoder().encode(renamedCategories) { UserDefaults.standard.set(encoded, forKey: settingsPrefix + "renamedCategories") }
         if let index = categories.firstIndex(where: { $0.id == id }) { categories[index].name = newName; objectWillChange.send() }
+        categoryRevision += 1
     }
     
     func toggleFavorite(_ id: Int) { if favoriteIDs.contains(id) { triggerHaptic(.light); favoriteIDs.remove(id) } else { triggerHaptic(.medium); favoriteIDs.insert(id) }; if let d = try? JSONEncoder().encode(Array(favoriteIDs)) { UserDefaults.standard.set(d, forKey: settingsPrefix + "favoriteChannelIDs") } }

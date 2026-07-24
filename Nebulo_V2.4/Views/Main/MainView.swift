@@ -1116,6 +1116,12 @@ struct StandardLayout: SwiftUI.View {
                     .task(id: viewModel.categories.count) {
                         cachedGrouped = groupedCategories
                     }
+                    // A rename changes a name but not the count, so refresh the
+                    // cached shelves on the rename signal too — otherwise the
+                    // new name only showed after a relaunch.
+                    .task(id: viewModel.categoryRevision) {
+                        cachedGrouped = groupedCategories
+                    }
                     .task(id: viewModel.channels.count) {
                         // Build the id → channel lookup. Done off the body so
                         // recent/featured filtering can use O(1) lookups.
@@ -1633,38 +1639,9 @@ struct CategoryHeroCard: View {
 struct PressableCardStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            // Redesigned press: a firmer dip plus a brightness lift, so the
-            // card visibly "lights up" and presses in rather than only nudging.
-            // A springy release gives it a tactile bounce.
-            .scaleEffect(configuration.isPressed ? 0.94 : 1.0)
-            .brightness(configuration.isPressed ? 0.08 : 0)
-            .animation(.spring(response: 0.3, dampingFraction: 0.62), value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
+            .animation(.spring(response: 0.28, dampingFraction: 0.7), value: configuration.isPressed)
     }
-}
-
-/// Touch-down press feedback for cards that use `.onTapGesture` instead of a
-/// Button (live game cards, whose Button would fight the horizontal scroll's
-/// pan). Lights up + dips while the finger is down and still, and releases the
-/// moment the touch turns into a scroll — so it never flashes mid-swipe.
-struct PressHighlight: ViewModifier {
-    @State private var pressed = false
-    func body(content: Content) -> some View {
-        content
-            .scaleEffect(pressed ? 0.94 : 1.0)
-            .brightness(pressed ? 0.08 : 0)
-            .animation(.spring(response: 0.3, dampingFraction: 0.62), value: pressed)
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { v in
-                        pressed = abs(v.translation.width) < 10 && abs(v.translation.height) < 10
-                    }
-                    .onEnded { _ in pressed = false }
-            )
-    }
-}
-
-extension View {
-    func pressHighlight() -> some View { modifier(PressHighlight()) }
 }
 
 struct SidebarLayout: SwiftUI.View {
@@ -2721,19 +2698,15 @@ struct QuickAccessPanel: View {
     }
 }
 
-/// Press highlight for items inside a shared panel. The whole panel must not
-/// scale (one quarter moving looks wrong), so the scale + brightness are on the
-/// item's CONTENT only — the icon and label dip and light up in place — over a
-/// brightened cell background.
+/// Subtle press highlight for items inside a shared panel — no scale effect
+/// (which would look wrong when only one quarter of the card moves).
 private struct PanelItemButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.9 : 1.0)
-            .brightness(configuration.isPressed ? 0.1 : 0)
             .background(
-                Color.white.opacity(configuration.isPressed ? 0.12 : 0)
+                Color.white.opacity(configuration.isPressed ? 0.08 : 0)
+                    .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
             )
-            .animation(.spring(response: 0.3, dampingFraction: 0.6), value: configuration.isPressed)
     }
 }
 
@@ -2989,7 +2962,6 @@ struct LiveGamesPreviewList: View {
                 ForEach(games) { game in
                     LiveGameCard(game: game, accentColor: accentColor)
                         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .pressHighlight()
                         .onTapGesture {
                             viewModel.triggerSelectionHaptic()
                             let (h, a) = game.searchTerms

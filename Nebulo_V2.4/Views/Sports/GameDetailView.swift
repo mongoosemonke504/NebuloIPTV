@@ -703,14 +703,22 @@ struct GameDetailContentView: View {
     /// positions that don't move when the whole card is slid up or down.
     private static let cardSpace = "gdCard"
 
-    /// Writes the chips' global BOTTOM edge into the presenter's drag-handle
-    /// box, so a downward drag starting on the chips (or anywhere above them)
-    /// closes the card — matching the grey grabber. Only the on-screen page
-    /// reports; a peeking neighbour's chips sit far off to the side, so their
-    /// large horizontal offset excludes them.
+    /// Writes the drag-handle boundary into the presenter's box: a downward
+    /// drag starting above it closes the card, matching the grey grabber.
+    ///
+    /// It's the chips' natural (layout) bottom edge, FLOORED at a fixed top
+    /// strip. A pinned chip row is held in place with `.offset`, which does not
+    /// move a view's geometry — so when the page scrolls down, the measured
+    /// frame scrolls off the top to a negative Y. Without the floor the
+    /// threshold went negative and nothing engaged (not even the grabber),
+    /// which is why closing needed a scroll back to the top first. Floored, the
+    /// top strip (compact bar + docked chips) is always a live close handle,
+    /// and it simply grows to cover the whole header when the page is at the
+    /// top and the header is expanded. Only the on-screen page reports; a
+    /// peeking neighbour's chips sit far off to the side (large |minX|).
     private func reportChipTop(_ frame: CGRect) {
         guard frame.minX > -60, frame.minX < 100 else { return }
-        chipTopReport?.value = frame.maxY
+        chipTopReport?.value = max(165, frame.maxY)
     }
 
     private var isSoccer: Bool { request.leagueCode != nil || request.sport.isSoccer }
@@ -788,20 +796,26 @@ struct GameDetailContentView: View {
                                 tabChips
                                     .padding(.vertical, 6)
                                     .scrollProgressOffset(chipStick)
+                                    // Report the chips' live VISIBLE global
+                                    // bottom for the presenter's drag handle.
+                                    // This probe rides on the OFFSET (docked)
+                                    // chips — not the outer container — so when
+                                    // the page is scrolled down and the chips
+                                    // pin to the top, the handle tracks their
+                                    // docked position instead of their natural
+                                    // (scrolled-off, negative-Y) one. That's why
+                                    // closing from the top strip used to need a
+                                    // scroll back to the top first.
+                                    .background(
+                                        GeometryReader { g in
+                                            let f = g.frame(in: .global)
+                                            Color.clear
+                                                .onAppear { reportChipTop(f) }
+                                                .onChangeCompat(of: f.minY) { _ in reportChipTop(f) }
+                                        }
+                                    )
                             }
                             .background(GlobalOffsetProbe(id: "gdChips", space: .named(Self.cardSpace)))
-                            // Report the chips' live global top so the presenter
-                            // can treat everything above them as a drag handle.
-                            // Only the on-screen page writes — a neighbour's
-                            // chips sit off to the side (large |minX|).
-                            .background(
-                                GeometryReader { g in
-                                    let f = g.frame(in: .global)
-                                    Color.clear
-                                        .onAppear { reportChipTop(f) }
-                                        .onChangeCompat(of: f.minY) { _ in reportChipTop(f) }
-                                }
-                            )
                             .zIndex(1)
                         }
                         tabPager
