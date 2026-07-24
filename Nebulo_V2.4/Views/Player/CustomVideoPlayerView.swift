@@ -842,16 +842,27 @@ struct QuickSwitcherView: View {
 }
 /// The dismiss-drag transform, isolated so the per-frame drag writes
 /// re-render only this modifier — the player content underneath is reused,
-/// not rebuilt. Scale eases toward 0.94 and the corners round toward 16pt
-/// over the first 240pts of drag, mirroring Apple's modal pull-away.
+/// not rebuilt. Scale eases toward 0.94 for depth, and the corners round while
+/// the card is pulled away, mirroring Apple's modal pull-away.
+///
+/// The corner radius is intentionally BINARY — off at rest, a fixed 18 the
+/// instant a drag begins — rather than growing continuously with the drag.
+/// A radius that changed every frame rebuilt the rounded-rect clip mask each
+/// frame, and that mask is a full-screen offscreen composite over the LIVE
+/// video surface: the single most expensive thing happening during the swipe,
+/// and why it wasn't as smooth as the (pure-offset) game card. Held constant,
+/// the mask is rasterised once and only the cheap offset + scale layer
+/// transforms change while the finger moves. The pop from 0→18 is a single
+/// frame at the very start of the drag and is imperceptible in motion.
 private struct PlayerDismissTransform: ViewModifier {
     @ObservedObject var drag: ScrollProgress
 
     func body(content: Content) -> some View {
-        let progress = min(max(0, drag.value) / 240, 1)
+        let d = max(0, drag.value)
+        let progress = min(d / 240, 1)
         content
             .scaleEffect(1.0 - progress * 0.06)
-            .offset(y: max(0, drag.value))
-            .clipShape(RoundedRectangle(cornerRadius: progress * 16, style: .continuous))
+            .offset(y: d)
+            .clipShape(RoundedRectangle(cornerRadius: d > 0.5 ? 18 : 0, style: .continuous))
     }
 }
