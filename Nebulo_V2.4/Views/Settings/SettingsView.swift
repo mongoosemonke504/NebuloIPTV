@@ -396,8 +396,8 @@ struct ContentManagementCard: View {
                             }
                         ))
                         .labelsHidden()
-                        .tint(accentColor)
-                        
+                        .tint(.green)
+
                         VStack(alignment: .leading, spacing: 2) {
                             Text(account.displayName)
                                 .font(.subheadline.bold())

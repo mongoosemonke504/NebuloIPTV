@@ -111,6 +111,15 @@ struct SearchView: View {
     /// One scope switch per drag — set mid-drag, cleared on finger-lift.
     @State private var scopeSwipeConsumed = false
 
+    /// Direction of the current scope change, so the results slide in from the
+    /// correct edge — same directional slide as the Sports/Favorites hubs.
+    @State private var scopeSlideFromTrailing = true
+
+    /// 0 at rest → 1 fully dismissed. Driven by the left-edge swipe-to-close:
+    /// the whole overlay blurs, fades and slides right as the finger pulls,
+    /// revealing the screen underneath (the cover is presented clear).
+    @State private var edgeDismiss: CGFloat = 0
+
     /// Browse content (live games, recents, categories) lands one runloop
     /// tick after the overlay: the first frame (nebula + title + field)
     /// presents instantly, and the heavy shelves join on the next frame —
@@ -193,8 +202,18 @@ struct SearchView: View {
         guard let idx = all.firstIndex(of: scope) else { return }
         let next = idx + delta
         guard all.indices.contains(next) else { return }
-        viewModel.triggerSelectionHaptic()
-        withAnimation(.easeOut(duration: 0.15)) { scope = all[next] }
+        setScope(all[next])
+    }
+
+    /// Switches the active scope with a directional slide + haptic, shared by
+    /// the chip taps and the horizontal swipe so both animate identically.
+    private func setScope(_ target: Scope) {
+        guard target != scope,
+              let cur = Scope.allCases.firstIndex(of: scope),
+              let dst = Scope.allCases.firstIndex(of: target) else { return }
+        scopeSlideFromTrailing = dst > cur
+        viewModel.triggerHaptic(.light)
+        withAnimation(.easeOut(duration: 0.25)) { scope = target }
     }
 
     private var nameMatches: [StreamChannel] { viewModel.filteredNameChannels }
@@ -256,7 +275,18 @@ struct SearchView: View {
                         } else if pushPending || viewModel.isSearching {
                             searchingSkeleton
                         } else {
-                            resultsList
+                            // ZStack so the outgoing and incoming scope lists
+                            // overlap during the directional slide instead of
+                            // stacking vertically — the same move+fade the
+                            // Sports and Favorites hubs use for tab switches.
+                            ZStack(alignment: .top) {
+                                resultsList
+                                    .id(scope)
+                                    .transition(.asymmetric(
+                                        insertion: .move(edge: scopeSlideFromTrailing ? .trailing : .leading).combined(with: .opacity),
+                                        removal: .move(edge: scopeSlideFromTrailing ? .leading : .trailing).combined(with: .opacity)
+                                    ))
+                            }
                         }
                     }
                     // Explicit full width: content inserted while another
@@ -294,10 +324,19 @@ struct SearchView: View {
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 25)
                         .onChanged { value in
-                            guard !scopeSwipeConsumed, !query.isEmpty else { return }
+                            guard !query.isEmpty else { return }
                             let h = value.translation.width
                             let v = value.translation.height
-                            guard abs(h) > 50, abs(h) > abs(v) * 1.5,
+                            // As soon as the drag reads as horizontal, open the
+                            // tap-suppression window so the channel row under the
+                            // finger doesn't ALSO fire on release.
+                            if abs(h) > abs(v) * 1.4 {
+                                SwipeTapGuard.suppress()
+                            }
+                            // Left-edge swipes are reserved for swipe-to-close.
+                            guard !scopeSwipeConsumed,
+                                  value.startLocation.x > 44,
+                                  abs(h) > 50, abs(h) > abs(v) * 1.5,
                                   !HorizontalScrollActivity.isActive else { return }
                             scopeSwipeConsumed = true
                             advanceScope(h < 0 ? 1 : -1)
@@ -339,6 +378,32 @@ struct SearchView: View {
             .animation(.easeOut(duration: 0.2), value: keyboardHeight)
             }
         }
+        // Swipe-to-close: the whole overlay blurs and fades away as the finger
+        // pulls from the left edge — no slide — dissolving back into the screen
+        // underneath (the cover is presented with a clear background so it
+        // shows through).
+        .blur(radius: edgeDismiss * 18)
+        .opacity(Double(1 - edgeDismiss))
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 8, coordinateSpace: .global)
+                .onChanged { value in
+                    guard value.startLocation.x < 24,
+                          value.translation.width > 0,
+                          value.translation.width > abs(value.translation.height) else { return }
+                    edgeDismiss = min(1, value.translation.width / 240)
+                }
+                .onEnded { value in
+                    guard value.startLocation.x < 24, edgeDismiss > 0 else { return }
+                    if value.translation.width > 90 || value.predictedEndTranslation.width > 220 {
+                        fieldFocused = false
+                        viewModel.triggerHaptic(.light)
+                        withAnimation(.easeIn(duration: 0.22)) { edgeDismiss = 1 }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { onDismiss() }
+                    } else {
+                        withAnimation(.easeOut(duration: 0.2)) { edgeDismiss = 0 }
+                    }
+                }
+        )
         .onAppear {
             queryText = viewModel.searchText
             // The heavy browse shelves join one frame after the cover so
@@ -454,8 +519,7 @@ struct SearchView: View {
             HStack(spacing: 10) {
                 ForEach(Scope.allCases, id: \.self) { s in
                     Button {
-                        viewModel.triggerSelectionHaptic()
-                        withAnimation(.easeOut(duration: 0.15)) { scope = s }
+                        setScope(s)
                     } label: {
                         Text(s.rawValue)
                             .font(.subheadline.weight(.semibold))
@@ -771,6 +835,7 @@ struct SearchView: View {
 
     private func topResultCard(_ channel: StreamChannel, isLive: Bool) -> some View {
         Button {
+            guard SwipeTapGuard.tapsAllowed else { return }
             viewModel.triggerSelectionHaptic()
             playAction(channel)
         } label: {
@@ -811,6 +876,8 @@ struct SearchView: View {
 
                 Spacer(minLength: 8)
 
+                favoriteButton(channel)
+
                 Image(systemName: "play.fill")
                     .font(.system(size: 17, weight: .bold))
                     .foregroundStyle(.black)
@@ -833,6 +900,7 @@ struct SearchView: View {
                 .foregroundStyle(.white)
             ForEach(channels) { channel in
                 Button {
+                    guard SwipeTapGuard.tapsAllowed else { return }
                     viewModel.triggerSelectionHaptic()
                     playAction(channel)
                 } label: {
@@ -851,9 +919,7 @@ struct SearchView: View {
                             }
                         }
                         Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.tertiary)
+                        favoriteButton(channel)
                     }
                     .padding(.vertical, 8)
                     .contentShape(Rectangle())
@@ -861,6 +927,24 @@ struct SearchView: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    /// One-tap favourite toggle for a search-result row. A nested plain button
+    /// so it captures its own hit area without triggering the row's play action.
+    private func favoriteButton(_ channel: StreamChannel) -> some View {
+        let isFav = viewModel.favoriteIDs.contains(channel.id)
+        return Button {
+            viewModel.triggerSelectionHaptic()
+            viewModel.toggleFavorite(channel.id)
+        } label: {
+            Image(systemName: isFav ? "star.fill" : "star")
+                .font(.footnote.weight(.semibold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(isFav ? .yellow : Color.white.opacity(0.4))
+                .frame(width: 34, height: 34)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder

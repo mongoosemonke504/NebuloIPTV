@@ -231,6 +231,10 @@ struct ChannelRow: View, Equatable {
 
     var body: some View {
         Button(action: {
+            // A horizontal filter/page swipe that passes over this row must not
+            // also fire it — the page-swipe gestures open a short suppression
+            // window that this tap honours.
+            guard SwipeTapGuard.tapsAllowed else { return }
             ChannelViewModel.shared.triggerSelectionHaptic()
             playAction()
         }) {

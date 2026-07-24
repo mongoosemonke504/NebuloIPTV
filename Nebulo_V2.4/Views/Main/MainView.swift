@@ -167,6 +167,11 @@ struct MainView: SwiftUI.View {
             // keyboard manually, so automatic avoidance must stay off.
             .ignoresSafeArea()
             .ignoresSafeArea(.keyboard)
+            // Clear cover backing so the swipe-to-close dismiss can blur/fade
+            // the overlay away and reveal the screen underneath. SearchView's
+            // own opaque nebula covers everything at rest, so the open is
+            // unaffected — nothing behind shows until the user pulls it away.
+            .presentationBackground(.clear)
         }
     }
 
@@ -1632,6 +1637,10 @@ struct CategoryHeroCard: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: 96)
+        // Keep the colour glow contained: the blurred blob would otherwise
+        // spill past the tile's rounded rectangle. Clipping the content (not
+        // the whole card) leaves TintedGlassCard's intended drop shadow intact.
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .modifier(TintedGlassCard(cornerRadius: 20, tint: color ?? .clear))
     }
 }
