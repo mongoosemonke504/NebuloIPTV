@@ -415,7 +415,7 @@ struct SportsHubView: View {
                 Task { await scoreViewModel.fetchScores(forceRefresh: true) }
             }) {
                 Text("Sports")
-                    .font(.system(size: 34, weight: .bold))
+                    .font(NuvioTheme.pageTitleFont)
                     .foregroundStyle(.white)
                     .opacity(isRefreshingAnimation ? 0.3 : 1.0)
             }

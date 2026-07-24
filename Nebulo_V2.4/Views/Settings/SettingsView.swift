@@ -47,8 +47,16 @@ struct SettingsView: View {
                 
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 24) {
-                        
-                        
+
+                        // Nuvio giant heavy title, replacing the system
+                        // large-title chrome.
+                        Text("Settings")
+                            .font(NuvioTheme.pageTitleFont)
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 6)
+                            .padding(.bottom, -6)
+
                         SettingsSectionHeader(title: "Appearance")
                         AppearanceCard(
                             showSourceSelection: $showSourceSelection,
@@ -106,8 +114,8 @@ struct SettingsView: View {
                     .padding(20)
                 }
             }
-            .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.large)
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { onSave(); dismiss() }.fontWeight(.bold) } }
             .sheet(isPresented: $showAddPlaylist) { AddPlaylistSheet(accountToEdit: accountToEdit) }
             .sheet(isPresented: $showImagePicker) { PhotoPicker(image: $inputImage) }
@@ -653,10 +661,12 @@ struct UpdatesCard: View {
 struct SettingsSectionHeader: View {
     let title: String
     var body: some View {
+        // Reference style: small gray ALL-CAPS group label ("ACCOUNT",
+        // "GENERAL") with a touch of letter-spacing.
         Text(title.uppercased())
-            .font(.caption)
-            .fontWeight(.bold)
-            .foregroundStyle(.secondary)
+            .font(.system(size: 12, weight: .bold))
+            .kerning(1.1)
+            .foregroundStyle(NuvioTheme.secondaryText)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.leading, 4)
     }
@@ -668,9 +678,10 @@ struct SettingsCard<Content: View>: View {
         VStack(spacing: 0) {
             content
         }
-        .background(Material.ultraThin)
+        // Nuvio flat charcoal surface instead of glass.
+        .background(NuvioTheme.card)
         .cornerRadius(16)
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.1), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.06), lineWidth: 0.5))
     }
 }
 
@@ -681,25 +692,31 @@ struct SettingsRow: View {
     var iconColor: Color = .accentColor
     var showChevron: Bool = true
 
+    /// Reference rows are monochrome — white glyph in a dark circle. A red
+    /// icon (destructive rows like Sign Out) keeps its warning colour.
+    private var glyphColor: Color {
+        iconColor == .red ? .red : .white
+    }
+
     var body: some View {
         HStack(spacing: 14) {
             ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(iconColor.gradient)
-                    .frame(width: 30, height: 30)
+                Circle()
+                    .fill(Color(white: 0.17))
+                    .frame(width: 36, height: 36)
                 Image(systemName: icon)
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(glyphColor)
             }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.body)
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.primary)
                 if let sub = subtitle {
                     Text(sub)
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(NuvioTheme.secondaryText)
                 }
             }
 

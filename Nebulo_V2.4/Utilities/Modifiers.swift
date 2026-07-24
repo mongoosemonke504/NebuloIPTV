@@ -373,10 +373,14 @@ struct CompactHeaderScrim: View {
 
     private var tint: Color {
         if let tintOverride { return tintOverride }
-        let base: Color = useCustomBackground && !customBgTintHex.isEmpty
-            ? (Color(hex: customBgTintHex) ?? .black)
-            : (Color(hex: nebColor1) ?? .black)
-        return base.mix(with: .black, by: 0.4)
+        // Nuvio redesign: the canvas is pure black, so the vignette is a
+        // plain black wash — deriving it from the (now unused) nebula
+        // palette would cast a colour over the black screens. A custom
+        // photo background still gets its sampled tint.
+        if useCustomBackground && !customBgTintHex.isEmpty {
+            return (Color(hex: customBgTintHex) ?? .black).mix(with: .black, by: 0.4)
+        }
+        return .black
     }
 
     var body: some View {
@@ -475,33 +479,24 @@ struct GameHeaderScrim: View {
 struct BackgroundTintedChip: ViewModifier {
     let isSelected: Bool
 
-    @AppStorage("nebColor1") private var nebColor1 = "#1A2538"
-    @AppStorage("useCustomBackground") private var useCustomBackground = false
-    @AppStorage("customBgTintHex") private var customBgTintHex = ""
-
-    /// Falls back to the old fixed navy if a colour can't be parsed, so chips
-    /// never render transparent.
-    private var base: Color {
-        let parsed: Color? = useCustomBackground && !customBgTintHex.isEmpty
-            ? Color(hex: customBgTintHex)
-            : Color(hex: nebColor1)
-        return parsed ?? Color(red: 0.13, green: 0.15, blue: 0.20)
-    }
-
-    /// Selected reads as "on" by inverting toward a bright tint of the same
-    /// hue rather than pure white; unselected sits just below the background
-    /// so it reads as a recessed pill.
+    // Nuvio redesign: chips are the reference app's dark charcoal pills —
+    // opaque (they pin over scrolling content), white text when selected
+    // with a thin light outline, muted gray text when idle. No background
+    // tinting — the canvas is pure black everywhere.
     private var fill: Color {
-        isSelected ? base.mix(with: .white, by: 0.88) : base.mix(with: .black, by: 0.35)
+        isSelected ? Color(white: 0.20) : Color(white: 0.11)
     }
     private var text: Color {
-        isSelected ? base.mix(with: .black, by: 0.78) : .white
+        isSelected ? .white : Color.white.opacity(0.6)
     }
 
     func body(content: Content) -> some View {
         content
             .foregroundStyle(text)
             .background(Capsule().fill(fill))
+            .overlay(
+                Capsule().stroke(Color.white.opacity(isSelected ? 0.4 : 0), lineWidth: 1)
+            )
             .contentShape(Capsule())
     }
 }

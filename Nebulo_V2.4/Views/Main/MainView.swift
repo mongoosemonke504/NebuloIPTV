@@ -160,6 +160,27 @@ struct MainView: SwiftUI.View {
                 onDismiss: {
                     UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                     dismissSearch(animated: true)
+                },
+                // Dock inside the search cover — other tabs dismiss the
+                // cover and land on their destination, so the cover reads
+                // as just another tab of the app.
+                onDockTab: { tab in
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    dismissSearch()
+                    switch tab {
+                    case .home:
+                        withAnimation { selectedCategory = nil }
+                    case .sports:
+                        viewModel.lastSelectedHomeID = -3
+                        withAnimation { selectedCategory = StreamCategory(id: -3, name: "Sports") }
+                    case .favorites:
+                        viewModel.lastSelectedHomeID = -4
+                        withAnimation { selectedCategory = StreamCategory(id: -4, name: "Favorites") }
+                    case .profile:
+                        showSettings = true
+                    case .search:
+                        break
+                    }
                 }
             )
             // Match the environment the overlay had inside the ignoresSafeArea
@@ -261,6 +282,49 @@ struct MainViewModifiers: ViewModifier {
     let playAction: (StreamChannel) -> Void
     var zoomNS: Namespace.ID? = nil
 
+    /// The dock shows on the root surfaces (Home, Sports hub, Favorites hub).
+    /// Drill-down pages (plain categories, Recently Watched, Recordings) hide
+    /// it and show a circular back chevron instead — same as the reference
+    /// app's catalog pages.
+    private var dockVisible: Bool {
+        guard let cat = selectedCategory else { return true }
+        return cat.id == -3 || cat.id == -4
+    }
+
+    private var activeDockTab: NuvioTab {
+        if showSearch { return .search }
+        switch selectedCategory?.id {
+        case -3: return .sports
+        case -4: return .favorites
+        default: return .home
+        }
+    }
+
+    private func handleDockTap(_ tab: NuvioTab) {
+        switch tab {
+        case .home:
+            guard selectedCategory != nil else { return }
+            withAnimation { selectedCategory = nil }
+        case .search:
+            // Touch-down gesture on the dock has usually opened it already;
+            // this is the fallback (VoiceOver / non-touch activation).
+            guard !showSearch else { return }
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { showSearch = true }
+        case .sports:
+            guard selectedCategory?.id != -3 else { return }
+            viewModel.lastSelectedHomeID = -3
+            withAnimation { selectedCategory = StreamCategory(id: -3, name: "Sports") }
+        case .favorites:
+            guard selectedCategory?.id != -4 else { return }
+            viewModel.lastSelectedHomeID = -4
+            withAnimation { selectedCategory = StreamCategory(id: -4, name: "Favorites") }
+        case .profile:
+            showSettings = true
+        }
+    }
+
     func body(content: Content) -> some View {
         let showRenameAlert = Binding<Bool>(get: { viewModel.showRenameAlert }, set: { viewModel.showRenameAlert = $0 })
         let renameInput = Binding<String>(get: { viewModel.renameInput }, set: { viewModel.renameInput = $0 })
@@ -283,47 +347,38 @@ struct MainViewModifiers: ViewModifier {
             // toggled this, which is why those kept their scroll and multi-view
             // didn't.
             .toolbar(.hidden, for: .navigationBar)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                if !showMultiView {
-                    // Fallback action (VoiceOver / non-touch activation) —
-                    // touch opens via the touch-down gesture below, which
-                    // will already have set showSearch by release.
-                    Button(action: {
-                        guard !showSearch else { return }
-                        viewModel.triggerSelectionHaptic()
-                        var t = Transaction()
-                        t.disablesAnimations = true
-                        withTransaction(t) { showSearch = true }
-                    }) {
-                        HStack(spacing: 10) {
-                            Image(systemName: "magnifyingglass")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                            Text("Search")
-                                .font(.body.weight(.medium))
-                                .foregroundStyle(.secondary)
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 13)
-                        .modifier(GlassEffect(cornerRadius: 100, isSelected: false, accentColor: nil))
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 4)
-                        .contentShape(Rectangle())
+            // Nuvio redesign: the floating tab dock replaces the old bottom
+            // search pill. It's an overlay (not a safeAreaInset) so content
+            // scrolls BEHIND the translucent slab exactly like the reference
+            // recording; each screen pads its own scrollable bottom instead.
+            // Hidden on drill-down pages (plain categories, Recently Watched,
+            // Recordings) — those show the circular back chevron, matching
+            // the reference's catalog pages which have no dock.
+            .overlay(alignment: .bottom) {
+                if !showMultiView && dockVisible {
+                    NuvioTabDock(active: activeDockTab) { tab in
+                        handleDockTap(tab)
                     }
-                    .buttonStyle(.plain)
-                    // Open on touch-DOWN, not tap-release: the section SNAPS
-                    // in (no presentation animation) the instant the finger
-                    // lands, and SearchView's field takes focus on the next
-                    // tick — so the keyboard starts rising the moment the
-                    // section is on screen, together. An animated cover
-                    // couldn't do this: UIKit defers any keyboard requested
-                    // inside a presentation transition until it finishes,
-                    // which is why the keyboard kept trailing the slide.
+                    // Open Search on touch-DOWN over its tab, not tap-release:
+                    // the section SNAPS in (no presentation animation) the
+                    // instant the finger lands, and SearchView's field takes
+                    // focus on the next tick — so the keyboard starts rising
+                    // the moment the section is on screen, together. An
+                    // animated cover couldn't do this: UIKit defers any
+                    // keyboard requested inside a presentation transition
+                    // until it finishes, which is why the keyboard kept
+                    // trailing the slide.
                     .simultaneousGesture(
-                        DragGesture(minimumDistance: 0)
-                            .onChanged { _ in
+                        DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                            .onChanged { value in
                                 guard !showSearch else { return }
+                                // The dock lays its five tabs out equally —
+                                // Search is the second fifth of its width
+                                // (24pt outer margins + 6pt inner padding).
+                                let inner = UIScreen.main.bounds.width - 60
+                                let x = value.startLocation.x - 30
+                                let fifth = inner / 5
+                                guard x > fifth, x < fifth * 2 else { return }
                                 viewModel.triggerSelectionHaptic()
                                 var t = Transaction()
                                 t.disablesAnimations = true
@@ -686,21 +741,23 @@ struct StandardLayout: SwiftUI.View {
         ZStack(alignment: .bottom) {
             if viewModel.isLoading {
                 VStack(spacing: 0) {
-                    // Header pinned above scroll content — outside the ScrollView
-                    // so it is never affected by content insets or scroll position.
-                    HStack {
-                        SkeletonBox(width: 110, height: 28)
-                        Spacer()
-                        // No gear placeholder — the real gear is a fixed
-                        // overlay that is already visible during loading.
-                    }
-                    .padding(.horizontal)
-                    .padding(.vertical, 16)
-
                     ScrollView(showsIndicators: false) {
                         VStack(alignment: .leading, spacing: 30) {
 
-                            // 1. Chip bar
+                            // 1. Full-bleed hero skeleton, dots included —
+                            //    mirrors the loaded layout so nothing jumps
+                            //    when the real content lands.
+                            VStack(spacing: 14) {
+                                SkeletonBox(height: UIScreen.main.bounds.height * 0.55, cornerRadius: 0)
+                                    .frame(maxWidth: .infinity)
+                                HStack(spacing: 8) {
+                                    ForEach(0..<4, id: \.self) { i in
+                                        SkeletonBox(width: i == 0 ? 26 : 7, height: 7, cornerRadius: 4)
+                                    }
+                                }
+                            }
+
+                            // 2. Chip bar
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 10) {
                                     ForEach([70, 60, 80, 65, 75, 55] as [CGFloat], id: \.self) { w in
@@ -709,18 +766,6 @@ struct StandardLayout: SwiftUI.View {
                                 }.padding(.horizontal)
                             }
                             .frame(height: 44)
-
-                            // 2. Featured carousel
-                            VStack(spacing: 10) {
-                                SkeletonBox(height: 200, cornerRadius: 20)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.horizontal, 16)
-                                HStack(spacing: 5) {
-                                    ForEach(0..<4, id: \.self) { i in
-                                        SkeletonBox(width: i == 0 ? 20 : 6, height: 6, cornerRadius: 3)
-                                    }
-                                }
-                            }
 
                             // 3. Continue Watching shelf
                             VStack(alignment: .leading, spacing: 14) {
@@ -759,6 +804,9 @@ struct StandardLayout: SwiftUI.View {
                         }
                         .padding(.bottom)
                     }
+                    // Match the loaded layout: the hero skeleton bleeds
+                    // behind the status bar too.
+                    .ignoresSafeArea(.container, edges: .top)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             } else if !searchText.isEmpty {
@@ -808,38 +856,38 @@ struct StandardLayout: SwiftUI.View {
                 // blur-fades beneath it. The system nav bar is permanently
                 // hidden (see MainViewModifiers), so this is the only chrome.
                 .safeAreaInset(edge: .top, spacing: 0) {
+                    // Nuvio chrome: drill-down pages (plain categories,
+                    // Recently Watched, Recordings) get the reference
+                    // catalog page's circular back chevron + centred title.
+                    // The hub TABS (Sports, Favorites) have no back button —
+                    // the dock owns navigation — just the compact title that
+                    // crossfades in as their big in-scroll title departs.
                     HStack {
-                        Button(action: handleBackNavigation) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "chevron.left")
-                                    .font(.body.weight(.semibold))
-                                Text("Back")
-                                    .font(.body)
+                        if cat.id != -3 && cat.id != -4 {
+                            NuvioCircleButton(systemName: "chevron.left") {
+                                viewModel.triggerSelectionHaptic()
+                                handleBackNavigation()
                             }
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 14)
-                            .frame(height: 44)
-                            .modifier(GlassEffect(cornerRadius: 22, isSelected: false, accentColor: nil))
                         }
-                        .buttonStyle(.plain)
                         Spacer()
-                        SettingsGearButton {
-                            viewModel.triggerSelectionHaptic()
-                            showSettings = true
-                        }
                     }
                     .overlay {
                         if cat.id >= 0 || cat.id == -2 {
-                            Text(cat.name)
-                                .font(.headline)
-                                .foregroundStyle(.white)
-                                .lineLimit(1)
-                                .padding(.horizontal, 80)
+                            VStack(spacing: 1) {
+                                Text(cat.name)
+                                    .font(.system(size: 17, weight: .bold))
+                                    .foregroundStyle(.white)
+                                Text("Nebulo Playlist")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(NuvioTheme.secondaryText)
+                            }
+                            .lineLimit(1)
+                            .padding(.horizontal, 64)
                         } else if cat.id == -3 || cat.id == -4 || cat.id == -5 {
                             // Hub sections: the compact title crossfades in
-                            // between Back and the gear as the big in-scroll
-                            // title departs — pure opacity, no layout shift,
-                            // so the transition stays perfectly smooth.
+                            // as the big in-scroll title departs — pure
+                            // opacity, no layout shift, so the transition
+                            // stays perfectly smooth.
                             VStack(spacing: 0) {
                                 Text(cat.name)
                                     .font(.subheadline.weight(.bold))
@@ -851,7 +899,7 @@ struct StandardLayout: SwiftUI.View {
                                 }
                             }
                             .lineLimit(1)
-                            .padding(.horizontal, 80)
+                            .padding(.horizontal, 64)
                             .scrollProgressOpacity(sectionTitleProgress) { Double($0) }
                         }
                     }
@@ -878,47 +926,33 @@ struct StandardLayout: SwiftUI.View {
                     GlassEffectContainer(spacing: 0) {
                         VStack(alignment: .leading, spacing: 30) {
 
-                            // 1. Adaptive live header — large "N live" with a
-                            //    "M starting today" subtitle, plus the circular
-                            //    settings gear. Scrolls away with the content
-                            //    (matches the skeleton header shown while loading).
-                            //    Fades out over the same distance the compact
-                            //    overlay fades in, so the two crossfade instead
-                            //    of one popping in after the other disappears.
-                            HStack(alignment: .top) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(favHeader?.title ?? "\(liveGameCount) live")
-                                        .font(.system(size: 34, weight: .bold))
-                                        .foregroundStyle(.primary)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                    Text(favHeader?.subtitle ?? "\(startingTodayCount) starting today")
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                }
-                                // Fade ONLY the title text, not the whole header.
-                                // The settings gear is a liquid-glass button, and
-                                // animating opacity on glass forces an expensive
-                                // offscreen re-render every scroll frame — the one
-                                // thing that made the home header crossfade jitter
-                                // where the text-only hub headers stay smooth. The
-                                // gear still scrolls away with the header; it just
-                                // isn't alpha-blended, so the crossfade is now as
-                                // cheap as the other screens'.
-                                .scrollProgressOpacity(homeHeaderProgress) { 1 - Double($0) }
-                                Spacer()
-                                SettingsGearButton {
-                                    viewModel.triggerSelectionHaptic()
-                                    showSettings = true
-                                }
+                            // 1. Full-bleed hero carousel — the artwork bleeds
+                            //    behind the status bar exactly like the
+                            //    reference recording. Uses the cached snapshot;
+                            //    updated by the `.task` modifiers below whenever
+                            //    the chip selection or underlying featured list
+                            //    changes. When a favorite team is live, the
+                            //    channel broadcasting their game leads.
+                            if !cachedDisplayedFeatured.isEmpty {
+                                FeaturedCarousel(
+                                    items: cachedDisplayedFeatured,
+                                    viewModel: viewModel,
+                                    accentColor: accentColor,
+                                    playAction: playAction
+                                )
+                                .id(selectedHomeGroup?.rawValue ?? "for-you")
+                            } else {
+                                // No featured content — clear the (ignored)
+                                // top safe area so the chips don't sit under
+                                // the status bar.
+                                Color.clear.frame(height: 52)
                             }
-                            .padding(.horizontal)
-                            .padding(.top, 8)
 
                             // 2. Genre chips — "For You" + each non-empty home category group.
                             //    Tapping a chip filters the rest of the home page in-place
                             //    (featured carousel, categories) without leaving the home
                             //    view. Sports is intentionally not in the chip list — the
-                            //    Quick Access panel + Live Now shelf already give the user
+                            //    dock tab + Live Now shelf already give the user
                             //    two ways to reach the Sports hub from this screen.
                             HomeFilterChips(
                                 // Routed through setHomeGroup so a chip tap
@@ -931,31 +965,14 @@ struct StandardLayout: SwiftUI.View {
                                 )
                             )
 
-                            // 3. Featured Carousel — uses cached snapshot. Updated by the
-                            //     `.task` modifiers below whenever the chip selection or
-                            //     underlying featured list changes. When a favorite team is
-                            //     live, the channel broadcasting their game leads the carousel.
-                            if !cachedDisplayedFeatured.isEmpty {
-                                FeaturedCarousel(
-                                    items: cachedDisplayedFeatured,
-                                    viewModel: viewModel,
-                                    accentColor: accentColor,
-                                    playAction: playAction
-                                )
-                                .id(selectedHomeGroup?.rawValue ?? "for-you")
-                            }
-
-                            // 4. Continue Watching shelf — uses cached resolved channels
+                            // 3. Continue Watching shelf — uses cached resolved channels
                             //    instead of `first(where:)` per recent id (O(n*m) → O(n)).
                             if !cachedRecent.isEmpty {
                                 VStack(alignment: .leading, spacing: 14) {
-                                    HomeSectionHeader(
+                                    NuvioSectionHeader(
                                         title: "Continue Watching",
-                                        icon: "play.circle.fill",
-                                        iconColor: .primary,
                                         showsChevron: true
                                     ) {
-                                        viewModel.triggerSelectionHaptic()
                                         viewModel.lastSelectedHomeID = -2
                                         withAnimation { selectedCategory = StreamCategory(id: -2, name: "Recently Watched") }
                                     }
@@ -973,9 +990,9 @@ struct StandardLayout: SwiftUI.View {
                                 }
                             }
 
-                            // 5. Quick Access — one unified glass panel
+                            // 4. Quick Access — one unified flat panel
                             VStack(alignment: .leading, spacing: 14) {
-                                HomeSectionHeader(title: "Quick Access", icon: nil, iconColor: .primary, showsChevron: false, action: nil)
+                                NuvioSectionHeader(title: "Quick Access")
 
                                 QuickAccessPanel(
                                     accentColor: accentColor,
@@ -1012,13 +1029,10 @@ struct StandardLayout: SwiftUI.View {
                                 // Live Now shelf — uses cached snapshot of live games to
                                 // avoid the O(games × sports) walk on every render.
                                 VStack(alignment: .leading, spacing: 14) {
-                                    HomeSectionHeader(
+                                    NuvioSectionHeader(
                                         title: "Live Now",
-                                        icon: "dot.radiowaves.left.and.right",
-                                        iconColor: .red,
                                         showsChevron: true
                                     ) {
-                                        viewModel.triggerSelectionHaptic()
                                         viewModel.lastSelectedHomeID = -3
                                         withAnimation { selectedCategory = StreamCategory(id: -3, name: "Sports") }
                                     }
@@ -1032,18 +1046,12 @@ struct StandardLayout: SwiftUI.View {
                                 }
                             }
 
-                            // 7. Category shelves — filtered by selected chip.
+                            // 6. Category shelves — filtered by selected chip.
                             ForEach(displayedGroupedCategories, id: \.0) { entry in
                                 let group = entry.0
                                 let cats = entry.1
                                 VStack(alignment: .leading, spacing: 14) {
-                                    HomeSectionHeader(
-                                        title: group.rawValue,
-                                        icon: group.icon,
-                                        iconColor: .primary,
-                                        showsChevron: false,
-                                        action: nil
-                                    )
+                                    NuvioSectionHeader(title: group.rawValue)
 
                                     ScrollView(.horizontal, showsIndicators: false) {
                                         HStack(spacing: 12) {
@@ -1053,11 +1061,11 @@ struct StandardLayout: SwiftUI.View {
                                                     viewModel.lastSelectedHomeID = cat.id
                                                     withAnimation { selectedCategory = cat }
                                                 }) {
-                                                    CategoryHeroCard(
+                                                    NuvioCategoryCard(
                                                         title: cat.name,
                                                         color: viewModel.categoryColor(for: cat.id)
                                                     )
-                                                    .frame(width: 170)
+                                                    .frame(width: 210)
                                                 }
                                                 .buttonStyle(PressableCardStyle())
                                                 .id(cat.id)
@@ -1080,7 +1088,10 @@ struct StandardLayout: SwiftUI.View {
                             }
 
                         }
-                        .padding(.top)
+                        // Clearance for the floating dock: content scrolls
+                        // behind the translucent slab, but the last row can
+                        // still be pulled fully above it.
+                        .padding(.bottom, 118)
                         .sheet(item: $categoryForColor) { cat in
                             CategoryColorPicker(category: cat, viewModel: viewModel)
                                 .presentationDetents([.medium])
@@ -1088,6 +1099,9 @@ struct StandardLayout: SwiftUI.View {
                         }
                     }
                     }
+                    // The hero bleeds behind the status bar — the scroll
+                    // content owns the full screen height.
+                    .ignoresSafeArea(.container, edges: .top)
                     .onAppear {
                         // Populate every cache synchronously so the first
                         // frame of the home screen has the carousel, recent
@@ -1167,43 +1181,24 @@ struct StandardLayout: SwiftUI.View {
                     .onScrollGeometryChange(for: CGFloat.self) { geo in
                         geo.contentOffset.y + geo.contentInsets.top
                     } action: { _, scrolled in
-                        homeHeaderProgress.set(min(max(scrolled / 40, 0), 1))
+                        // The scrim waits until the hero is mostly gone —
+                        // fading it in over the hero itself would darken the
+                        // artwork, which the reference never does.
+                        let start = UIScreen.main.bounds.height * 0.38
+                        homeHeaderProgress.set(min(max((scrolled - start) / 60, 0), 1))
                     }
-                    // Compact header — always present, crossfading in as the
-                    // big title above fades/scrolls away. A darkened scrim with
-                    // a slight frosted blur, both masked to fade out toward the
-                    // bottom so content scrolled past stays legible below it.
+                    // Status-bar scrim — fades in once the hero has scrolled
+                    // away so the clock/battery stay legible over passing
+                    // content. Pure black wash (no pinned title text) to
+                    // match the reference recording's scrolled state.
                     .overlay(alignment: .top) {
-                        ZStack(alignment: .top) {
-                            // Dark + blurred vignette spanning from the very top
-                            // of the screen (behind the status bar / island) and
-                            // fading to fully transparent just below the collapsed
-                            // title. The GeometryReader ignores the top safe area,
-                            // so `safeAreaInsets.top` gives the status-bar height it
-                            // now covers, letting the scrim reach the real top.
-                            GeometryReader { proxy in
-                                // Shared app-wide scrim. The GeometryReader ignores
-                                // the top safe area, so `safeAreaInsets.top` gives the
-                                // status-bar height it now covers — added to the reach
-                                // so the vignette starts at the real screen top.
-                                CompactHeaderScrim(height: proxy.safeAreaInsets.top + 215, fadeStart: 0.2)
-                                    .frame(width: proxy.size.width)
-                            }
-                            .ignoresSafeArea(.container, edges: .top)
-
-                            VStack(spacing: 1) {
-                                Text(favHeader?.title ?? "\(liveGameCount) live")
-                                    .font(.footnote.weight(.bold))
-                                    .foregroundStyle(.white)
-                                Text(favHeader?.subtitle ?? "\(startingTodayCount) starting today")
-                                    .font(.caption2)
-                                    .foregroundStyle(.white.opacity(0.7))
-                            }
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity)
-                            .padding(.top, 6)
-                            .padding(.bottom, 12)
+                        GeometryReader { proxy in
+                            CompactHeaderScrim(height: proxy.safeAreaInsets.top + 70,
+                                               fadeStart: 0.3,
+                                               tintOverride: .black)
+                                .frame(width: proxy.size.width)
                         }
+                        .ignoresSafeArea(.container, edges: .top)
                         .allowsHitTesting(false)
                         .scrollProgressOpacity(homeHeaderProgress) { Double($0) }
                     }
@@ -1545,7 +1540,9 @@ struct CategoryColorPicker: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 24) {
-                CategoryHeroCard(
+                // Preview uses the same Nuvio shelf card the home screen
+                // renders, so the picked colour is judged in context.
+                NuvioCategoryCard(
                     title: category.name,
                     color: viewModel.categoryColor(for: category.id)
                 )
@@ -1642,6 +1639,41 @@ struct CategoryHeroCard: View {
         // the whole card) leaves TintedGlassCard's intended drop shadow intact.
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .modifier(TintedGlassCard(cornerRadius: 20, tint: color ?? .clear))
+    }
+}
+
+/// Nuvio-style shelf card for a category: flat charcoal 16:9 tile with the
+/// category's colour glowing softly inside and a giant translucent initial,
+/// the name in white BELOW the card — the reference's shelf-card layout
+/// adapted for artwork-less categories.
+struct NuvioCategoryCard: View {
+    let title: String
+    var color: Color? = nil
+
+    private var glow: Color { color ?? CategoryPalette.color(for: title) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            ZStack {
+                Circle()
+                    .fill(glow.opacity(0.5))
+                    .frame(width: 130, height: 130)
+                    .blur(radius: 42)
+                    .offset(x: 34, y: -22)
+                Text(String(title.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased())
+                    .font(.system(size: 62, weight: .heavy))
+                    .foregroundStyle(.white.opacity(0.14))
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 118)
+            .nuvioCard()
+
+            Text(title)
+                .font(NuvioTheme.cardTitleFont)
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .padding(.horizontal, 2)
+        }
     }
 }
 
@@ -2264,225 +2296,9 @@ struct SettingsGearButton: View {
     }
 }
 
-struct HomeSectionHeader: View {
-    let title: String
-    var icon: String? = nil
-    var iconColor: Color = .primary
-    var showsChevron: Bool = false
-    var action: (() -> Void)? = nil
-
-    var body: some View {
-        Group {
-            if let action {
-                Button(action: action) { content }
-                    .buttonStyle(.plain)
-            } else {
-                content
-            }
-        }
-        .padding(.horizontal)
-    }
-
-    private var content: some View {
-        HStack(spacing: 8) {
-            if let icon {
-                Image(systemName: icon)
-                    .font(.title3.weight(.semibold))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(iconColor)
-            }
-            Text(title)
-                .font(.title3.weight(.bold))
-                .foregroundStyle(.primary)
-            Spacer()
-            if showsChevron {
-                Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-            }
-        }
-    }
-}
-
-/// Hero card for the featured carousel.
-///
-/// Uses a base Rectangle of fixed height so the card's size is never derived
-/// from any child — then stacks all visual layers and content via .overlay()
-/// modifiers. This is the only layout technique that is 100% immune to the
 struct FeaturedItem {
     let channel: StreamChannel
     var game: ESPNEvent? = nil
-}
-
-struct FeaturedHeroCard: View {
-    let channel: StreamChannel
-    let program: EPGProgram?
-    let accentColor: Color
-    let onPlay: () -> Void
-    var glowOverride: Color? = nil
-    var game: ESPNEvent? = nil
-
-    @State private var glowColor: Color? = nil
-
-    private static let cardHeight: CGFloat = 200
-
-    private var hasMatchup: Bool {
-        game?.homeCompetitor?.team?.logo != nil && game?.awayCompetitor?.team?.logo != nil
-    }
-
-    var body: some View {
-        Button(action: onPlay) {
-            if hasMatchup, let g = game {
-                MatchupHeroContent(
-                    game: g,
-                    footerIcon: "tv",
-                    footerText: channel.name,
-                    height: Self.cardHeight,
-                    cornerRadius: 24
-                )
-            } else {
-                standardCard
-            }
-        }
-        .buttonStyle(PressableCardStyle())
-        .task(id: channel.icon) {
-            guard glowOverride == nil, !hasMatchup else { return }
-            if let c = await LogoGlow.color(for: channel.icon) {
-                withAnimation(.easeIn(duration: 0.5)) { glowColor = c }
-            } else {
-                glowColor = nil
-            }
-        }
-    }
-
-    private var standardCard: some View {
-        Rectangle()
-            .fill(Color.clear)
-            .overlay {
-                LinearGradient(
-                    colors: [Color.white.opacity(0.12), Color.black.opacity(0.85)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            }
-            .overlay {
-                CachedAsyncImage(urlString: channel.icon ?? "",
-                                 size: CGSize(width: 160, height: 160))
-                    .blur(radius: 55)
-                    .opacity(0.48)
-                    .scaleEffect(1.8)
-                    .allowsHitTesting(false)
-            }
-            .overlay {
-                Circle()
-                    .fill((glowOverride ?? glowColor ?? Color(white: 0.75)).opacity(0.55))
-                    .frame(width: 200, height: 200)
-                    .blur(radius: 60)
-                    .offset(x: -60, y: 20)
-                    .allowsHitTesting(false)
-            }
-            .overlay {
-                Circle()
-                    .fill((glowOverride ?? glowColor ?? Color(white: 0.75)).opacity(0.30))
-                    .frame(width: 130, height: 130)
-                    .blur(radius: 40)
-                    .offset(x: 40, y: 10)
-                    .allowsHitTesting(false)
-            }
-            .overlay {
-                LinearGradient(
-                    colors: [Color.black.opacity(0.05),
-                             Color.black.opacity(0.65)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            }
-            .overlay(alignment: .top) {
-                HStack {
-                    HStack(spacing: 5) {
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 8, weight: .black))
-                        Text("FEATURED")
-                            .font(.caption2.weight(.black))
-                            .kerning(1.4)
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 4)
-                    .background(Color.black.opacity(0.85), in: Capsule())
-
-                    Spacer()
-
-                    HStack(spacing: 6) {
-                        Image(systemName: "play.fill")
-                            .font(.caption.weight(.bold))
-                        Text("Resume")
-                            .font(.caption.weight(.semibold))
-                    }
-                    .foregroundStyle(.black)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-                    .background(.white, in: Capsule())
-                }
-                .padding(.top, 16)
-                .padding(.horizontal, 16)
-            }
-            .overlay(alignment: .bottomLeading) {
-                defaultBottomRow
-            }
-            .frame(height: Self.cardHeight)
-            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(Color.white.opacity(0.18), lineWidth: 0.5)
-            )
-            .drawingGroup()
-            .shadow(color: .black.opacity(0.32), radius: 18, x: 0, y: 8)
-    }
-
-    private var defaultBottomRow: some View {
-        HStack(alignment: .bottom, spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(.ultraThinMaterial)
-                CachedAsyncImage(urlString: channel.icon ?? "", size: nil)
-                    .padding(12)
-            }
-            .frame(width: 76, height: 76)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.white.opacity(0.22), lineWidth: 0.5)
-            )
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(channel.name)
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                if let prog = program {
-                    Text(prog.title)
-                        .font(.footnote.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.85))
-                        .lineLimit(1)
-                    if let desc = prog.description, !desc.isEmpty {
-                        Text(desc)
-                            .font(.caption)
-                            .foregroundStyle(.white.opacity(0.62))
-                            .lineLimit(2)
-                    }
-                } else {
-                    Text("Tap to resume watching")
-                        .font(.footnote.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.85))
-                        .lineLimit(1)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.bottom, 16)
-        .padding(.horizontal, 16)
-    }
 }
 
 /// Matchup card content — team colors bleed in from each side over a dark
@@ -2731,18 +2547,12 @@ private struct PanelGlass: ViewModifier {
     let shape: RoundedRectangle
 
     func body(content: Content) -> some View {
-        Group {
-            if #available(iOS 26.0, *) {
-                content
-                    .glassEffect(.regular, in: shape)
-                    .overlay(shape.stroke(Color.white.opacity(0.10), lineWidth: 0.5))
-            } else {
-                content
-                    .background(.ultraThinMaterial)
-                    .clipShape(shape)
-                    .overlay(shape.stroke(Color.white.opacity(0.10), lineWidth: 0.5))
-            }
-        }
+        // Nuvio redesign: flat charcoal slab instead of glass, so the panel
+        // sits quietly on the pure-black canvas like the reference surfaces.
+        content
+            .background(shape.fill(NuvioTheme.card))
+            .clipShape(shape)
+            .overlay(shape.stroke(Color.white.opacity(0.06), lineWidth: 0.5))
     }
 }
 
@@ -3187,11 +2997,11 @@ struct LiveGameCard: View {
         .frame(width: 230, height: 160, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color.black.opacity(0.4))
+                .fill(NuvioTheme.card)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.white.opacity(0.10), lineWidth: 0.5)
+                .stroke(Color.white.opacity(0.06), lineWidth: 0.5)
         )
     }
 
@@ -3219,6 +3029,12 @@ struct LiveGameCard: View {
 /// custom-ScrollView + .scrollTargetBehavior + .scrollPosition(id:) approach
 /// left UIScrollView gesture recognisers in a stuck state after a swipe,
 /// permanently blocking taps on sibling views. TabView avoids this entirely.
+///
+/// Nuvio redesign: full-bleed hero exactly like the reference recording —
+/// the artwork bleeds behind the status bar, everything anchors to the
+/// bottom (title, dot-separated metadata, white capsule pill, page dots),
+/// and the image dissolves into the black canvas below. Auto-advances like
+/// the reference carousel.
 struct FeaturedCarousel: View {
     let items: [FeaturedItem]
     @ObservedObject var viewModel: ChannelViewModel
@@ -3227,46 +3043,193 @@ struct FeaturedCarousel: View {
 
     @State private var currentIndex: Int = 0
 
-    var body: some View {
-        VStack(spacing: 10) {
-            TabView(selection: $currentIndex) {
-                ForEach(0 ..< items.count, id: \.self) { i in
-                    let item = items[i]
-                    let isSports = item.game != nil || (viewModel.categories.first(where: { $0.id == item.channel.categoryID })
-                        .map { HomeCategoryGroup.classify($0) == .sports } ?? false)
-                    FeaturedHeroCard(
-                        channel: item.channel,
-                        program: viewModel.getCurrentProgram(for: item.channel),
-                        accentColor: accentColor,
-                        onPlay: {
-                            viewModel.triggerSelectionHaptic()
-                            playAction(item.channel)
-                        },
-                        glowOverride: isSports ? accentColor : nil,
-                        game: item.game
-                    )
-                    .padding(.horizontal, 16)
-                    .tag(i)
-                }
-            }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            .background(Color.clear)
-            .frame(height: 200)
+    /// Matches the reference: the hero fills roughly the top 60% of the
+    /// screen, dots included.
+    private var heroHeight: CGFloat { UIScreen.main.bounds.height * 0.60 }
 
-            if items.count > 1 {
-                HStack(spacing: 5) {
-                    ForEach(items.indices, id: \.self) { i in
-                        Capsule()
-                            .fill(i == currentIndex
-                                  ? Color.primary.opacity(0.75)
-                                  : Color.primary.opacity(0.22))
-                            .frame(width: i == currentIndex ? 20 : 6, height: 6)
-                            .animation(.spring(response: 0.35, dampingFraction: 0.8),
-                                       value: currentIndex)
+    /// Auto-advance cadence, mirroring the reference carousel.
+    private static let autoAdvance = Timer.publish(every: 6, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        TabView(selection: $currentIndex) {
+            ForEach(0 ..< items.count, id: \.self) { i in
+                let item = items[i]
+                NuvioHeroPage(
+                    channel: item.channel,
+                    program: viewModel.getCurrentProgram(for: item.channel),
+                    categoryName: viewModel.categories.first(where: { $0.id == item.channel.categoryID })?.name,
+                    game: item.game,
+                    height: heroHeight,
+                    onPlay: {
+                        viewModel.triggerSelectionHaptic()
+                        playAction(item.channel)
                     }
-                }
+                )
+                .tag(i)
             }
         }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .background(Color.clear)
+        .frame(height: heroHeight)
+        .overlay(alignment: .bottom) {
+            if items.count > 1 {
+                NuvioPageDots(count: items.count, index: currentIndex)
+                    .padding(.bottom, 14)
+                    .allowsHitTesting(false)
+            }
+        }
+        .onReceive(Self.autoAdvance) { _ in
+            guard items.count > 1 else { return }
+            withAnimation(.easeInOut(duration: 0.45)) {
+                currentIndex = (currentIndex + 1) % items.count
+            }
+        }
+        // The featured list can shrink in place (a live game ends and its
+        // channel drops out) without the carousel being recreated — clamp
+        // the page index so the pager never points at a missing tag.
+        .onChangeCompat(of: items.count) { n in
+            if currentIndex >= n { currentIndex = 0 }
+        }
+    }
+}
+
+/// One page of the full-bleed hero. Two variants sharing the same bottom
+/// cluster layout:
+///   • Channel — blurred-artwork backdrop with the sharp logo floating in
+///     the upper half, channel name as the big title.
+///   • Matchup — team-colour washes with the big translucent crests, the
+///     matchup/score as the title.
+struct NuvioHeroPage: View {
+    let channel: StreamChannel
+    let program: EPGProgram?
+    let categoryName: String?
+    var game: ESPNEvent? = nil
+    let height: CGFloat
+    let onPlay: () -> Void
+
+    private var hasMatchup: Bool {
+        game?.homeCompetitor?.team?.logo != nil && game?.awayCompetitor?.team?.logo != nil
+    }
+
+    private func teamColor(_ c: ESPNCompetitor?) -> Color {
+        guard let hex = c?.team?.color, !hex.isEmpty else { return Color(white: 0.22) }
+        return Color(hex: hex.hasPrefix("#") ? hex : "#\(hex)") ?? Color(white: 0.22)
+    }
+
+    private var metadataParts: [String] {
+        if let g = game {
+            var parts: [String] = []
+            parts.append(g.status.type.state == "in" ? "Live" : g.status.type.detail)
+            if g.status.type.state == "in" { parts.append(g.status.type.detail) }
+            if let network = g.broadcastName, !network.isEmpty { parts.append(network) }
+            return parts
+        }
+        var parts: [String] = []
+        if let prog = program { parts.append(prog.title) }
+        if let categoryName, !categoryName.isEmpty { parts.append(categoryName) }
+        if parts.isEmpty { parts = ["Live TV"] }
+        return parts
+    }
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            // ── Backdrop ────────────────────────────────────────────────
+            if hasMatchup, let g = game {
+                let away = g.awayCompetitor
+                let home = g.homeCompetitor
+                ZStack {
+                    Color(white: 0.06)
+                    LinearGradient(
+                        stops: [
+                            .init(color: teamColor(away).opacity(0.85), location: 0.0),
+                            .init(color: teamColor(away).opacity(0.30), location: 0.38),
+                            .init(color: Color.clear, location: 0.5),
+                            .init(color: teamColor(home).opacity(0.30), location: 0.62),
+                            .init(color: teamColor(home).opacity(0.85), location: 1.0)
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                    HStack {
+                        CachedAsyncImage(urlString: away?.team?.logo ?? "",
+                                         size: CGSize(width: 220, height: 220))
+                            .opacity(0.6)
+                            .offset(x: -30, y: -40)
+                        Spacer()
+                        CachedAsyncImage(urlString: home?.team?.logo ?? "",
+                                         size: CGSize(width: 220, height: 220))
+                            .opacity(0.6)
+                            .offset(x: 30, y: -40)
+                    }
+                    .padding(.horizontal, 4)
+                }
+            } else {
+                ZStack {
+                    Color(white: 0.05)
+                    // Big soft wash of the channel's own artwork filling the
+                    // page — the "poster" for a logo-only channel.
+                    CachedAsyncImage(urlString: channel.icon ?? "",
+                                     size: CGSize(width: 300, height: 300))
+                        .blur(radius: 70)
+                        .opacity(0.55)
+                        .scaleEffect(2.4)
+                    // The sharp logo floats in the upper half like the
+                    // reference poster art.
+                    CachedAsyncImage(urlString: channel.icon ?? "", size: nil)
+                        .frame(maxWidth: 190, maxHeight: 190)
+                        .offset(y: -height * 0.17)
+                }
+            }
+
+            // ── Dissolve into the black canvas ──────────────────────────
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0.0),
+                    .init(color: .clear, location: 0.42),
+                    .init(color: .black.opacity(0.55), location: 0.72),
+                    .init(color: .black.opacity(0.96), location: 0.94),
+                    .init(color: .black, location: 1.0)
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+
+            // ── Bottom cluster: title · metadata · pill ─────────────────
+            VStack(spacing: 13) {
+                Group {
+                    if hasMatchup, let g = game {
+                        let away = g.awayCompetitor?.team?.shortDisplayName ?? "—"
+                        let home = g.homeCompetitor?.team?.shortDisplayName ?? "—"
+                        if g.status.type.state == "pre" {
+                            Text("\(away) vs \(home)")
+                        } else {
+                            Text("\(away) \(g.awayCompetitor?.score ?? "0") – \(g.homeCompetitor?.score ?? "0") \(home)")
+                        }
+                    } else {
+                        Text(channel.name)
+                    }
+                }
+                .font(.system(size: 30, weight: .heavy))
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.6)
+                .padding(.horizontal, 28)
+                .shadow(color: .black.opacity(0.6), radius: 8, x: 0, y: 2)
+
+                NuvioMetadataLine(parts: metadataParts)
+                    .padding(.horizontal, 24)
+
+                NuvioPillButton(title: game != nil ? "Watch" : "Watch Now", action: onPlay)
+                    .padding(.top, 3)
+            }
+            // Room for the carousel's page dots below the pill.
+            .padding(.bottom, 44)
+        }
+        .frame(height: height)
+        .frame(maxWidth: .infinity)
+        .clipped()
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onPlay)
     }
 }
 

@@ -95,34 +95,22 @@ struct HorizontalPreviewList: View {
         // gesture in a tracking state after a swipe, which silently swallows
         // taps on this shelf and on the Quick Access panel beneath it.
         TouchPassingHorizontalScroll {
-            HStack(spacing: 16) {
+            HStack(spacing: 14) {
                 ForEach(channels) { c in
                     Button(action: {
                         ChannelViewModel.shared.triggerSelectionHaptic()
                         playAction(c)
                     }) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HorizontalChannelCardArt(icon: c.icon, glowStrength: glowStrength)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(c.name)
-                                    .font(.subheadline.weight(.bold))
-                                    .foregroundStyle(.primary)
-                                    .lineLimit(1)
-
-                                if let prog = viewModel.getCurrentProgram(for: c) {
-                                    Text(prog.title)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                } else {
-                                    Text(" ")
-                                        .font(.caption)
-                                }
-                            }
-                            .frame(width: 192, height: 40, alignment: .topLeading)
-                            .padding(.horizontal, 4)
-                        }
+                        // Nuvio continue-watching card: big 16:9 tile, the
+                        // channel name overlaid bottom-left over a dark
+                        // gradient, and the guide's time-remaining as the
+                        // black "1h 48m left" badge top-right — nothing
+                        // below the card, exactly like the reference.
+                        ContinueWatchingCard(
+                            channel: c,
+                            program: viewModel.getCurrentProgram(for: c),
+                            glowStrength: glowStrength
+                        )
                     }.buttonStyle(.plain)
                     .contextMenu {
                         Button { playAction(c) } label: { Label("Play", systemImage: "play.fill") }
@@ -137,7 +125,7 @@ struct HorizontalPreviewList: View {
                 }
             }.padding(.horizontal)
         }
-        .frame(height: 175) 
+        .frame(height: 172)
         .alert(item: $channelForDescription) { channel in
             Alert(
                 title: Text("Program Description"),
@@ -145,6 +133,85 @@ struct HorizontalPreviewList: View {
                 dismissButton: .default(Text("OK"))
             )
         }
+    }
+}
+
+/// Nuvio continue-watching card — 16:9 flat tile with the blurred-logo
+/// backdrop, the sharp logo centred, the channel name overlaid bottom-left
+/// over a dark gradient and the guide's remaining time as a black badge in
+/// the top-right corner.
+struct ContinueWatchingCard: View {
+    let channel: StreamChannel
+    let program: EPGProgram?
+    let glowStrength: Double
+    @State private var glow: Color?
+
+    private var timeLeftLabel: String? {
+        guard let prog = program else { return nil }
+        let remaining = prog.stop.timeIntervalSince(Date())
+        guard remaining > 0 && remaining < 12 * 3600 else { return nil }
+        let minutes = Int((remaining / 60).rounded(.up))
+        if minutes < 60 { return "\(minutes)m left" }
+        let hours = minutes / 60
+        let mins = minutes % 60
+        return mins == 0 ? "\(hours)h left" : "\(hours)h \(mins)m left"
+    }
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            // Blurred backdrop + logo-derived glow, rasterised once via
+            // drawingGroup so the blurs don't re-composite every scroll frame.
+            ZStack {
+                CachedAsyncImage(urlString: channel.icon ?? "", size: CGSize(width: 290, height: 163))
+                    .blur(radius: 22)
+                    .opacity(0.10 + 0.85 * glowStrength)
+                    .clipped()
+                Circle()
+                    .fill((glow ?? Color(white: 0.5)).opacity(min(1.0, 0.75 * glowStrength)))
+                    .frame(width: 130, height: 130)
+                    .blur(radius: 36)
+            }
+            .frame(width: 290, height: 163)
+            .drawingGroup()
+
+            CachedAsyncImage(urlString: channel.icon ?? "", size: nil)
+                .padding(30)
+                .frame(width: 290, height: 163)
+
+            // Legibility gradient behind the overlaid name.
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0.45),
+                    .init(color: .black.opacity(0.75), location: 1.0)
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+            .frame(width: 290, height: 163)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(channel.name)
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                if let prog = program {
+                    Text(prog.title)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .lineLimit(1)
+                }
+            }
+            .padding(12)
+            .frame(width: 290, alignment: .leading)
+        }
+        .frame(width: 290, height: 163)
+        .nuvioCard()
+        .overlay(alignment: .topTrailing) {
+            if let label = timeLeftLabel {
+                NuvioCardBadge(text: label)
+                    .padding(9)
+            }
+        }
+        .task(id: channel.icon) { glow = await LogoGlow.color(for: channel.icon) }
     }
 }
 
@@ -314,10 +381,10 @@ struct ChannelRow: View, Equatable {
             // Each channel is now a distinct card rather than a bare list row.
             .background(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color.white.opacity(0.05))
+                    .fill(NuvioTheme.card)
                     .overlay(
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(Color.white.opacity(0.07), lineWidth: 0.5)
+                            .stroke(Color.white.opacity(0.06), lineWidth: 0.5)
                     )
             )
             .padding(.horizontal, 14)

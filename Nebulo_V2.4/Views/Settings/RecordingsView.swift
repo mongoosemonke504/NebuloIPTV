@@ -295,7 +295,7 @@ struct RecordingsView: View {
     private var headerView: some View {
         HStack(alignment: .firstTextBaseline) {
             Text("Recordings")
-                .font(.system(size: 34, weight: .bold))
+                .font(NuvioTheme.pageTitleFont)
                 .foregroundStyle(.white)
             Spacer()
         }
@@ -393,13 +393,12 @@ struct RecordingsView: View {
     private var nowRecordingSection: some View {
         if !nowRecording.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 8) {
+                HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "record.circle.fill")
                         .foregroundStyle(.red)
                         .symbolEffect(.pulse)
-                    Text("Now Recording")
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundStyle(.white)
+                        .padding(.top, 3)
+                    NuvioUnderlinedTitle(text: "Now Recording")
                 }
 
                 VStack(spacing: 10) {
@@ -428,10 +427,8 @@ struct RecordingsView: View {
                     navigateToCategoryView = true
                 }
             } label: {
-                HStack(alignment: .center) {
-                    Text("Recently Recorded")
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundStyle(.white)
+                HStack(alignment: .top) {
+                    NuvioUnderlinedTitle(text: "Recently Recorded")
                     Spacer()
                     HStack(spacing: 4) {
                         Text(
@@ -501,10 +498,8 @@ struct RecordingsView: View {
 
     private var scheduledSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("Scheduled")
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundStyle(.white)
+            HStack(alignment: .top) {
+                NuvioUnderlinedTitle(text: "Scheduled")
                 Spacer()
                 if !scheduledRecordings.isEmpty {
                     Button { showManageScheduled = true } label: {
@@ -1001,11 +996,10 @@ struct RecordingsCategoryView: View {
     @ViewBuilder
     private func categorySection(category: Recording.RecordingCategory, groups: [RecordingGroup]) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
                 Circle().fill(category.color).frame(width: 8, height: 8)
-                Text(category.displayName)
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundStyle(.white)
+                    .padding(.top, 8)
+                NuvioUnderlinedTitle(text: category.displayName)
             }
 
             ScrollView(.horizontal, showsIndicators: false) {

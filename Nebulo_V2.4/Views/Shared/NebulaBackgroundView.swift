@@ -59,14 +59,12 @@ struct NebulaBackgroundView: View {
                         .blur(radius: customBackgroundBlur)
                         .overlay(Color.black.opacity(0.2))
                 }
-            } else if useCustomBackground {
-                // Image chosen but not loaded yet — black avoids a flash.
-                Color.black
             } else {
-                // Nebula gradient — painted once, never redrawn unless props change.
-                Canvas { ctx, size in
-                    drawNebula(context: ctx, size: size)
-                }
+                // Nuvio redesign: the app canvas is pure black, exactly like
+                // the reference recording. The nebula palette settings remain
+                // stored (and the custom-photo background above still works),
+                // but the gradient is no longer painted on the main screens.
+                Color.black
             }
         }
         .ignoresSafeArea()

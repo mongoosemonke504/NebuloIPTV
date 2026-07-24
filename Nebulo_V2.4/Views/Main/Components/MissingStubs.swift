@@ -54,32 +54,15 @@ struct KeyboardPrewarmField: UIViewRepresentable {
     func updateUIView(_ uiView: UITextField, context: Context) {}
 }
 
-private struct SearchBarGlass: ViewModifier {
-    let cornerRadius: CGFloat
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        let shape = Capsule()
-        if #available(iOS 26.0, *) {
-            content
-                .glassEffect(.regular, in: shape)
-                .overlay(shape.stroke(Color.white.opacity(0.08), lineWidth: 0.5))
-                .contentShape(shape)
-        } else {
-            content
-                .background(.ultraThinMaterial, in: shape)
-                .overlay(shape.stroke(Color.white.opacity(0.08), lineWidth: 0.5))
-                .contentShape(shape)
-        }
-    }
-}
-
-/// Full-screen search experience, matching the reference design:
-///   • Empty query  → big "Search" title, circular ✕, "Browse" category grid
+/// Full-screen search experience, matching the Nuvio reference design:
+///   • Giant heavy "Search" title with the outlined rounded search field
+///     directly beneath it, auto-focused so the keyboard and the overlay
+///     rise together.
+///   • Empty query  → "Discover" heading, live games, recents, Browse grid
 ///   • Typing       → All / Channels / EPG / Recordings scope chips,
 ///                    "TOP RESULT" hero card, then section lists
-///   • Search field pinned to the bottom, auto-focused so the keyboard and
-///     the overlay rise together.
+///   • Its own floating tab dock (Search active) so the cover reads as a
+///     tab of the app, exactly like the reference.
 struct SearchView: View {
     @ObservedObject var viewModel: ChannelViewModel
     /// Optional so the multi-view search overlay can omit it. When present, the
@@ -89,6 +72,10 @@ struct SearchView: View {
     let playAction: (StreamChannel) -> Void
     let onCategorySelect: (StreamCategory) -> Void
     let onDismiss: () -> Void
+    /// Dock tab hand-off — the owner dismisses this cover and navigates.
+    /// nil (multi-view overlay) hides the dock and shows a circular ✕ in
+    /// the chrome row instead.
+    var onDockTab: ((NuvioTab) -> Void)? = nil
 
     private enum Scope: String, CaseIterable {
         case all = "All", channels = "Channels", epg = "EPG", recordings = "Recordings"
@@ -263,10 +250,20 @@ struct SearchView: View {
                         .scrollProgressOpacity(titleProgress) { 1 - Double($0) }
                         .background(ScrollOffsetProbe(space: "searchScroll", id: "search"))
 
+                    // Outlined rounded field directly under the title, like
+                    // the reference's Search page.
+                    searchField
+                        .padding(.bottom, 22)
+
                     Group {
                         if query.isEmpty {
                             if browseReady {
                                 VStack(alignment: .leading, spacing: 26) {
+                                    Text("Discover")
+                                        .font(.system(size: 30, weight: .heavy))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 20)
+                                        .padding(.bottom, -6)
                                     liveGamesSection
                                     recentChannelsSection
                                     browseGrid
@@ -294,9 +291,9 @@ struct SearchView: View {
                     // getting laid out narrow and visibly growing to full
                     // width — the "cover sliding away" on open.
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    // Clearance for the floating search field below — results
-                    // scroll behind its glass instead of stopping above it.
-                    .padding(.bottom, 90)
+                    // Clearance for the floating dock — results scroll
+                    // behind its translucent slab instead of stopping above.
+                    .padding(.bottom, 118)
                     }
                 }
                 .coordinateSpace(name: "searchScroll")
@@ -366,16 +363,22 @@ struct SearchView: View {
                     }
                 }
 
-            // The field floats OVER the scroll view (bottom-aligned ZStack)
-            // so results pass behind its liquid glass while scrolling.
-            // Scoped animation: only this container animates with keyboard
-            // frame changes.
-            VStack {
-                Spacer()
-                searchField
-                    .padding(.bottom, keyboardHeight > 0 ? keyboardHeight + 8 : screenInsets.bottom + 8)
+            // The floating dock, Search tab active — the cover reads as one
+            // of the app's tabs, exactly like the reference. Hidden while the
+            // keyboard is up (the keyboard covers it anyway) and absent for
+            // the multi-view overlay, which uses the chrome-row ✕ instead.
+            if let onDockTab, keyboardHeight == 0 {
+                VStack {
+                    Spacer()
+                    NuvioTabDock(active: .search) { tab in
+                        guard tab != .search else { return }
+                        fieldFocused = false
+                        onDockTab(tab)
+                    }
+                    .padding(.bottom, max(screenInsets.bottom, 8))
+                }
+                .transition(.opacity)
             }
-            .animation(.easeOut(duration: 0.2), value: keyboardHeight)
             }
         }
         // Swipe-to-close: the whole overlay blurs and fades away as the finger
@@ -461,34 +464,17 @@ struct SearchView: View {
 
     // MARK: - Header
 
-    /// Fixed chrome row, IDENTICAL to the Sports/Favorites sections: Back
-    /// pill on the leading edge, settings gear trailing, and the compact
-    /// "Search" title crossfading in between them as the big in-scroll
-    /// title departs — pure opacity, no layout shift.
+    /// Minimal chrome row — the dock owns navigation now, so the row only
+    /// hosts the compact "Search" title crossfading in as the big in-scroll
+    /// title departs, plus a circular ✕ for the dock-less multi-view overlay.
     private var chromeRow: some View {
         HStack {
-            Button {
-                fieldFocused = false
-                onDismiss()
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "chevron.left")
-                        .font(.body.weight(.semibold))
-                    Text("Back")
-                        .font(.body)
-                }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 14)
-                .frame(height: 44)
-                .modifier(GlassEffect(cornerRadius: 22, isSelected: false, accentColor: nil))
-            }
-            .buttonStyle(.plain)
             Spacer()
-            if scoreViewModel != nil {
-                SettingsGearButton {
+            if onDockTab == nil {
+                NuvioCircleButton(systemName: "xmark") {
                     viewModel.triggerSelectionHaptic()
                     fieldFocused = false
-                    showSettings = true
+                    onDismiss()
                 }
             }
         }
@@ -506,12 +492,12 @@ struct SearchView: View {
 
     private var bigTitle: some View {
         Text("Search")
-            .font(.system(size: 34, weight: .bold))
+            .font(NuvioTheme.pageTitleFont)
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 20)
             .padding(.top, 2)
-            .padding(.bottom, 14)
+            .padding(.bottom, 16)
     }
 
     private var scopeChips: some View {
@@ -521,14 +507,7 @@ struct SearchView: View {
                     Button {
                         setScope(s)
                     } label: {
-                        Text(s.rawValue)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(scope == s ? .black : .white)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 9)
-                            .background(
-                                Capsule().fill(scope == s ? Color.white : Color.white.opacity(0.10))
-                            )
+                        NuvioChipLabel(title: s.rawValue, isSelected: scope == s)
                     }
                     .buttonStyle(.plain)
                 }
@@ -548,21 +527,17 @@ struct SearchView: View {
         if let svm = scoreViewModel {
             let games = Array(svm.allLiveGames.prefix(12))
             if !games.isEmpty {
-                VStack(alignment: .leading, spacing: 12) {
-                    // No leading dot — the title must line up flush with the
-                    // "Recently Watched" header below it; the red count badge
-                    // already reads as live.
-                    HStack(spacing: 8) {
-                        Text("Live Now")
-                            .font(.title3.weight(.bold))
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
+                VStack(alignment: .leading, spacing: 14) {
+                    // Nuvio underlined header + the red live-count badge.
+                    HStack(alignment: .top, spacing: 8) {
+                        searchHeader("Live Now", inset: 0)
                         Text("\(svm.allLiveGames.count)")
                             .font(.caption.bold())
                             .foregroundStyle(.white)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 2)
                             .background(Capsule().fill(Color.red))
+                            .padding(.top, 3)
                     }
                     .padding(.horizontal, 20)
 
@@ -600,13 +575,8 @@ struct SearchView: View {
             viewModel.channels.first(where: { $0.id == id })
         }
         if !recents.isEmpty {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Recently Watched")
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .padding(.horizontal, 20)
+            VStack(alignment: .leading, spacing: 14) {
+                searchHeader("Recently Watched")
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(spacing: 14) {
@@ -640,7 +610,7 @@ struct SearchView: View {
     private func recentTile(_ channel: StreamChannel) -> some View {
         ZStack {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.black.opacity(0.55))
+                .fill(NuvioTheme.card)
             if let icon = channel.icon, !icon.isEmpty {
                 CachedAsyncImage(urlString: icon, size: CGSize(width: 84, height: 84))
                     .padding(12)
@@ -660,12 +630,24 @@ struct SearchView: View {
 
     // MARK: - Browse (empty query)
 
+    /// Nuvio underlined section header for the search page (20pt inset to
+    /// match the page's own padding).
+    private func searchHeader(_ title: String, inset: CGFloat = 20) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(title)
+                .font(NuvioTheme.sectionTitleFont)
+                .foregroundStyle(.white)
+                .lineLimit(1)
+            RoundedRectangle(cornerRadius: 2)
+                .fill(.white)
+                .frame(width: 56, height: 3.5)
+        }
+        .padding(.horizontal, inset)
+    }
+
     private var browseGrid: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Browse")
-                .font(.title3.weight(.bold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 20)
+            searchHeader("Browse")
 
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
                 ForEach(viewModel.categories.filter { !$0.isHidden }) { cat in
@@ -688,7 +670,11 @@ struct SearchView: View {
                         .padding(.horizontal, 12)
                         .background(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(Color.white.opacity(0.08))
+                                .fill(NuvioTheme.card)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(Color.white.opacity(0.06), lineWidth: 0.5)
                         )
                     }
                     .buttonStyle(.plain)
@@ -887,7 +873,11 @@ struct SearchView: View {
             .padding(14)
             .background(
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(Color.white.opacity(0.08))
+                    .fill(NuvioTheme.card)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .stroke(Color.white.opacity(0.06), lineWidth: 0.5)
             )
         }
         .buttonStyle(.plain)
@@ -963,57 +953,44 @@ struct SearchView: View {
         }
     }
 
-    // MARK: - Bottom search field
+    // MARK: - Search field (top, outlined — reference style)
 
     private var searchField: some View {
         HStack(spacing: 10) {
-            HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                TextField("Search", text: $queryText)
-                    .textFieldStyle(.plain)
-                    .foregroundColor(.white)
-                    .submitLabel(.search)
-                    .focused($fieldFocused)
-                if !queryText.isEmpty {
-                    Button {
-                        viewModel.triggerSelectionHaptic()
-                        queryText = ""
-                        pushTask?.cancel()
-                        pushPending = false
-                        viewModel.searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 18))
-                            .foregroundStyle(.white.opacity(0.5))
-                    }
-                    .buttonStyle(.plain)
-                    .transition(.scale.combined(with: .opacity))
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 13)
-            .modifier(SearchBarGlass(cornerRadius: 100))
-
+            TextField("Search channels, shows...", text: $queryText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 16))
+                .foregroundColor(.white)
+                .submitLabel(.search)
+                .focused($fieldFocused)
             if !queryText.isEmpty {
                 Button {
-                    fieldFocused = false
-                    onDismiss()
+                    viewModel.triggerSelectionHaptic()
+                    queryText = ""
+                    pushTask?.cancel()
+                    pushPending = false
+                    viewModel.searchText = ""
                 } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 44, height: 44)
-                        .modifier(GlassEffect(cornerRadius: 22, isSelected: false, accentColor: nil))
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundStyle(.white.opacity(0.5))
                 }
                 .buttonStyle(.plain)
                 .transition(.scale.combined(with: .opacity))
             }
         }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
+        .background(
+            RoundedRectangle(cornerRadius: 17, style: .continuous)
+                .fill(Color.white.opacity(0.02))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 17, style: .continuous)
+                .stroke(Color.white.opacity(0.55), lineWidth: 1.2)
+        )
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: queryText.isEmpty)
-        .padding(.horizontal, 16)
-        .padding(.top, 6)
+        .padding(.horizontal, 20)
         .contentShape(Rectangle())
         .onTapGesture { fieldFocused = true }
     }
