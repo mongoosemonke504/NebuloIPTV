@@ -1933,7 +1933,12 @@ class ChannelViewModel: ObservableObject {
     }
     
     nonisolated static func processCategories(_ loadedCats: [StreamCategory], prefix: String, idOffset: Int) async -> [StreamCategory] {
-        var mutable = loadedCats; let data = UserDefaults.standard.data(forKey: prefix + "renamedCategories") ?? Data()
+        // Renames are written by renameCategory under the GLOBAL key (its
+        // settingsPrefix is empty), keyed by the displayed category id
+        // (originalID + idOffset). Reading them here under the account-prefixed
+        // key is why renames never survived a reload — the two keys never
+        // matched. Read the same global key the write uses.
+        var mutable = loadedCats; let data = UserDefaults.standard.data(forKey: "renamedCategories") ?? Data()
         let renames = (try? JSONDecoder().decode([Int: String].self, from: data)) ?? [:]
         
         
@@ -2135,6 +2140,17 @@ class ChannelViewModel: ObservableObject {
         let startTime = game.gameDate
         let endTime = startTime.addingTimeInterval(3 * 3600)
 
+        // Full team names ("Los Angeles Lakers at Boston Celtics") for the
+        // recording title, rather than the three-letter shortName.
+        let fullAway = game.awayCompetitor?.team?.displayName ?? game.awayCompetitor?.athlete?.displayName
+        let fullHome = game.homeCompetitor?.team?.displayName ?? game.homeCompetitor?.athlete?.displayName
+        let title: String = {
+            if let fullAway, let fullHome, !fullAway.isEmpty, !fullHome.isEmpty {
+                return "\(fullAway) at \(fullHome)"
+            }
+            return game.shortName
+        }()
+
         // A recording got armed — the one state change here that deserves
         // the full "success" tap.
         triggerNotificationHaptic(.success)
@@ -2142,7 +2158,7 @@ class ChannelViewModel: ObservableObject {
             channel: channel,
             startTime: startTime,
             endTime: endTime,
-            programTitle: game.shortName,
+            programTitle: title,
             category: .sports
         )
     }

@@ -1056,6 +1056,15 @@ struct FavoriteReminderRow: View {
         let f = DateFormatter(); f.dateFormat = "EEE, MMM d"; return f
     }()
 
+    /// Full team names ("Los Angeles Lakers at Boston Celtics") rather than the
+    /// three-letter shortName, falling back to shortName if names are missing.
+    private var matchupName: String {
+        let away = game.awayCompetitor?.team?.displayName
+        let home = game.homeCompetitor?.team?.displayName
+        if let away, let home, !away.isEmpty, !home.isEmpty { return "\(away) at \(home)" }
+        return game.shortName
+    }
+
     /// The live/upcoming/final state as a coloured status word.
     private var statusPill: (text: String, color: Color)? {
         switch game.status.type.state {
@@ -1104,10 +1113,11 @@ struct FavoriteReminderRow: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text(game.shortName)
+                    Text(matchupName)
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(.white)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                     if let pill = statusPill {
                         Text(pill.text)
                             .font(.system(size: 9, weight: .black))

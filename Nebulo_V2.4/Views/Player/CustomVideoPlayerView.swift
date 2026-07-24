@@ -10,6 +10,9 @@ struct CustomVideoPlayerView: SwiftUI.View {
     var namespace: Namespace.ID? = nil
     var onDismiss: (() -> Void)? = nil
     var onPlayChannel: ((StreamChannel) -> Void)? = nil
+    /// Routes a recording tapped in the info panel up to MainView, which
+    /// dismisses this player and presents the recording over home.
+    var onPlayRecording: ((Recording) -> Void)? = nil
     /// When true: suppresses the record button and active-recording URL hijack.
     var isRecordingPlayback: Bool = false
     /// When true: stays fullscreen in portrait (skips the split video+info layout).
@@ -430,6 +433,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
                 PlayerInfoPanel(
                     channel: infoChannel ?? currentChannel ?? channel,
                     onPlayChannel: onPlayChannel,
+                    onPlayRecording: onPlayRecording,
                     viewModel: vm,
                     playerManager: playerManager,
                     isRecordingPlayback: isRecordingPlayback,

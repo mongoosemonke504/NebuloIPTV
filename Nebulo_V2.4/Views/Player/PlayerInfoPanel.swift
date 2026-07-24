@@ -24,6 +24,11 @@ private enum InfoTab: Int, CaseIterable {
 struct PlayerInfoPanel: View {
     let channel: StreamChannel
     var onPlayChannel: ((StreamChannel) -> Void)? = nil
+    /// Tapping a finished recording routes UP to the presenter (MainView) so it
+    /// can dismiss this live player and present the recording over the home
+    /// screen — otherwise a nested cover leaves the old player underneath and
+    /// minimising the recording drops back onto it, not home.
+    var onPlayRecording: ((Recording) -> Void)? = nil
     @ObservedObject var viewModel: ChannelViewModel
     @ObservedObject var playerManager: NebuloPlayerEngine
     @ObservedObject var recordingManager = RecordingManager.shared
@@ -41,9 +46,6 @@ struct PlayerInfoPanel: View {
     @State private var selectedTab: InfoTab = .channels
     @State private var showFullDescription = false
     @State private var showRecordingSheet = false
-    /// A finished recording tapped in the Recordings tab, played over the live
-    /// player via a full-screen cover.
-    @State private var recordingToPlay: Recording?
 
     /// 0 at rest, 1 once the active tab's list has been scrolled. Tracked
     /// 1:1 with the scroll offset (same mechanism as the section headers):
@@ -607,7 +609,7 @@ struct PlayerInfoPanel: View {
                 VStack(spacing: 0) {
                     ForEach(Array(sorted.enumerated()), id: \.element.id) { idx, rec in
                         RecordingRow(recording: rec, recordingManager: recordingManager,
-                                     onPlay: { recordingToPlay = rec })
+                                     onPlay: { onPlayRecording?(rec) })
                         if idx < sorted.count - 1 {
                             Divider().background(Color.white.opacity(0.07)).padding(.leading, 18)
                         }
@@ -619,12 +621,6 @@ struct PlayerInfoPanel: View {
             }
         }
         .scrollPosition($recordingsScroll)
-        // Play a finished recording over the live player. RecordingPlayerView
-        // owns the .ts duration/scrubbing fix, so this reuses it wholesale
-        // rather than swapping the shared engine to the local file by hand.
-        .fullScreenCover(item: $recordingToPlay) { rec in
-            RecordingPlayerView(recording: rec, viewModel: viewModel)
-        }
         .onScrollGeometryChange(for: CGFloat.self) { geo in
             geo.contentOffset.y + geo.contentInsets.top
         } action: { _, scrolled in

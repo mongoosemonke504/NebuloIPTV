@@ -367,10 +367,10 @@ struct GameDetailPresenter: View {
             .onChanged { v in
                 if !dragEngaged.value {
                     // Engage on a clearly downward, vertical drag when either
-                    // the scroll is at its top OR the drag started anywhere
-                    // above the tab chips — so the whole header (score, watch
-                    // button, grabber) closes the card, not just the grey bar,
-                    // in any scroll state. Leaves mid-content scrolling and
+                    // the scroll is at its top OR the drag started on the chips
+                    // or anywhere above them — so the whole header (score, watch
+                    // button, chips, grabber) closes the card, not just the grey
+                    // bar, in any scroll state. Leaves mid-content scrolling and
                     // horizontal paging alone.
                     guard atTop.value || v.startLocation.y < (chipTopY.value),
                           v.translation.height > 0,
@@ -703,12 +703,14 @@ struct GameDetailContentView: View {
     /// positions that don't move when the whole card is slid up or down.
     private static let cardSpace = "gdCard"
 
-    /// Writes the chips' global top into the presenter's drag-handle box, but
-    /// only from the on-screen page — a peeking neighbour's chips sit far off to
-    /// the side, so their large horizontal offset excludes them.
+    /// Writes the chips' global BOTTOM edge into the presenter's drag-handle
+    /// box, so a downward drag starting on the chips (or anywhere above them)
+    /// closes the card — matching the grey grabber. Only the on-screen page
+    /// reports; a peeking neighbour's chips sit far off to the side, so their
+    /// large horizontal offset excludes them.
     private func reportChipTop(_ frame: CGRect) {
         guard frame.minX > -60, frame.minX < 100 else { return }
-        chipTopReport?.value = frame.minY
+        chipTopReport?.value = frame.maxY
     }
 
     private var isSoccer: Bool { request.leagueCode != nil || request.sport.isSoccer }

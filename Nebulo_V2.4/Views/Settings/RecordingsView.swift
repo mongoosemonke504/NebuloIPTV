@@ -531,11 +531,20 @@ struct RecordingsView: View {
                     ForEach(scheduledRecordings) { recording in
                         ScheduledRecordingRow(
                             recording: recording,
-                            onCancel: { manager.deleteRecording(recording) }
+                            // Animate the removal so the row slides off and the
+                            // list collapses, like a List row deleted via swipe.
+                            onCancel: {
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    manager.deleteRecording(recording)
+                                }
+                            }
                         )
+                        .transition(.move(edge: .leading).combined(with: .opacity))
                         .contextMenu {
                             Button(role: .destructive) {
-                                manager.deleteRecording(recording)
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    manager.deleteRecording(recording)
+                                }
                             } label: {
                                 Label("Cancel Recording", systemImage: "trash")
                             }
@@ -827,8 +836,9 @@ struct ScheduledRecordingRow: View {
     }
 
     private func cancel() {
-        withAnimation(.easeIn(duration: 0.2)) { dragX = -(actionWidth + 400) }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { onCancel() }
+        // The parent animates the actual removal (row slides off + list
+        // collapses via a move/opacity transition), matching a List swipe.
+        onCancel()
     }
 
     /// Compact badge under the record dot: "2h", "45m", "3d", or "SOON".

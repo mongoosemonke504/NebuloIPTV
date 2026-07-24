@@ -336,10 +336,13 @@ struct MainViewModifiers: ViewModifier {
                     )
                 }
             }
+            // Plays a recording over the HOME screen (transparent cover). A
+            // recording tapped inside the live player routes here after that
+            // player is dismissed, so minimising the recording drops back to
+            // home rather than the old live player.
             .fullScreenCover(item: $selectedRecording) { recording in
-
-
-                Text("Recording Player")
+                RecordingPlayerView(recording: recording, viewModel: viewModel)
+                    .ignoresSafeArea()
             }
 
             // isPresented stays true while ANY channel is selected, so
@@ -362,6 +365,17 @@ struct MainViewModifiers: ViewModifier {
                         }
                     }, onPlayChannel: { newChannel in
                         playAction(newChannel)
+                    }, onPlayRecording: { rec in
+                        // Leave the live player entirely, then present the
+                        // recording over home once it has dismissed.
+                        selectedChannel = nil
+                        showQuickSwitcher = false
+                        if viewModel.miniPlayerChannel == nil {
+                            NebuloPlayerEngine.shared.stop()
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                            selectedRecording = rec
+                        }
                     }, showQuickSwitcher: $showQuickSwitcher)
                     .ignoresSafeArea()
                     // Transparent cover: while the player card is dragged
