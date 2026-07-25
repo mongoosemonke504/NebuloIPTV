@@ -645,6 +645,10 @@ struct StandardLayout: SwiftUI.View {
     /// hero's stretch so no black gap ever opens above it.
     @State private var heroPull = ScrollProgress()
 
+    /// Downward scroll distance, clamped to the hero's height. Drives the
+    /// hero artwork's scroll parallax — Nuvio's `HERO_SCROLL_PARALLAX`.
+    @State private var heroScroll = ScrollProgress()
+
     /// Channel tapped anywhere on the home screen. Opens the same preview
     /// popup a channel tap in a category does, rather than starting playback
     /// straight away.
@@ -892,6 +896,16 @@ struct StandardLayout: SwiftUI.View {
                         }
                         Spacer()
                     }
+                    // The row must RESERVE the compact title's height even on
+                    // the hub tabs, which have no back button. Without this the
+                    // row was only as tall as its 8pt padding, the safe-area
+                    // inset reserved almost nothing, and the title — drawn in
+                    // an overlay, which doesn't contribute height — spilled
+                    // over the pinned chip row beneath it. That's what read as
+                    // the scrunched, overlapping compact header on Sports and
+                    // Favorites. 40pt is the circular back button's size, so
+                    // drill-down pages are unchanged.
+                    .frame(height: 40)
                     .overlay {
                         if cat.id >= 0 || cat.id == -2 {
                             VStack(spacing: 1) {
@@ -959,7 +973,8 @@ struct StandardLayout: SwiftUI.View {
                                     items: cachedDisplayedFeatured,
                                     viewModel: viewModel,
                                     accentColor: accentColor,
-                                    openAction: openFeatured
+                                    openAction: openFeatured,
+                                    scroll: heroScroll
                                 )
                                 .id(selectedHomeGroup?.rawValue ?? "for-you")
                                 // Rubber-banding past the top stretches the
@@ -1178,6 +1193,11 @@ struct StandardLayout: SwiftUI.View {
                         homeHeaderProgress.set(min(max((scrolled - start) / 60, 0), 1))
                         // Top rubber-band distance → hero stretch.
                         heroPull.set(max(0, -scrolled))
+                        // Downward distance → the artwork's scroll parallax.
+                        // Clamped at the hero's height, exactly as Nuvio stops
+                        // tracking once the hero has left the viewport.
+                        let heroHeight = UIScreen.main.bounds.height * 0.60
+                        heroScroll.set(min(max(0, scrolled), heroHeight))
                     }
                     // Status-bar scrim — fades in once the hero has scrolled
                     // away so the clock/battery stay legible over passing
@@ -2952,6 +2972,11 @@ struct FeaturedCarousel: View {
     /// Opens the page's destination — the channel preview popup, or the game
     /// card for a live matchup. Playback starts from there, not from here.
     let openAction: (FeaturedItem) -> Void
+    /// How far the home screen has scrolled down, clamped to the hero's own
+    /// height. Drives Nuvio's backdrop scroll parallax. NOT observed here —
+    /// only the `HeroScrollParallax` leaf watches it, so a scroll frame
+    /// re-renders that transform instead of the whole carousel.
+    let scroll: ScrollProgress
 
     /// Snapped page.
     @State private var page = 0
@@ -3037,7 +3062,11 @@ struct FeaturedCarousel: View {
             //    edge. Alpha is the page's visibility.
             ForEach(layers, id: \.index) { layer in
                 NuvioHeroBackdrop(item: items[layer.index], height: heroHeight)
-                    .scaleEffect(Self.backgroundScale)
+                    // Scroll parallax + the carousel's base scale, then the
+                    // page's own sideways parallax on top (so the horizontal
+                    // shift isn't multiplied by the scale, matching Nuvio's
+                    // single graphicsLayer).
+                    .modifier(HeroScrollParallax(scroll: scroll, baseScale: Self.backgroundScale))
                     .offset(x: -layer.offset * screenWidth * Self.backgroundParallax)
                     .opacity(Double(layer.visibility))
             }
@@ -3232,10 +3261,10 @@ struct NuvioHeroBackdrop: View {
             } else {
                 let base = glow ?? Color(white: 0.28)
                 ZStack {
-                    LinearGradient(
-                        colors: [base.opacity(0.75), base.opacity(0.34), Color(white: 0.05)],
-                        startPoint: .top, endPoint: .bottom
-                    )
+                    // Solid brand tone across the whole backdrop — the same
+                    // colour the channel's cards are filled with — with the
+                    // brighter glow pooling behind the logo for depth.
+                    LogoGlow.tone(for: channel.icon) ?? Color(white: 0.13)
                     RadialGradient(
                         colors: [base.opacity(0.55), .clear],
                         center: UnitPoint(x: 0.5, y: 0.34),

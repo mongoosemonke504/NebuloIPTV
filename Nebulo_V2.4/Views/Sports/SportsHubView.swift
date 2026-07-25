@@ -94,6 +94,12 @@ struct SportsHubView: View {
     /// the chips instead of flipping the page.
     @State private var chipBarFrame: CGRect = .zero
 
+    /// Set the instant a drag reads as horizontal, which disables the hub's
+    /// vertical scroll for the rest of that gesture — a sideways swipe then
+    /// travels purely sideways instead of also dragging the page up or down.
+    /// A leaf box, so flipping it re-renders the scroll modifier alone.
+    @State private var scrollLock = FlagBox()
+
     /// Offset-based scroll control for the hub's single scroll view.
     /// `scrollTo(id:)` was a silent no-op whenever the target row wasn't
     /// materialised by the LazyVStack (always the case when scrolled deep),
@@ -221,6 +227,8 @@ struct SportsHubView: View {
             }
             .coordinateSpace(name: "sportsScroll")
             .scrollPosition($hubScrollPos)
+            // Frozen for the duration of a horizontal swipe (see scrollLock).
+            .scrollLocked(scrollLock)
             .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
                 guard let y = offsets["sports"] else { return }
                 hubMetrics.scrollY = max(0, -y)
@@ -244,6 +252,21 @@ struct SportsHubView: View {
                         if abs(dx) > abs(dy) * 1.4 {
                             SwipeTapGuard.suppress()
                         }
+                        // ...and FREEZE the vertical scroll, so a sideways
+                        // swipe travels purely sideways instead of also
+                        // dragging the page up or down. Drags on the chip row
+                        // (which scroll the chips) and left-edge back swipes
+                        // are left alone. A drag that turns decisively VERTICAL
+                        // before a page flip releases the lock again, so this
+                        // can never strand the page unscrollable.
+                        if value.startLocation.x > 44,
+                           !chipBarFrame.contains(value.startLocation) {
+                            if abs(dx) > abs(dy) * 1.4 {
+                                scrollLock.set(true)
+                            } else if !swipeConsumed, abs(dy) > abs(dx) * 1.4 {
+                                scrollLock.set(false)
+                            }
+                        }
                         guard !swipeConsumed, !isSliding,
                               value.startLocation.x > 44,
                               !chipBarFrame.contains(value.startLocation),
@@ -251,7 +274,10 @@ struct SportsHubView: View {
                         swipeConsumed = true
                         advanceSportsTab(dx < 0 ? 1 : -1)
                     }
-                    .onEnded { _ in swipeConsumed = false }
+                    .onEnded { _ in
+                        swipeConsumed = false
+                        scrollLock.set(false)
+                    }
             )
             // Sync selectedSport when the chip selection changes so the
             // existing fetch/pre-resolution observers fire correctly.
@@ -305,6 +331,9 @@ struct SportsHubView: View {
             recomputeStats()
         }
         .onAppear {
+            // No swipe can be in flight on arrival, so never inherit a frozen
+            // scroll from a gesture that was cancelled on the way out.
+            scrollLock.set(false)
             // The remembered tab was restored without knowing which sports are
             // visible (that needs the view model). Drop back to All if it names
             // a sport the user has since hidden, so the hub can't open on a tab

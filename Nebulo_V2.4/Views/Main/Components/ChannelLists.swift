@@ -141,10 +141,10 @@ struct HorizontalPreviewList: View {
     }
 }
 
-/// Nuvio continue-watching card — 16:9 flat tile with the blurred-logo
-/// backdrop, the sharp logo centred, the channel name overlaid bottom-left
-/// over a dark gradient and the guide's remaining time as a black badge in
-/// the top-right corner.
+/// Nuvio continue-watching card — 16:9 tile filled SOLID with the logo's brand
+/// tone, the sharp logo centred, the channel name overlaid bottom-left over a
+/// dark gradient and the guide's remaining time as a black badge in the
+/// top-right corner.
 struct ContinueWatchingCard: View {
     let channel: StreamChannel
     let program: EPGProgram?
@@ -152,10 +152,11 @@ struct ContinueWatchingCard: View {
     /// Bumped when the colour lands in the shared cache; the colour itself is
     /// derived per render so a recycled view can't show a stale one.
     @State private var glowTick = 0
-    private var glow: Color? {
-        guard let icon = channel.icon, !icon.isEmpty else { return nil }
+
+    private var fill: Color {
         _ = glowTick
-        return LogoGlow.cache[icon]
+        return LogoGlow.tone(for: channel.icon).map { NuvioTheme.card.mix(with: $0, by: 0.55 + 0.45 * glowStrength) }
+            ?? NuvioTheme.card
     }
 
     private var timeLeftLabel: String? {
@@ -171,28 +172,6 @@ struct ContinueWatchingCard: View {
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
-            // Blurred backdrop + logo-derived glow, rasterised once via
-            // drawingGroup so the blurs don't re-composite every scroll frame.
-            ZStack {
-                // Brand-colour fill so the whole card is covered — a blurred
-                // wide logo alone left black bands top and bottom.
-                LinearGradient(
-                    colors: [(glow ?? Color(white: 0.34)).opacity(0.30 + 0.5 * glowStrength),
-                             (glow ?? Color(white: 0.34)).opacity(0.10 + 0.25 * glowStrength)],
-                    startPoint: .topLeading, endPoint: .bottomTrailing
-                )
-                RadialGradient(
-                    colors: [(glow ?? Color(white: 0.5)).opacity(0.5 * glowStrength), .clear],
-                    center: .center, startRadius: 0, endRadius: 170
-                )
-                CachedAsyncImage(urlString: channel.icon ?? "", size: CGSize(width: 290, height: 163))
-                    .blur(radius: 22)
-                    .opacity(0.10 + 0.7 * glowStrength)
-                    .clipped()
-            }
-            .frame(width: 290, height: 163)
-            .drawingGroup()
-
             CachedAsyncImage(urlString: channel.icon ?? "", size: nil)
                 .padding(30)
                 .frame(width: 290, height: 163)
@@ -223,7 +202,8 @@ struct ContinueWatchingCard: View {
             .frame(width: 290, alignment: .leading)
         }
         .frame(width: 290, height: 163)
-        .nuvioCard()
+        // Home screen card — carries Nuvio's glass rim.
+        .nuvioCard(fill: fill, depth: true)
         .overlay(alignment: .topTrailing) {
             if let label = timeLeftLabel {
                 NuvioCardBadge(text: label)
@@ -346,56 +326,35 @@ struct HomeChannelShelfCard: View {
     }
 }
 
-/// The artwork tile for a horizontal channel card: blurred logo backdrop plus a
-/// glow drawn from the logo's own brand colour (not the accent colour), so each
-/// channel's shelf card carries its own hue.
+/// The artwork tile for a horizontal channel card: a SOLID slab of the logo's
+/// own brand tone with the sharp logo centred on it. A channel has no poster
+/// art, and the gradient-over-blurred-logo this replaced only tinted a strip
+/// across the middle, leaving the rest near-black — a flat brand colour fills
+/// the whole tile and gives each channel an unmistakable identity.
 struct HorizontalChannelCardArt: View {
     let icon: String?
     let glowStrength: Double
+    /// Bumped when the tone lands in the shared cache; the colour itself is
+    /// derived per render so a recycled view can't show a stale one.
     @State private var glowTick = 0
-    private var glow: Color? {
-        guard let icon, !icon.isEmpty else { return nil }
+
+    private var fill: Color {
         _ = glowTick
-        return LogoGlow.cache[icon]
+        return LogoGlow.tone(for: icon).map { NuvioTheme.card.mix(with: $0, by: 0.55 + 0.45 * glowStrength) }
+            ?? NuvioTheme.card
     }
 
     var body: some View {
-        // A channel logo is usually wide, so a blurred COPY of it only tints a
-        // strip across the middle of the tile and the rest stays black — the
-        // "small square of colour" look. Base the tile on the logo's dominant
-        // colour instead so the whole card is filled, then layer the blurred
-        // artwork and the sharp logo over it.
-        let base = glow ?? Color(white: 0.34)
-        ZStack {
-            ZStack {
-                LinearGradient(
-                    colors: [base.opacity(0.30 + 0.55 * glowStrength),
-                             base.opacity(0.10 + 0.30 * glowStrength)],
-                    startPoint: .topLeading, endPoint: .bottomTrailing
-                )
-                RadialGradient(
-                    colors: [base.opacity(0.45 * glowStrength), .clear],
-                    center: .center, startRadius: 0, endRadius: 120
-                )
-                CachedAsyncImage(urlString: icon ?? "", size: CGSize(width: 200, height: 112))
-                    .blur(radius: 20)
-                    .opacity(0.08 + 0.72 * glowStrength)
-                    .clipped()
-            }
+        CachedAsyncImage(urlString: icon ?? "", size: nil)
+            .padding(16)
             .frame(width: 200, height: 112)
-            // Rasterised once so the blur isn't re-composited every frame.
-            .drawingGroup()
-
-            CachedAsyncImage(urlString: icon ?? "", size: nil)
-                .padding(16)
-        }
-        .frame(width: 200, height: 112)
-        .nuvioCard()
-        .task(id: icon) {
-            guard let icon, LogoGlow.cache[icon] == nil else { return }
-            _ = await LogoGlow.color(for: icon)
-            glowTick += 1
-        }
+            // Home screen card — carries Nuvio's glass rim.
+            .nuvioCard(fill: fill, depth: true)
+            .task(id: icon) {
+                guard let icon, LogoGlow.cache[icon] == nil else { return }
+                _ = await LogoGlow.color(for: icon)
+                glowTick += 1
+            }
     }
 }
 
@@ -439,15 +398,20 @@ struct ChannelRow: View, Equatable {
         return mins == 0 ? "\(hours)h" : "\(hours)h \(mins)m"
     }
 
-    // Logo-derived glow behind the tile — carries the channel's brand hue
-    // instead of a flat accent, matching the featured/shelf cards. Read from
-    // the shared cache per render: List recycles these rows across channels,
-    // and view state would keep a previous channel's colour for a frame.
+    // Logo-derived colour — carries the channel's brand hue instead of a flat
+    // accent, matching the featured/shelf cards: the solid tone fills the logo
+    // tile, the brighter glow spills out behind it. Read from the shared cache
+    // per render: List recycles these rows across channels, and view state
+    // would keep a previous channel's colour for a frame.
     @State private var glowTick = 0
     private var glow: Color? {
         guard let icon = channel.icon, !icon.isEmpty else { return nil }
         _ = glowTick
         return LogoGlow.cache[icon]
+    }
+    private var tile: Color {
+        _ = glowTick
+        return LogoGlow.tone(for: channel.icon) ?? Color(white: 0.13)
     }
 
     var body: some View {
@@ -461,8 +425,10 @@ struct ChannelRow: View, Equatable {
         }) {
             HStack(spacing: 14) {
                 ZStack {
+                    // Solid brand tone behind the logo; the plain hairline rim
+                    // the rest of the app uses (the glass rim is home-only).
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Color.primary.opacity(0.10))
+                        .fill(tile)
                     CachedAsyncImage(urlString: channel.icon ?? "", size: nil)
                         .padding(8)
                 }
@@ -581,6 +547,14 @@ struct ChannelPreviewSheet: View {
     let playAction: (StreamChannel) -> Void
     @Environment(\.dismiss) private var dismiss
 
+    /// Bumped once the logo's tone lands in the shared cache — the sheet can be
+    /// opened before any card has sampled this channel.
+    @State private var glowTick = 0
+    private var tile: Color {
+        _ = glowTick
+        return LogoGlow.tone(for: channel.icon) ?? Color(white: 0.13)
+    }
+
     private var currentProgram: EPGProgram? {
         viewModel.getCurrentProgram(for: channel)
     }
@@ -668,12 +642,14 @@ struct ChannelPreviewSheet: View {
                     // Channel identity
                     HStack(spacing: 14) {
                         ZStack {
+                            // Same solid brand tone as the channel's cards.
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(Color.white.opacity(0.06))
+                                .fill(tile)
                             CachedAsyncImage(urlString: channel.icon ?? "", size: nil)
                                 .padding(10)
                         }
                         .frame(width: 76, height: 76)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
                         VStack(alignment: .leading, spacing: 4) {
                             Text(channel.name)
@@ -823,5 +799,10 @@ struct ChannelPreviewSheet: View {
         .preferredColorScheme(.dark)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+        .task(id: channel.icon) {
+            guard let icon = channel.icon, LogoGlow.cache[icon] == nil else { return }
+            _ = await LogoGlow.color(for: icon)
+            glowTick += 1
+        }
     }
 }

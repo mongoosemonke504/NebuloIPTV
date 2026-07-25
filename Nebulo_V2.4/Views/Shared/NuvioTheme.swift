@@ -596,29 +596,99 @@ struct HeroStretch: ViewModifier {
 
 // MARK: - Shelf card chrome
 
-/// Flat charcoal 16:9 artwork tile used by the shelf cards — replaces the
-/// glass/glow tiles on the main screens so cards sit flat on the black
-/// canvas like the reference.
+/// The card tile used across the shelves, optionally carrying Nuvio's
+/// card-DEPTH treatment (`CardDepthEffect.kt` → `cardDepthVisual`): a 1pt rim
+/// whose white falls away from top to bottom, and a soft sheen across the top
+/// of the tile. Together they read as a slab of liquid glass catching light
+/// from above rather than a flat rectangle — the "lines around the cards" in
+/// the reference app.
+///
+/// `depth` is OPT-IN and lives only on the HOME screen's cards; everywhere else
+/// keeps the plain hairline, which is what the rest of the app is drawn with.
+///
+/// Nuvio's shipped defaults, scaled from its 0-100 sliders:
+///   edgeStrength 28 → 0.28   sheenStrength 10 → 0.10   edgeCoverage 0 → 0
+/// so the rim runs 0.28 at the top, 0.09 across the middle (0.28 × 0.33) and
+/// vanishes at the bottom edge.
 struct NuvioCardSurface: ViewModifier {
     var cornerRadius: CGFloat = 12
+    /// The tile's fill. Channel surfaces pass their logo-derived tone; anything
+    /// else gets the theme's charcoal.
+    var fill: Color? = nil
+    /// Nuvio's glass rim + sheen. Home screen only.
+    var depth: Bool = false
+
+    static let edgeStrength: Double = 0.28
+    static let sheenStrength: Double = 0.10
+    static let edgeCoverage: Double = 0
+
+    /// The rim: brightest along the top, gone by the bottom.
+    static let edgeGradient = LinearGradient(
+        stops: [
+            .init(color: .white.opacity(edgeStrength), location: 0),
+            .init(color: .white.opacity(edgeStrength * (0.33 + 0.67 * edgeCoverage)), location: 0.5),
+            .init(color: .white.opacity(edgeStrength * edgeCoverage), location: 1)
+        ],
+        startPoint: .top, endPoint: .bottom
+    )
+
+    /// Nuvio draws the sheen over the top 22% of the card's height; expressing
+    /// it as a full-height gradient that reaches clear at 0.22 is the same
+    /// thing without needing to measure the card.
+    static let sheenGradient = LinearGradient(
+        stops: [
+            .init(color: .white.opacity(sheenStrength), location: 0),
+            .init(color: .clear, location: 0.22)
+        ],
+        startPoint: .top, endPoint: .bottom
+    )
 
     func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         content
-            .background(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(NuvioTheme.card)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(Color.white.opacity(0.06), lineWidth: 0.5)
-            )
+            .background(shape.fill(fill ?? NuvioTheme.card))
+            // The sheen sits above the content, as Nuvio's drawWithContent
+            // does, and inside the clip so it follows the corners.
+            .overlay {
+                if depth { Self.sheenGradient.allowsHitTesting(false) }
+            }
+            .clipShape(shape)
+            .overlay {
+                if depth {
+                    shape.strokeBorder(Self.edgeGradient, lineWidth: 1)
+                } else {
+                    shape.stroke(Color.white.opacity(0.06), lineWidth: 0.5)
+                }
+            }
     }
 }
 
 extension View {
-    func nuvioCard(cornerRadius: CGFloat = 12) -> some View {
-        modifier(NuvioCardSurface(cornerRadius: cornerRadius))
+    func nuvioCard(cornerRadius: CGFloat = 12, fill: Color? = nil, depth: Bool = false) -> some View {
+        modifier(NuvioCardSurface(cornerRadius: cornerRadius, fill: fill, depth: depth))
+    }
+}
+
+/// Nuvio's hero SCROLL parallax (`HomeHeroSection.kt`): as the page scrolls the
+/// artwork slides down at a fraction of the scroll and swells a hair, so it
+/// lags behind the title and metadata travelling away at full speed. Applied to
+/// the backdrop only — that difference in speed IS the effect. Observes its own
+/// leaf object so per-frame scroll updates re-render this transform alone.
+struct HeroScrollParallax: ViewModifier {
+    @ObservedObject var scroll: ScrollProgress
+    /// The carousel's own backdrop scale, which this multiplies.
+    let baseScale: CGFloat
+
+    // Nuvio's constants.
+    private static let parallax: CGFloat = 0.3
+    private static let downScaleMultiplier: CGFloat = 0.0001
+    private static let maxScale: CGFloat = 1.3
+
+    func body(content: Content) -> some View {
+        let s = max(0, scroll.value)
+        content
+            .scaleEffect(baseScale * min(1 + s * Self.downScaleMultiplier, Self.maxScale))
+            .offset(y: s * Self.parallax)
     }
 }
 

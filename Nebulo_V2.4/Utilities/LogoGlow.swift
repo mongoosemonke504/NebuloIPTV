@@ -9,6 +9,11 @@ enum LogoGlow {
     /// Process-wide cache keyed by logo URL, so a logo's colour is sampled once.
     static var cache: [String: Color] = [:]
 
+    /// The SOLID card background for the same logo, filled in alongside the
+    /// glow. Channel tiles are flat slabs of this rather than a gradient over a
+    /// blurred copy of the logo — see `brandCardTone()`.
+    static var toneCache: [String: Color] = [:]
+
     /// Resolves the glow colour for a logo. Returns the cached value instantly,
     /// otherwise waits (briefly) for the logo to land in the image cache and
     /// samples it. Returns nil when there's no logo or it never decodes.
@@ -21,11 +26,20 @@ enum LogoGlow {
                let extracted = ui.brandGlowColor() {
                 let c = Color(extracted)
                 cache[icon] = c
+                toneCache[icon] = Color(extracted.brandCardTone())
                 return c
             }
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
         return nil
+    }
+
+    /// The channel's solid card colour, or nil until the logo has been sampled.
+    /// Read on every render (never held in view state) so a recycled card can't
+    /// paint the previous channel's colour.
+    static func tone(for icon: String?) -> Color? {
+        guard let icon, !icon.isEmpty else { return nil }
+        return toneCache[icon]
     }
 }
 
@@ -74,5 +88,25 @@ extension UIImage {
         let mx = max(r, g, b)
         if mx > 0, mx < 0.55 { let k = 0.55 / mx; r *= k; g *= k; b *= k }
         return UIColor(red: r, green: g, blue: b, alpha: 1)
+    }
+}
+
+extension UIColor {
+    /// The SOLID tone a channel card is filled with: this colour's hue, held at
+    /// a deep, consistent value so every tile is a flat brand-tinted slab that
+    /// a white logo and white text still read cleanly against. Saturation is
+    /// floored so pale brands still register and capped so garish ones calm
+    /// down; a logo with no real colour in it (a white or grey wordmark) gets
+    /// charcoal instead of an invented hue.
+    func brandCardTone() -> UIColor {
+        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        guard getHue(&h, saturation: &s, brightness: &b, alpha: &a) else {
+            return UIColor(white: 0.13, alpha: 1)
+        }
+        guard s > 0.12 else { return UIColor(white: 0.13, alpha: 1) }
+        return UIColor(hue: h,
+                       saturation: min(max(s, 0.50), 0.85),
+                       brightness: 0.32,
+                       alpha: 1)
     }
 }
