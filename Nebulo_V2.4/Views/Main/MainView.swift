@@ -577,6 +577,9 @@ struct StandardLayout: SwiftUI.View {
     // groupedCategories is cheap (O(categories) ≈ few hundred) but still
     // cached so the ForEach never re-evaluates on every viewModel publish.
     @State private var cachedGrouped: [(HomeCategoryGroup, [StreamCategory])] = []
+    /// `cachedGrouped` flattened into shelf order. Derived alongside it rather
+    /// than in the body, so scrolling never re-runs the flatMap.
+    @State private var shelfCategories: [StreamCategory] = []
 
     /// Selected chip filter at the top of the home screen.
     /// `nil` means "For You" (default mixed view).
@@ -952,14 +955,15 @@ struct StandardLayout: SwiftUI.View {
             // hit-testing gated while a section is open.
             if !viewModel.isLoading {
                 ScrollView(showsIndicators: false) {
-                    // Batch every liquid-glass element on the home screen into a
-                    // single coordinated render pass. Each `.glassEffect` card
-                    // otherwise samples and blurs the backdrop independently
-                    // every scroll frame — the home screen's unique cost vs the
-                    // solid-fill Favorites/Sports screens. spacing 0 keeps the
-                    // separate cards from merging into one another.
-                    GlassEffectContainer(spacing: 0) {
-                        VStack(alignment: .leading, spacing: 30) {
+                    // NOTE: the GlassEffectContainer used to wrap this ENTIRE
+                    // stack. Nuvio's home list has no glass in it at all, and a
+                    // container spanning the whole scrolling page has to track
+                    // and coordinate glass geometry across every frame of a
+                    // scroll — for the sake of the two Quick Access buttons,
+                    // which are the only glass on the screen. The container now
+                    // wraps just those two (see below), so the shelves scroll
+                    // as cheaply as the solid-fill Favorites and Sports pages.
+                    VStack(alignment: .leading, spacing: 30) {
 
                             // 1. Full-bleed hero carousel — the artwork bleeds
                             //    behind the status bar exactly like the
@@ -1020,16 +1024,21 @@ struct StandardLayout: SwiftUI.View {
                             //    language as the settings rows (dark circle
                             //    glyph + bold label on a flat charcoal card),
                             //    so they sit quietly between the shelves.
-                            HStack(spacing: 12) {
-                                QuickAccessCard(title: "Recordings", icon: "record.circle.fill") {
-                                    viewModel.triggerSelectionHaptic()
-                                    viewModel.lastSelectedHomeID = -5
-                                    withAnimation(Self.pageAnimation) { selectedCategory = StreamCategory(id: -5, name: "Recordings") }
-                                }
-                                QuickAccessCard(title: "Multi-View", icon: "square.grid.2x2.fill") {
-                                    viewModel.triggerSelectionHaptic()
-                                    viewModel.lastSelectedHomeID = -99
-                                    withAnimation { showMultiView = true }
+                            // The screen's only glass, and so the only thing
+                            // inside a glass container. spacing 0 keeps the two
+                            // capsules from merging into one another.
+                            GlassEffectContainer(spacing: 0) {
+                                HStack(spacing: 12) {
+                                    QuickAccessCard(title: "Recordings", icon: "record.circle.fill") {
+                                        viewModel.triggerSelectionHaptic()
+                                        viewModel.lastSelectedHomeID = -5
+                                        withAnimation(Self.pageAnimation) { selectedCategory = StreamCategory(id: -5, name: "Recordings") }
+                                    }
+                                    QuickAccessCard(title: "Multi-View", icon: "square.grid.2x2.fill") {
+                                        viewModel.triggerSelectionHaptic()
+                                        viewModel.lastSelectedHomeID = -99
+                                        withAnimation { showMultiView = true }
+                                    }
                                 }
                             }
                             .padding(.horizontal)
@@ -1067,7 +1076,10 @@ struct StandardLayout: SwiftUI.View {
                             //    that category's channels, playable in place.
                             //    Lazy so off-screen shelves never build.
                             LazyVStack(alignment: .leading, spacing: 30) {
-                                ForEach(cachedGrouped.flatMap { $0.1 }) { cat in
+                                // Flattened ONCE when the grouping changes,
+                                // not on every body pass — the shelf list is
+                                // rebuilt on any viewModel publish otherwise.
+                                ForEach(shelfCategories) { cat in
                                     if let chans = channelsByCategory[cat.id], !chans.isEmpty {
                                         HomeCategoryShelf(
                                             category: cat,
@@ -1097,7 +1109,6 @@ struct StandardLayout: SwiftUI.View {
                                 .presentationDragIndicator(.visible)
                         }
                     }
-                    }
                     // The hero bleeds behind the status bar — the scroll
                     // content owns the full screen height.
                     .ignoresSafeArea(.container, edges: .top)
@@ -1106,7 +1117,7 @@ struct StandardLayout: SwiftUI.View {
                         // frame of the home screen has the carousel, recent
                         // channels and live games already in place — no
                         // flicker / empty state on appear.
-                        if cachedGrouped.isEmpty { cachedGrouped = groupedCategories }
+                        if cachedGrouped.isEmpty { setGroupedCategories(groupedCategories) }
                         if idToChannel.isEmpty {
                             var map = [Int: StreamChannel]()
                             map.reserveCapacity(viewModel.channels.count)
@@ -1135,13 +1146,13 @@ struct StandardLayout: SwiftUI.View {
                     // changes. Without these, the body would do all of these
                     // computations on every viewModel/scoreViewModel publish.
                     .task(id: viewModel.categories.count) {
-                        cachedGrouped = groupedCategories
+                        setGroupedCategories(groupedCategories)
                     }
                     // A rename changes a name but not the count, so refresh the
                     // cached shelves on the rename signal too — otherwise the
                     // new name only showed after a relaunch.
                     .task(id: viewModel.categoryRevision) {
-                        cachedGrouped = groupedCategories
+                        setGroupedCategories(groupedCategories)
                     }
                     .task(id: viewModel.channels.count) {
                         // Build the id → channel lookup. Done off the body so
@@ -1439,6 +1450,13 @@ struct StandardLayout: SwiftUI.View {
         }
 
         return result
+    }
+
+    /// Stores the grouping and the flattened shelf order together, so the two
+    /// can never drift apart.
+    private func setGroupedCategories(_ groups: [(HomeCategoryGroup, [StreamCategory])]) {
+        cachedGrouped = groups
+        shelfCategories = groups.flatMap { $0.1 }
     }
 
     /// Category shelves to render below Quick Access for the current chip.
@@ -2988,6 +3006,9 @@ struct FeaturedCarousel: View {
     /// Bumped when a drag ends, restarting the dwell countdown — so swiping
     /// resets the timer even when the swipe didn't commit.
     @State private var timerKey = 0
+    /// Bumped whenever a drag takes over, so an auto-advance that was already
+    /// sliding abandons its page commit instead of fighting the finger.
+    @State private var advanceToken = 0
 
     // ── Nuvio's constants ────────────────────────────────────────────────
     private static let backgroundParallax: CGFloat = 0.055
@@ -3054,6 +3075,35 @@ struct FeaturedCarousel: View {
             offsetFraction -= CGFloat(delta)
         }
         withAnimation(.easeOut(duration: duration)) { offsetFraction = 0 }
+    }
+
+    /// The AUTO-advance, which has to travel the whole page to read as a slide.
+    ///
+    /// `step` can't do this: from a resting `offsetFraction` of 0 it rebases to
+    /// -1 and eases back to 0, and SwiftUI folds those two writes in the same
+    /// update pass into "0 → 0" — no travel to animate, so the card simply
+    /// dissolved in place. (After a swipe it works, because the finger had
+    /// already moved the fraction somewhere non-zero.) So here the fraction is
+    /// animated OUTWARD to a full page first — exactly the path a finger takes
+    /// when it drags all the way across — and the page index is rebased only
+    /// once that animation has landed.
+    private func autoAdvance() {
+        guard items.count > 1 else { return }
+        let token = advanceToken
+        withAnimation(.easeInOut(duration: 0.7)) {
+            offsetFraction = 1
+        } completion: {
+            // A drag that interrupted the slide bumped the token; the gesture
+            // owns the fraction from that point, so don't yank the page out
+            // from under the finger.
+            guard advanceToken == token else { return }
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                page = (page + 1) % items.count
+                offsetFraction = 0
+            }
+        }
     }
 
     var body: some View {
@@ -3145,6 +3195,9 @@ struct FeaturedCarousel: View {
                     // page's tap action on release.
                     SwipeTapGuard.suppress()
                     guard items.count > 1 else { return }
+                    // The finger now owns the fraction — cancel any in-flight
+                    // auto-advance's page commit.
+                    advanceToken += 1
                     offsetFraction = max(-1, min(1, -dx / screenWidth))
                 }
                 .onEnded { value in
@@ -3180,9 +3233,7 @@ struct FeaturedCarousel: View {
             withAnimation(.linear(duration: Self.dwell)) { progress = 1 }
             try? await Task.sleep(nanoseconds: UInt64(Self.dwell * 1_000_000_000))
             guard !Task.isCancelled, offsetFraction == 0 else { return }
-            // Rebase so the OUTGOING card starts fully visible, then ease to
-            // zero — the same crossfade a finished swipe produces.
-            step(1, duration: 0.6)
+            autoAdvance()
         }
         // The featured list can shrink in place (a live game ends and its
         // channel drops out) — clamp so the pager never points past the end.
@@ -3274,6 +3325,22 @@ struct NuvioHeroBackdrop: View {
                     CachedAsyncImage(urlString: channel.icon ?? "", size: nil)
                         .frame(maxWidth: 190, maxHeight: 190)
                         .offset(y: -height * 0.17)
+
+                    // A dark logo gets a PALE tile so it can be seen at all
+                    // (see LogoGlow.brandSample) — but the hero's white title
+                    // and metadata sit over the lower half, so that half has to
+                    // come back down to dark. The carousel's shared dissolve
+                    // alone isn't enough over a light field.
+                    if LogoGlow.isLightTone(for: channel.icon) {
+                        LinearGradient(
+                            stops: [
+                                .init(color: .clear, location: 0.30),
+                                .init(color: .black.opacity(0.55), location: 0.58),
+                                .init(color: .black.opacity(0.88), location: 0.80)
+                            ],
+                            startPoint: .top, endPoint: .bottom
+                        )
+                    }
                 }
                 .task(id: channel.icon) {
                     guard let icon = channel.icon, LogoGlow.cache[icon] == nil else { return }
