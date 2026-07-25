@@ -742,15 +742,35 @@ class ChannelViewModel: ObservableObject {
 
             @inline(__always)
             func brandRoot(_ channel: StreamChannel) -> String {
-                let cleaned = NameCleaner.clean(channel.name).lowercased()
-                // The first alphanumeric word, with any trailing letters after
-                // a known brand stripped: "espnu" and "espn news" both give
-                // "espn".
-                let first = cleaned.split(separator: " ").first.map(String.init) ?? cleaned
-                for target in ChannelViewModel.popularNetworksLower where first.hasPrefix(target) { return target }
+                var cleaned = NameCleaner.clean(channel.name).lowercased()
+                // NameCleaner strips "US:" but not "US :", and this playlist
+                // writes the spaced form — which left EVERY channel sharing the
+                // brand root "us", so the hero could accept exactly one of
+                // them. Drop a leading country token before anything else.
+                cleaned = cleaned.replacingOccurrences(
+                    of: "^[a-z]{2,3}\\s*[:|\\-]\\s*",
+                    with: "",
+                    options: [.regularExpression]
+                )
+                // LONGEST match wins, so "US: Fox News HD" resolves to
+                // "fox news" and not to "fox" — taking the first match in list
+                // order collapsed the two, which both broke the hero's
+                // exclusion list and stopped FOX and Fox News being told apart.
+                var best: String?
                 for target in ChannelViewModel.popularNetworksLower
-                where ChannelViewModel.matches(cleaned: cleaned, target: target) { return target }
-                return first
+                where ChannelViewModel.matches(cleaned: cleaned, target: target) {
+                    if best == nil || target.count > best!.count { best = target }
+                }
+                if let best { return best }
+                // No word-boundary match: fold a suffixed variant onto its
+                // parent brand, which is what makes "espnu" the same brand as
+                // "espn". Longest first, for the same reason as above.
+                let first = cleaned.split(separator: " ").first.map(String.init) ?? cleaned
+                var prefixed: String?
+                for target in ChannelViewModel.popularNetworksLower where first.hasPrefix(target) {
+                    if prefixed == nil || target.count > prefixed!.count { prefixed = target }
+                }
+                return prefixed ?? first
             }
 
             /// Takes a channel for the hero unless its brand is already there.
@@ -758,7 +778,9 @@ class ChannelViewModel: ObservableObject {
             @inline(__always)
             func accept(_ channel: StreamChannel) -> Bool {
                 guard !seen.contains(channel.id) else { return false }
-                guard usedRoots.insert(brandRoot(channel)).inserted else { return false }
+                let root = brandRoot(channel)
+                guard !ChannelViewModel.heroExcludedNetworks.contains(root) else { return false }
+                guard usedRoots.insert(root).inserted else { return false }
                 seen.insert(channel.id)
                 result.append(channel)
                 return true
@@ -986,6 +1008,11 @@ class ChannelViewModel: ObservableObject {
         where matches(cleaned: cleaned, target: target) { return idx }
         return nil
     }
+
+    /// Networks that are popular enough to belong in the Popular Channels row
+    /// and the themed rows, but that the user does not want the hero carousel
+    /// opening on.
+    nonisolated static let heroExcludedNetworks: Set<String> = ["fox news"]
 
     /// Whether a playlist channel IS the given US network. Convenience over
     /// `popularityRank` for the rare one-off check — never call this in a loop
@@ -2132,6 +2159,11 @@ class ChannelViewModel: ObservableObject {
         struct Wrapper: Codable { let id: Int; var name: String; var isHidden: Bool; var order: Int }
         let wrappers = categories.map { Wrapper(id: $0.id, name: $0.name, isHidden: $0.isHidden, order: $0.order) }
         if let encoded = try? JSONEncoder().encode(wrappers) { UserDefaults.standard.set(encoded, forKey: settingsPrefix + "savedCategories") }
+        // Reordering or hiding a category changes neither the category COUNT
+        // nor any name, so without this the home shelves kept their old order
+        // until the next launch. Every caller of this is a deliberate save, so
+        // it's the right place to tell the home screen to rebuild.
+        categoryRevision += 1
     }
     
     func saveSportsConfigs() {
@@ -2208,7 +2240,13 @@ class ChannelViewModel: ObservableObject {
         
         
         struct Wrapper: Codable { let id: Int; var name: String; var isHidden: Bool; var order: Int }
-        if let savedData = UserDefaults.standard.data(forKey: prefix + "savedCategoriesanda"),
+        // The key had a stray "anda" on it while saveCategorySettings writes
+        // plain "savedCategories" — so the saved order, hidden flags and names
+        // were written every time and read back never. That is why reordering
+        // categories in Settings appeared to do nothing: the list fell through
+        // to the bottom path below, which re-derives order from raw playlist
+        // position on every load.
+        if let savedData = UserDefaults.standard.data(forKey: prefix + "savedCategories"),
            let saved = try? JSONDecoder().decode([Wrapper].self, from: savedData) {
             
             
@@ -2219,7 +2257,9 @@ class ChannelViewModel: ObservableObject {
                 
                 mutable[i] = StreamCategory(id: originalID + idOffset, name: mutable[i].name)
                 
-                if let s = savedMap[originalID] {
+                // Saved under the DISPLAYED id (raw + idOffset), which is what
+                // saveCategorySettings writes, so look it up the same way.
+                if let s = savedMap[originalID + idOffset] {
                     var c = mutable[i]
                     c.isHidden = s.isHidden
                     c.order = s.order
@@ -2228,9 +2268,8 @@ class ChannelViewModel: ObservableObject {
                     else { c.name = s.name } 
                     mutable[i] = c
                 } else {
-                     
-                    if let custom = renames[originalID] { mutable[i].name = custom }
-                    mutable[i].order = 9999 + i 
+                    if let custom = renames[originalID + idOffset] { mutable[i].name = custom }
+                    mutable[i].order = 9999 + i
                 }
             }
             

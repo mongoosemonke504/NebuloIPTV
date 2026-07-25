@@ -246,7 +246,7 @@ struct HomeCategoryShelf: View {
                 // Lazy: a shelf that scrolls into view builds only the cards
                 // actually on screen, so entering a new category shelf never
                 // costs a full row of logo art at once.
-                LazyHStack(spacing: 14) {
+                LazyHStack(spacing: 10) {
                     ForEach(channels) { c in
                         Button {
                             guard SwipeTapGuard.tapsAllowed else { return }
@@ -321,15 +321,17 @@ struct HorizontalChannelCardArt: View {
             ?? NuvioTheme.card
     }
 
-    /// Same 1.44 proportions as the reference's Continue Watching tile, so the
-    /// caption strip has somewhere to sit without crowding the logo.
-    static let cardWidth: CGFloat = 200
-    static let cardHeight: CGFloat = 139
+    /// Measured off the reference on the user's iPhone (1206px, 3x): the tiles
+    /// run 218pt wide by 123pt tall — a true 16:9 — set 10pt apart.
+    static let cardWidth: CGFloat = 218
+    static let cardHeight: CGFloat = 123
 
     var body: some View {
         CachedAsyncImage(urlString: icon ?? "", size: nil)
-            .padding(16)
-            .padding(.bottom, 28)
+            .padding(14)
+            // Room for the caption strip, so the logo stays centred in what's
+            // left of the artwork rather than behind the frost.
+            .padding(.bottom, 26)
             .frame(width: Self.cardWidth, height: Self.cardHeight)
             // Home screen card — carries Nuvio's glass rim.
             .nuvioCard(fill: fill, depth: true)

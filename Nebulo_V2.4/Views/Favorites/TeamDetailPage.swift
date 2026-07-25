@@ -323,8 +323,7 @@ struct TeamDetailPage: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            NuvioSectionHeader(title: title, showsChevron: chevron, action: action)
-                .padding(.horizontal, 20)
+            NuvioSectionHeader(title: title, showsChevron: chevron, inset: 20, action: action)
             content()
         }
     }
@@ -626,8 +625,7 @@ struct FullTableSheet: View {
             AppBackground().ignoresSafeArea()
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 14) {
-                    NuvioSectionHeader(title: group.name.isEmpty ? "Standings" : group.name)
-                        .padding(.horizontal, 20)
+                    NuvioSectionHeader(title: group.name.isEmpty ? "Standings" : group.name, inset: 20)
                         .padding(.top, 18)
                     StandingsBoard(group: group, highlightTeamID: highlightTeamID)
                     StandingsLegend(rows: group.rows)

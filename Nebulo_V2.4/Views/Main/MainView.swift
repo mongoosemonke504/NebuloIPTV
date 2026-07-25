@@ -955,15 +955,10 @@ struct StandardLayout: SwiftUI.View {
                     .frame(height: 40)
                     .overlay {
                         if cat.id >= 0 || cat.id == -2 {
-                            VStack(spacing: 1) {
-                                Text(cat.name)
-                                    .font(.system(size: 17, weight: .bold))
-                                    .foregroundStyle(.white)
-                                Text("Nebulo Playlist")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(NuvioTheme.secondaryText)
-                            }
-                            .lineLimit(1)
+                            Text(cat.name)
+                                .font(.system(size: 17, weight: .bold))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
                             .padding(.horizontal, 64)
                         } else if cat.id == -3 || cat.id == -4 || cat.id == -5 {
                             // Hub sections: the compact title crossfades in
@@ -1148,8 +1143,7 @@ struct StandardLayout: SwiftUI.View {
                                         }
                                     case .spotlight(let group):
                                         VStack(alignment: .leading, spacing: 14) {
-                                            NuvioSectionHeader(title: group.title)
-                                                .padding(.horizontal, 20)
+                                            NuvioSectionHeader(title: group.title, inset: 20)
                                             SpotlightShelf(
                                                 items: spotlightItems(for: group),
                                                 viewModel: viewModel,
@@ -1584,11 +1578,17 @@ struct StandardLayout: SwiftUI.View {
         return rows
     }
 
-    /// Stores the grouping and the flattened shelf order together, so the two
-    /// can never drift apart.
+    /// Stores the grouping and the shelf order together, so the two can never
+    /// drift apart.
+    ///
+    /// The shelves follow the USER'S OWN category order, not the genre buckets.
+    /// Flattening the buckets meant the home page led with every sports
+    /// category, then every news one, and so on — an order the Manage
+    /// Categories screen has no way to show and dragging there could not
+    /// change. The buckets are still kept for the group filter.
     private func setGroupedCategories(_ groups: [(HomeCategoryGroup, [StreamCategory])]) {
         cachedGrouped = groups
-        shelfCategories = groups.flatMap { $0.1 }
+        shelfCategories = viewModel.categories.filter { !$0.isHidden }
     }
 
     /// Category shelves to render below Quick Access for the current chip.
@@ -2819,7 +2819,7 @@ struct LiveGamesPreviewList: View {
         // Prevents the post-swipe gesture lockout that makes Quick Access
         // buttons un-tappable after scrolling this shelf.
         TouchPassingHorizontalScroll {
-            HStack(spacing: 14) {
+            HStack(spacing: 12) {
                 ForEach(games) { game in
                     LiveGameCard(game: game, accentColor: accentColor)
                         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -2969,7 +2969,7 @@ struct LiveGameCard: View {
     let accentColor: Color
 
     static let cardWidth: CGFloat = 245
-    static let cardHeight: CGFloat = 158
+    static let cardHeight: CGFloat = 173
 
     private var homeName: String {
         game.homeCompetitor?.team?.shortDisplayName
@@ -3536,9 +3536,10 @@ struct NuvioHeroContent: View {
             if let network = g.broadcastName, !network.isEmpty { parts.append(network) }
             return parts
         }
+        // What's on, and nothing else — the category a channel happens to be
+        // filed under isn't information anyone wants on a hero card.
         var parts: [String] = []
         if let prog = program { parts.append(prog.title) }
-        if let categoryName, !categoryName.isEmpty { parts.append(categoryName) }
         if parts.isEmpty { parts = ["Live TV"] }
         return parts
     }
@@ -3555,7 +3556,10 @@ struct NuvioHeroContent: View {
                         Text("\(away) \(g.awayCompetitor?.score ?? "0") – \(g.homeCompetitor?.score ?? "0") \(home)")
                     }
                 } else {
-                    Text(channel.name)
+                    // Country prefix, quality tag and regional affiliate all
+                    // stripped: "US: NBC Sports Bay Area FHD" reads as
+                    // "NBC Sports".
+                    Text(NameCleaner.simplifiedBrand(channel.name))
                 }
             }
             .font(.system(size: 30, weight: .heavy))

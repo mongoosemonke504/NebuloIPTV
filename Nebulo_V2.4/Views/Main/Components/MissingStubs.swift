@@ -502,19 +502,14 @@ struct SearchView: View {
 
     // MARK: - Browse (empty query)
 
-    /// Nuvio underlined section header for the search page (20pt inset to
-    /// match the page's own padding).
+    /// Section header for the search page (20pt inset to match the page's own
+    /// padding).
     private func searchHeader(_ title: String, inset: CGFloat = 20) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text(title)
-                .font(NuvioTheme.sectionTitleFont)
-                .foregroundStyle(.white)
-                .lineLimit(1)
-            RoundedRectangle(cornerRadius: 2)
-                .fill(.white)
-                .frame(width: 56, height: 3.5)
-        }
-        .padding(.horizontal, inset)
+        Text(title)
+            .font(NuvioTheme.sectionTitleFont)
+            .foregroundStyle(.white)
+            .lineLimit(1)
+            .padding(.horizontal, inset)
     }
 
     private var browseGrid: some View {

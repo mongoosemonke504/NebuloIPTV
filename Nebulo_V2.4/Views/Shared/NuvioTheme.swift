@@ -28,8 +28,13 @@ enum NuvioTheme {
 
     /// Giant page title ("Search", "Library", "Settings").
     static let pageTitleFont = Font.system(size: 38, weight: .heavy)
-    /// Section header title ("Continue Watching", "Series").
-    static let sectionTitleFont = Font.system(size: 21, weight: .bold)
+    /// Section header title ("Live Sports on Apple TV"). Measured off the
+    /// reference: a 15.3pt cap height, which at SF Pro's 0.7 cap ratio is a
+    /// 22pt bold.
+    static let sectionTitleFont = Font.system(size: 22, weight: .bold)
+    /// The inline chevron that follows a section title when the row leads
+    /// somewhere. Sized against the title's cap height, not its point size.
+    static let sectionChevronFont = Font.system(size: 17, weight: .bold)
     /// Title under a shelf card.
     static let cardTitleFont = Font.system(size: 16, weight: .semibold)
 }
@@ -55,36 +60,30 @@ struct NuvioPageTitle: View {
 struct NuvioSectionHeader: View {
     let title: String
     var showsChevron: Bool = false
+    /// Side inset. Pages whose content sits at 20 pass 20 rather than wrapping
+    /// this in more padding — doing that stacked on the header's own inset and
+    /// pushed the title in twice as far as the row beneath it.
+    var inset: CGFloat = 16
     var action: (() -> Void)? = nil
 
     var body: some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 7) {
-                Text(title)
-                    .font(NuvioTheme.sectionTitleFont)
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(.white)
-                    .frame(width: 56, height: 3.5)
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            Text(title)
+                .font(NuvioTheme.sectionTitleFont)
+                .foregroundStyle(.white)
+                .lineLimit(1)
+            // The reference sets its chevron INLINE, right after the words,
+            // rather than parking a circular button at the far edge — and a
+            // section that leads nowhere ("Explore F1, MLS, and MLB") simply
+            // has no chevron.
+            if showsChevron, action != nil {
+                Image(systemName: "chevron.right")
+                    .font(NuvioTheme.sectionChevronFont)
+                    .foregroundStyle(.white.opacity(0.85))
             }
-            Spacer()
-            if showsChevron, let action {
-                Button {
-                    ChannelViewModel.shared.triggerSelectionHaptic()
-                    action()
-                } label: {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 34, height: 34)
-                        .background(Circle().fill(NuvioTheme.surface))
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-            }
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal)
+        .padding(.horizontal, inset)
         .contentShape(Rectangle())
         .onTapGesture {
             // The whole header row is tappable like the reference app's
@@ -102,15 +101,10 @@ struct NuvioSectionHeader: View {
 struct NuvioUnderlinedTitle: View {
     let text: String
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text(text)
-                .font(NuvioTheme.sectionTitleFont)
-                .foregroundStyle(.white)
-                .lineLimit(1)
-            RoundedRectangle(cornerRadius: 2)
-                .fill(.white)
-                .frame(width: 56, height: 3.5)
-        }
+        Text(text)
+            .font(NuvioTheme.sectionTitleFont)
+            .foregroundStyle(.white)
+            .lineLimit(1)
     }
 }
 

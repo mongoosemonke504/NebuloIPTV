@@ -693,17 +693,13 @@ struct FavoritesSectionHeader: View {
     var onAddTap: (() -> Void)? = nil
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            // Nuvio section header: bold title over the short white
-            // underline bar, count badge alongside.
-            VStack(alignment: .leading, spacing: 7) {
-                Text(title)
-                    .font(NuvioTheme.sectionTitleFont)
-                    .foregroundStyle(.white)
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(.white)
-                    .frame(width: 56, height: 3.5)
-            }
+        HStack(alignment: .center, spacing: 10) {
+            // Same section title as everywhere else, with the count badge
+            // alongside it.
+            Text(title)
+                .font(NuvioTheme.sectionTitleFont)
+                .foregroundStyle(.white)
+                .lineLimit(1)
             if count > 0 {
                 Text("\(count)")
                     .font(.system(size: 13, weight: .bold))
@@ -711,7 +707,6 @@ struct FavoritesSectionHeader: View {
                     .padding(.horizontal, 9)
                     .padding(.vertical, 3)
                     .background(Capsule().fill(Color.white.opacity(0.15)))
-                    .padding(.top, 2)
             }
             Spacer()
             if let icon = trailingIcon, let action = onTrailingTap {

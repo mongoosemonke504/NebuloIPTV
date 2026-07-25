@@ -422,8 +422,7 @@ struct LeagueDetailPage: View {
                         // Group tables (a World Cup) each get their own title;
                         // a single league table doesn't need one.
                         if standings.count > 1 {
-                            NuvioSectionHeader(title: group.name)
-                                .padding(.horizontal, 20)
+                            NuvioSectionHeader(title: group.name, inset: 20)
                         }
                         StandingsBoard(group: group)
                     }

@@ -101,7 +101,16 @@ final class ImageCache: @unchecked Sendable {
             guard let url = URL(string: urlString),
                   let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
             let decoded = await Task.detached(priority: .userInitiated) {
-                DecodedImage(image: UIImage(data: data))
+                // Trimmed on this path too, so a logo looks the same the first
+                // time it arrives as it does after a relaunch (when it comes
+                // back through the disk decode).
+                guard let raw = UIImage(data: data) else { return DecodedImage(image: nil) }
+                guard let cg = raw.cgImage, let trimmed = ImageCache.trimmedBorder(of: cg) else {
+                    return DecodedImage(image: raw)
+                }
+                return DecodedImage(image: UIImage(cgImage: trimmed,
+                                                   scale: raw.scale,
+                                                   orientation: raw.imageOrientation))
             }.value.image
             guard let image = decoded else { return nil }
 
@@ -197,7 +206,106 @@ final class ImageCache: @unchecked Sendable {
         ] as CFDictionary
 
         guard let downsampledImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, downsampleOptions) else { return nil }
-        return UIImage(cgImage: downsampledImage)
+        return UIImage(cgImage: trimmedBorder(of: downsampledImage) ?? downsampledImage)
+    }
+
+    // MARK: - Border trimming
+
+    /// Crops the dead margin off a logo: either a transparent surround, or a
+    /// band of one flat colour framing the mark.
+    ///
+    /// Playlist logos are wildly inconsistent — the same channel might arrive
+    /// as a tight PNG, as a small mark adrift in a large transparent canvas, or
+    /// as a mark inside a coloured plate. Rendered into a fixed tile, the loose
+    /// ones come out tiny and the plated ones show as a rectangle sitting on
+    /// the card. Trimming at DECODE time fixes both once per image rather than
+    /// per frame, and the trimmed version is what gets cached.
+    ///
+    /// Deliberately conservative: a flat-colour trim is abandoned if it would
+    /// eat more than a third of either dimension, so a logo whose background
+    /// plate IS the artwork keeps it. Returns nil when there's nothing to do.
+    nonisolated static func trimmedBorder(of cg: CGImage) -> CGImage? {
+        // Analysis runs on a small copy — a logo's margins are large features,
+        // so 64px of resolution is plenty and costs nothing.
+        let w = min(cg.width, 64), h = min(cg.height, 64)
+        guard w > 8, h > 8 else { return nil }
+        var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        let drawn = pixels.withUnsafeMutableBytes { buf -> Bool in
+            guard let ctx = CGContext(data: buf.baseAddress, width: w, height: h,
+                                      bitsPerComponent: 8, bytesPerRow: w * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return false }
+            ctx.interpolationQuality = .low
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
+        }
+        guard drawn else { return nil }
+
+        @inline(__always)
+        func px(_ x: Int, _ y: Int) -> (r: Int, g: Int, b: Int, a: Int) {
+            let i = (y * w + x) * 4
+            return (Int(pixels[i]), Int(pixels[i + 1]), Int(pixels[i + 2]), Int(pixels[i + 3]))
+        }
+
+        // The four corners decide what "margin" means here. If they disagree,
+        // the edges carry artwork and there's nothing safe to trim.
+        let corners = [px(0, 0), px(w - 1, 0), px(0, h - 1), px(w - 1, h - 1)]
+        let transparent = corners.allSatisfy { $0.a < 26 }
+        if !transparent {
+            let first = corners[0]
+            let consistent = corners.allSatisfy {
+                abs($0.r - first.r) < 12 && abs($0.g - first.g) < 12
+                    && abs($0.b - first.b) < 12 && abs($0.a - first.a) < 12
+            }
+            guard consistent else { return nil }
+        }
+        let base = corners[0]
+
+        @inline(__always)
+        func isMargin(_ x: Int, _ y: Int) -> Bool {
+            let p = px(x, y)
+            if transparent { return p.a < 26 }
+            // Premultiplied, so compare alpha too — a semi-transparent pixel
+            // over the same colour is still margin.
+            return abs(p.r - base.r) < 16 && abs(p.g - base.g) < 16
+                && abs(p.b - base.b) < 16 && abs(p.a - base.a) < 16
+        }
+
+        var minX = w, minY = h, maxX = -1, maxY = -1
+        for y in 0..<h {
+            for x in 0..<w where !isMargin(x, y) {
+                if x < minX { minX = x }
+                if x > maxX { maxX = x }
+                if y < minY { minY = y }
+                if y > maxY { maxY = y }
+            }
+        }
+        guard maxX >= minX, maxY >= minY else { return nil }
+
+        // Leave a hair of the margin so the mark doesn't touch the edges.
+        let pad = 1
+        minX = max(0, minX - pad); minY = max(0, minY - pad)
+        maxX = min(w - 1, maxX + pad); maxY = min(h - 1, maxY + pad)
+
+        let keptW = Double(maxX - minX + 1) / Double(w)
+        let keptH = Double(maxY - minY + 1) / Double(h)
+        // Nothing worth doing.
+        guard keptW < 0.96 || keptH < 0.96 else { return nil }
+        // A flat-colour plate that fills most of the image is the artwork, not
+        // a margin — only a transparent surround may be trimmed hard.
+        if !transparent { guard keptW > 0.65, keptH > 0.65 else { return nil } }
+        // Never crop to a sliver.
+        guard keptW > 0.12, keptH > 0.12 else { return nil }
+
+        let sx = Double(cg.width) / Double(w)
+        let sy = Double(cg.height) / Double(h)
+        let rect = CGRect(x: Double(minX) * sx,
+                          y: Double(minY) * sy,
+                          width: Double(maxX - minX + 1) * sx,
+                          height: Double(maxY - minY + 1) * sy).integral
+        guard rect.width >= 1, rect.height >= 1 else { return nil }
+        return cg.cropping(to: rect)
     }
 }
 
