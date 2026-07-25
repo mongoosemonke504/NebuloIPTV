@@ -177,45 +177,27 @@ struct ContinueWatchingCard: View {
     }
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            CachedAsyncImage(urlString: channel.icon ?? "", size: nil)
-                .padding(30)
-                .frame(width: ContinueWatchingCard.cardWidth, height: ContinueWatchingCard.cardHeight)
-
-            // Legibility gradient behind the overlaid name.
-            LinearGradient(
-                stops: [
-                    .init(color: .clear, location: 0.45),
-                    .init(color: .black.opacity(0.75), location: 1.0)
-                ],
-                startPoint: .top, endPoint: .bottom
-            )
+        CachedAsyncImage(urlString: channel.icon ?? "", size: nil)
+            .padding(26)
+            // Room for the caption strip, so the logo stays centred in what's
+            // left of the artwork rather than behind the frost.
+            .padding(.bottom, 30)
             .frame(width: ContinueWatchingCard.cardWidth, height: ContinueWatchingCard.cardHeight)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(channel.name)
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                if let prog = program {
-                    Text(prog.title)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.75))
-                        .lineLimit(1)
+            // Home screen card — carries Nuvio's glass rim.
+            .nuvioCard(fill: fill, depth: true)
+            // The reference's frosted caption: name over what's on, with the
+            // time remaining on the trailing edge.
+            .overlay(alignment: .bottom) {
+                NuvioCardCaption(title: channel.name, subtitle: program?.title) {
+                    if let label = timeLeftLabel {
+                        Text(label)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .monospacedDigit()
+                    }
                 }
             }
-            .padding(12)
-            .frame(width: ContinueWatchingCard.cardWidth, alignment: .leading)
-        }
-        .frame(width: ContinueWatchingCard.cardWidth, height: ContinueWatchingCard.cardHeight)
-        // Home screen card — carries Nuvio's glass rim.
-        .nuvioCard(fill: fill, depth: true)
-        .overlay(alignment: .topTrailing) {
-            if let label = timeLeftLabel {
-                NuvioCardBadge(text: label)
-                    .padding(9)
-            }
-        }
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .task(id: channel.icon) {
             guard let icon = channel.icon, LogoGlow.cache[icon] == nil else { return }
             _ = await LogoGlow.color(for: icon)
@@ -290,7 +272,7 @@ struct HomeCategoryShelf: View {
                 }
                 .padding(.horizontal)
             }
-            .frame(height: 166)
+            .frame(height: HorizontalChannelCardArt.cardHeight + 6)
         }
         .alert(item: $channelForDescription) { channel in
             Alert(
@@ -302,33 +284,22 @@ struct HomeCategoryShelf: View {
     }
 }
 
-/// Shelf card for one channel on a home category shelf — 16:9 artwork tile
-/// with the name (and current program) in white below it, exactly the
-/// reference's shelf-card layout.
+/// Shelf card for one channel on a home category shelf — brand-tone artwork
+/// with the name and what's on it now carried on the frosted strip across its
+/// bottom, exactly the reference's card layout.
 struct HomeChannelShelfCard: View {
     let channel: StreamChannel
     let program: EPGProgram?
     @AppStorage("featuredGlowStrength") private var glowStrength = 0.5
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HorizontalChannelCardArt(icon: channel.icon, glowStrength: glowStrength)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(channel.name)
-                    .font(NuvioTheme.cardTitleFont)
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                if let prog = program {
-                    Text(prog.title)
-                        .font(.caption)
-                        .foregroundStyle(NuvioTheme.secondaryText)
-                        .lineLimit(1)
-                }
+        // The name and what's on now live INSIDE the card, on the frosted
+        // strip, instead of as loose text underneath it.
+        HorizontalChannelCardArt(icon: channel.icon, glowStrength: glowStrength)
+            .overlay(alignment: .bottom) {
+                NuvioCardCaption(title: channel.name, subtitle: program?.title)
             }
-            .frame(width: 192, alignment: .topLeading)
-            .padding(.horizontal, 4)
-        }
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
@@ -350,10 +321,16 @@ struct HorizontalChannelCardArt: View {
             ?? NuvioTheme.card
     }
 
+    /// Same 1.44 proportions as the reference's Continue Watching tile, so the
+    /// caption strip has somewhere to sit without crowding the logo.
+    static let cardWidth: CGFloat = 200
+    static let cardHeight: CGFloat = 139
+
     var body: some View {
         CachedAsyncImage(urlString: icon ?? "", size: nil)
             .padding(16)
-            .frame(width: 200, height: 112)
+            .padding(.bottom, 28)
+            .frame(width: Self.cardWidth, height: Self.cardHeight)
             // Home screen card — carries Nuvio's glass rim.
             .nuvioCard(fill: fill, depth: true)
             .task(id: icon) {

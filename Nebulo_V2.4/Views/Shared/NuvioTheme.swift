@@ -692,15 +692,102 @@ struct HeroScrollParallax: ViewModifier {
     }
 }
 
-/// Small black badge pill overlaid on a card's corner — "1h 48m left".
-struct NuvioCardBadge: View {
-    let text: String
+/// The reference app's card caption: the name over what's on, sitting on a
+/// frosted band across the bottom of the artwork.
+///
+/// The band's blur is MASKED by a gradient rather than drawn as a rectangle.
+/// A plain material strip announces itself with a hard horizontal edge — the
+/// artwork is sharp one pixel and blurred the next — and that edge is exactly
+/// what reads as a box stuck onto the card. Ramping the mask from clear at the
+/// top of the band to solid further down makes the blur arrive gradually, so
+/// there is no edge to see; the band bleeds upward past the text to give the
+/// ramp somewhere to happen.
+struct NuvioCardCaption<Trailing: View>: View {
+    let title: String
+    var subtitle: String? = nil
+    var titleSize: CGFloat = 13
+    var subtitleSize: CGFloat = 11
+    @ViewBuilder var trailing: Trailing
+
+    /// How far above the text the frost starts fading in. Generous, because
+    /// the shorter this is the more the ramp reads as a band in its own right.
+    private static var ramp: CGFloat { 58 }
+
+    /// Eased from clear at the top to solid only at the very BOTTOM.
+    ///
+    /// The first attempt reached full strength two-thirds of the way down, and
+    /// on a flat brand-coloured card — where there's no detail to blur, only a
+    /// tint shift — the eye catches the point where the ramp stops climbing and
+    /// reads it as a horizontal line. Approximating an ease-in curve, and
+    /// never going solid before the bottom edge, leaves nowhere for that line
+    /// to form.
+    private static var rampMask: LinearGradient {
+        LinearGradient(
+            stops: [
+                .init(color: .black.opacity(0.00), location: 0.00),
+                .init(color: .black.opacity(0.04), location: 0.22),
+                .init(color: .black.opacity(0.14), location: 0.42),
+                .init(color: .black.opacity(0.32), location: 0.60),
+                .init(color: .black.opacity(0.58), location: 0.76),
+                .init(color: .black.opacity(0.84), location: 0.90),
+                .init(color: .black.opacity(1.00), location: 1.00)
+            ],
+            startPoint: .top, endPoint: .bottom
+        )
+    }
+
     var body: some View {
-        Text(text)
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
-            .background(Capsule().fill(Color.black.opacity(0.75)))
+        HStack(alignment: .center, spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.system(size: titleSize, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                if let subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.system(size: subtitleSize, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.72))
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+            trailing
+        }
+        .padding(.horizontal, 11)
+        .padding(.top, 5)
+        .padding(.bottom, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(alignment: .bottom) {
+            ZStack {
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                    .environment(\.colorScheme, .dark)
+                // A little black under the text as well, so a bright still
+                // behind the frost can't wash the name out.
+                // Carries most of the text contrast, since the frost is
+                // still weak where the words sit.
+                LinearGradient(
+                    colors: [.black.opacity(0.05), .black.opacity(0.55)],
+                    startPoint: .top, endPoint: .bottom
+                )
+            }
+            // Negative padding grows the band upward past the text, which is
+            // the space the mask fades in over.
+            .padding(.top, -Self.ramp)
+            .mask(Self.rampMask.padding(.top, -Self.ramp))
+            .allowsHitTesting(false)
+        }
+    }
+}
+
+extension NuvioCardCaption where Trailing == EmptyView {
+    init(title: String,
+         subtitle: String? = nil,
+         titleSize: CGFloat = 13,
+         subtitleSize: CGFloat = 11) {
+        self.init(title: title,
+                  subtitle: subtitle,
+                  titleSize: titleSize,
+                  subtitleSize: subtitleSize) { EmptyView() }
     }
 }
