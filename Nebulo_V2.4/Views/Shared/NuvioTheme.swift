@@ -260,7 +260,7 @@ enum NuvioTab: String, CaseIterable {
     case search = "Search"
     case sports = "Sports"
     case favorites = "Favorites"
-    case profile = "Profile"
+    case profile = "Settings"
 
     var icon: String {
         switch self {
@@ -268,7 +268,7 @@ enum NuvioTab: String, CaseIterable {
         case .search:    return "magnifyingglass"
         case .sports:    return "sportscourt.fill"
         case .favorites: return "star.fill"
-        case .profile:   return "person.crop.circle.fill"
+        case .profile:   return "gearshape.fill"
         }
     }
 }

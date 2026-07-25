@@ -68,6 +68,22 @@ class ChannelViewModel: ObservableObject {
     /// ranked once alongside the featured picks, never re-derived per render.
     @Published var popularChannels: [StreamChannel] = []
 
+    /// Channels the user has PINNED to the hero carousel. Empty means the
+    /// automatic picks; anything here replaces them wholesale, in this order.
+    @Published var customHeroIDs: [Int] = [] {
+        didSet {
+            guard customHeroIDs != oldValue else { return }
+            if let d = try? JSONEncoder().encode(customHeroIDs) {
+                UserDefaults.standard.set(d, forKey: settingsPrefix + "customHeroIDs")
+            }
+        }
+    }
+
+    func toggleHeroChannel(_ id: Int) {
+        if let idx = customHeroIDs.firstIndex(of: id) { customHeroIDs.remove(at: idx) }
+        else { customHeroIDs.append(id) }
+    }
+
     /// The themed rows of big cards, in the order the home screen shows them.
     @Published var spotlightGroups: [SpotlightGroup] = []
 
@@ -613,6 +629,7 @@ class ChannelViewModel: ObservableObject {
         let currentTime = self.currentTime
         let favoriteIDs = self.favoriteIDs
         let recentIDs   = self.recentIDs
+        let pinnedHero  = self.customHeroIDs
 
         let picked = await Task.detached(priority: .userInitiated) { () -> (channels: [StreamChannel], popular: [StreamChannel], groups: [ChannelViewModel.SpotlightGroup]) in
             // Fast lookups
@@ -875,6 +892,17 @@ class ChannelViewModel: ObservableObject {
                 }
                 guard picks.count >= 3 else { continue }
                 groups.append(.init(id: theme.id, title: theme.title, channels: picks))
+            }
+
+            // ── The user's own choice wins outright.
+            // Settings -> Content Management -> Hero Channels pins an explicit
+            // list; when it's set, none of the ranking above applies to the
+            // carousel. Live games still lead it — that's decided on the home
+            // screen, not here — and the themed rows are unaffected.
+            if !pinnedHero.isEmpty {
+                let byID = Dictionary(uniqueKeysWithValues: visible.map { ($0.id, $0) })
+                let chosen = pinnedHero.compactMap { byID[$0] }
+                if !chosen.isEmpty { return (chosen, popular, groups) }
             }
 
             // Last resort — surface favourites for users with no EPG at all.
@@ -2126,6 +2154,7 @@ class ChannelViewModel: ObservableObject {
             guard let data = UserDefaults.standard.data(forKey: settingsPrefix + key) else { return nil }
             return try? JSONDecoder().decode(type, from: data)
         }
+        self.customHeroIDs = load("customHeroIDs", type: [Int].self) ?? []
         self.renamedChannels = load("renamedChannels", type: [Int: String].self) ?? [:]
         self.renamedCategories = load("renamedCategories", type: [Int: String].self) ?? [:]
         self.categoryColors = load("categoryColors", type: [Int: String].self) ?? [:]

@@ -40,6 +40,11 @@ struct FavoritesView: View {
     /// Identifies the team row that should present its detail sheet. Using an
     /// optional struct (rather than a Bool + ID combo) means the sheet
     /// presents/dismisses purely from this binding — no race conditions.
+    /// Set the instant a drag reads as horizontal, which disables the page's
+    /// vertical scroll for the rest of that gesture. A leaf box, so flipping it
+    /// re-renders the scroll modifier alone.
+    @State private var scrollLock = FlagBox()
+
     @State private var detailTeam: TeamDetailSelection? = nil
     @State private var detailLeague: LeagueDetailSelection? = nil
     /// 0 at rest, 1 once the big title has scrolled away. Tracked 1:1 with
@@ -168,6 +173,9 @@ struct FavoritesView: View {
                 }
             }
             .coordinateSpace(name: "favScroll")
+            // Frozen for the duration of a horizontal swipe, so a sideways
+            // gesture travels purely sideways — same as the Sports hub.
+            .scrollLocked(scrollLock)
             .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
                 guard let y = offsets["fav"] else { return }
                 titleProgress.set(min(max(-y / 40, 0), 1))
@@ -190,6 +198,18 @@ struct FavoritesView: View {
                         if abs(dx) > abs(dy) * 1.4 {
                             SwipeTapGuard.suppress()
                         }
+                        // ...and freeze the vertical scroll, so a sideways
+                        // swipe doesn't also drag the page up or down. A drag
+                        // that turns decisively vertical before the filter
+                        // flips releases it again, so this can never strand
+                        // the page unscrollable.
+                        if value.startLocation.x > 44 {
+                            if abs(dx) > abs(dy) * 1.4 {
+                                scrollLock.set(true)
+                            } else if !swipeConsumed, abs(dy) > abs(dx) * 1.4 {
+                                scrollLock.set(false)
+                            }
+                        }
                         // Low threshold + mid-drag firing: the swipe is
                         // recognised almost as soon as the finger commits to
                         // a horizontal motion.
@@ -199,7 +219,10 @@ struct FavoritesView: View {
                         swipeConsumed = true
                         advanceFilter(dx < 0 ? 1 : -1)
                     }
-                    .onEnded { _ in swipeConsumed = false }
+                    .onEnded { _ in
+                        swipeConsumed = false
+                        scrollLock.set(false)
+                    }
             )
         }
         // NOTE: no local bottom search pill here — MainViewModifiers already

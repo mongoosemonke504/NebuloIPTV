@@ -56,31 +56,27 @@ struct SettingsView: View {
                             .padding(.top, 6)
                             .padding(.bottom, -6)
 
-                        SettingsSectionHeader(title: "Appearance")
-                        AppearanceCard()
-                        
-                        
-                        SettingsSectionHeader(title: "Playback")
-                        PlaybackCard(viewModel: viewModel)
-                        
-                        
-                        SettingsSectionHeader(title: "Sports")
-                        SportsPreferencesCard(viewModel: viewModel)
-                        
-                        
                         SettingsSectionHeader(title: "Content Management")
                         ContentManagementCard(
                             categories: $categories,
                             accentColor: accentColor,
                             viewModel: viewModel,
-                            scoreViewModel: scoreViewModel, 
+                            scoreViewModel: scoreViewModel,
                             showAddPlaylist: $showAddPlaylist,
                             accountToEdit: $accountToEdit,
                             playAction: playAction,
                             dismissSettings: { dismiss() },
                             openMultiView: openMultiView
                         )
-                        
+
+
+                        SettingsSectionHeader(title: "Playback")
+                        PlaybackCard(viewModel: viewModel)
+
+
+                        SettingsSectionHeader(title: "Sports")
+                        SportsPreferencesCard(viewModel: viewModel)
+
                         
                         SettingsSectionHeader(title: "Updates")
                         UpdatesCard(updateService: updateService)
@@ -123,40 +119,6 @@ struct SettingsView: View {
         }
     }
 
-}
-
-struct AppearanceCard: View {
-    @AppStorage("customAccentHex") private var customAccentHex = "#FFFFFF"
-    @AppStorage("featuredGlowStrength") private var featuredGlowStrength = 0.5
-
-    var body: some View {
-        SettingsCard {
-            VStack(spacing: 16) {
-                HStack {
-                    Text("Accent Color").font(.body).foregroundStyle(.primary)
-                    Spacer()
-                    ColorPicker("", selection: Binding(get: { Color(hex: customAccentHex) ?? .blue }, set: { if let h = $0.toHex() { customAccentHex = h } }))
-                }
-                Divider().background(Color.white.opacity(0.1))
-
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("Channel Glow").font(.body).foregroundStyle(.primary)
-                        Spacer()
-                        Text(featuredGlowStrength == 0
-                             ? "Off"
-                             : "\(Int(featuredGlowStrength * 100))%")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                    }
-                    Slider(value: $featuredGlowStrength, in: 0...1, step: 0.05)
-                        .tint(Color(hex: customAccentHex) ?? .blue)
-                }
-            }
-            .padding()
-        }
-    }
 }
 
 struct PlaybackCard: View {
@@ -389,6 +351,14 @@ struct ContentManagementCard: View {
                     .foregroundStyle(.primary)
                 }
 
+                NavigationLink(destination: HeroChannelsSettingsView(viewModel: viewModel, accentColor: accentColor)) {
+                    SettingsRow(icon: "rectangle.on.rectangle.angled",
+                                title: "Hero Channels",
+                                subtitle: viewModel.customHeroIDs.isEmpty ? "Automatic" : "\(viewModel.customHeroIDs.count) Chosen",
+                                iconColor: .indigo)
+                }
+                .foregroundStyle(.primary)
+
                 NavigationLink(destination: HiddenChannelsSettingsView(viewModel: viewModel)) {
                     SettingsRow(icon: "eye.slash.fill", title: "Hidden Channels", subtitle: !viewModel.hiddenIDs.isEmpty ? "\(viewModel.hiddenIDs.count)" : nil, iconColor: .gray)
                 }
@@ -560,10 +530,11 @@ struct SettingsRow: View {
     var iconColor: Color = .accentColor
     var showChevron: Bool = true
 
-    /// Reference rows are monochrome — white glyph in a dark circle. A red
-    /// icon (destructive rows like Sign Out) keeps its warning colour.
+    /// Reference rows are monochrome — white glyph in a dark circle. Red
+    /// (destructive rows like Sign Out) and blue (Multi-View) are the two
+    /// deliberate exceptions.
     private var glyphColor: Color {
-        iconColor == .red ? .red : .white
+        iconColor == .red || iconColor == .blue ? iconColor : .white
     }
 
     var body: some View {
@@ -895,5 +866,125 @@ struct HiddenChannelsSettingsView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Hero channels
+
+/// Chooses exactly which channels the home carousel leads with. Leave it empty
+/// and the app picks automatically (most-watched networks, then the genres you
+/// actually watch); tick anything and that becomes the carousel, in tick order.
+struct HeroChannelsSettingsView: View {
+    @ObservedObject var viewModel: ChannelViewModel
+    let accentColor: Color
+    @State private var query = ""
+
+    /// Chosen channels first, in the user's own order, then everything else —
+    /// so what you've picked is never buried under ten thousand rows.
+    private var rows: [StreamChannel] {
+        let byID = Dictionary(uniqueKeysWithValues: viewModel.channels.map { ($0.id, $0) })
+        let chosen = viewModel.customHeroIDs.compactMap { byID[$0] }
+        let chosenIDs = Set(viewModel.customHeroIDs)
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty else { return chosen }
+        let matches = viewModel.channels.lazy
+            .filter { !chosenIDs.contains($0.id) && !viewModel.hiddenIDs.contains($0.id) }
+            .filter { $0.name.lowercased().contains(trimmed) }
+        return chosen + Array(matches.prefix(60))
+    }
+
+    var body: some View {
+        ZStack {
+            AppBackground().ignoresSafeArea()
+
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text(viewModel.customHeroIDs.isEmpty
+                         ? "The carousel is picking channels for you. Search below and tap any channel to take over."
+                         : "The carousel shows these, in this order. Remove them all to go back to automatic.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .padding(.horizontal, 4)
+
+                    HStack(spacing: 9) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.5))
+                        TextField("Search channels", text: $query)
+                            .textFieldStyle(.plain)
+                            .foregroundStyle(.white)
+                            .autocorrectionDisabled()
+                        if !query.isEmpty {
+                            Button { query = "" } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.white.opacity(0.4))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 11)
+                    .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(NuvioTheme.card))
+
+                    if !viewModel.customHeroIDs.isEmpty {
+                        Button {
+                            withAnimation { viewModel.customHeroIDs = [] }
+                        } label: {
+                            Label("Use Automatic Picks", systemImage: "wand.and.stars")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 13)
+                                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(NuvioTheme.card))
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    LazyVStack(spacing: 8) {
+                        ForEach(rows) { channel in
+                            let isOn = viewModel.customHeroIDs.contains(channel.id)
+                            Button {
+                                withAnimation { viewModel.toggleHeroChannel(channel.id) }
+                            } label: {
+                                HStack(spacing: 12) {
+                                    CachedAsyncImage(urlString: channel.icon ?? "", size: nil)
+                                        .padding(6)
+                                        .frame(width: 44, height: 44)
+                                        .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .fill(LogoGlow.tone(for: channel.icon) ?? Color(white: 0.15)))
+                                    Text(channel.name)
+                                        .font(.system(size: 15, weight: .medium))
+                                        .foregroundStyle(.white)
+                                        .lineLimit(1)
+                                    Spacer(minLength: 0)
+                                    Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
+                                        .font(.system(size: 19))
+                                        .foregroundStyle(isOn ? accentColor : Color.white.opacity(0.25))
+                                }
+                                .padding(10)
+                                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(NuvioTheme.card))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    if rows.isEmpty {
+                        Text(query.isEmpty ? "Search for a channel to add it." : "No channels match “\(query)”.")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.white.opacity(0.5))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 40)
+                    }
+
+                    Color.clear.frame(height: 40)
+                }
+                .padding(20)
+            }
+        }
+        .navigationTitle("Hero Channels")
+        .navigationBarTitleDisplayMode(.inline)
+        .preferredColorScheme(.dark)
+        // The carousel is rebuilt from these picks.
+        .onDisappear { Task { await viewModel.refreshFeaturedChannels() } }
     }
 }

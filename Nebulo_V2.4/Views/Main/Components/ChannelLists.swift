@@ -221,7 +221,6 @@ struct HomeCategoryShelf: View {
     var onSelect: ((StreamChannel) -> Void)? = nil
     let openCategory: () -> Void
     let promptRename: () -> Void
-    let changeColor: () -> Void
 
     @State private var channelForDescription: StreamChannel?
 
@@ -230,14 +229,6 @@ struct HomeCategoryShelf: View {
             NuvioSectionHeader(title: category.name, showsChevron: true, action: openCategory)
                 .contextMenu {
                     Button { promptRename() } label: { Label("Rename", systemImage: "pencil") }
-                    Button { changeColor() } label: { Label("Change Color", systemImage: "paintpalette") }
-                    if viewModel.categoryColor(for: category.id) != nil {
-                        Button(role: .destructive) {
-                            viewModel.setCategoryColor(id: category.id, hex: nil)
-                        } label: {
-                            Label("Reset Color", systemImage: "arrow.counterclockwise")
-                        }
-                    }
                 }
 
             // UIScrollView wrapper — same tap-lockout fix as the other

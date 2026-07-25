@@ -568,7 +568,6 @@ struct StandardLayout: SwiftUI.View {
     @Binding var selectedCategory: StreamCategory?; @Binding var selectedChannel: StreamChannel?; @Binding var searchText: String
     let accentColor: Color; let playAction: (StreamChannel) -> Void; @Binding var showMultiView: Bool; @Binding var showSettings: Bool
     @Binding var selectedRecording: Recording?
-    @State private var categoryForColor: StreamCategory?
     var zoomNS: Namespace.ID? = nil
 
     /// Push/pop tempo for DRILL-DOWNS (open a category, Recently Watched,
@@ -1137,8 +1136,7 @@ struct StandardLayout: SwiftUI.View {
                                                     viewModel.lastSelectedHomeID = cat.id
                                                     withAnimation(Self.pageAnimation) { selectedCategory = cat }
                                                 },
-                                                promptRename: { viewModel.triggerRenameCategory(cat) },
-                                                changeColor: { categoryForColor = cat }
+                                                promptRename: { viewModel.triggerRenameCategory(cat) }
                                             )
                                         }
                                     case .spotlight(let group):
@@ -1159,11 +1157,6 @@ struct StandardLayout: SwiftUI.View {
                         // behind the translucent slab, but the last row can
                         // still be pulled fully above it.
                         .padding(.bottom, 118)
-                        .sheet(item: $categoryForColor) { cat in
-                            CategoryColorPicker(category: cat, viewModel: viewModel)
-                                .presentationDetents([.medium])
-                                .presentationDragIndicator(.visible)
-                        }
                     }
                     // The hero bleeds behind the status bar — the scroll
                     // content owns the full screen height.
@@ -1716,80 +1709,6 @@ enum CategoryPalette {
         var hash: UInt64 = 5381
         for byte in name.utf8 { hash = ((hash &<< 5) &+ hash) &+ UInt64(byte) }
         return palette[Int(hash % UInt64(palette.count))]
-    }
-}
-
-struct CategoryColorPicker: View {
-    let category: StreamCategory
-    @ObservedObject var viewModel: ChannelViewModel
-    @Environment(\.dismiss) private var dismiss
-
-    private let swatches: [String] = [
-        "#FF3B30", "#FF9500", "#FFCC00", "#34C759", "#00C7BE",
-        "#30B0C7", "#007AFF", "#5856D6", "#AF52DE", "#FF2D55",
-        "#A2845E", "#8E8E93"
-    ]
-
-    var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 24) {
-                // Preview uses the same Nuvio shelf card the home screen
-                // renders, so the picked colour is judged in context.
-                NuvioCategoryCard(
-                    title: category.name,
-                    color: viewModel.categoryColor(for: category.id)
-                )
-                .frame(maxWidth: 240)
-                .frame(maxWidth: .infinity)
-
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 16), count: 6), spacing: 16) {
-                    ForEach(swatches, id: \.self) { hex in
-                        Button {
-                            viewModel.setCategoryColor(id: category.id, hex: hex)
-                            viewModel.triggerSelectionHaptic()
-                        } label: {
-                            Circle()
-                                .fill(Color(hex: hex) ?? .gray)
-                                .frame(width: 40, height: 40)
-                                .overlay(
-                                    Circle()
-                                        .stroke(
-                                            viewModel.categoryColors[category.id] == hex
-                                                ? Color.white
-                                                : Color.white.opacity(0.15),
-                                            lineWidth: viewModel.categoryColors[category.id] == hex ? 2.5 : 0.5
-                                        )
-                                )
-                                .shadow(color: (Color(hex: hex) ?? .gray).opacity(0.4), radius: 6, x: 0, y: 3)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-
-                if viewModel.categoryColor(for: category.id) != nil {
-                    Button(role: .destructive) {
-                        viewModel.setCategoryColor(id: category.id, hex: nil)
-                        viewModel.triggerSelectionHaptic()
-                    } label: {
-                        Label("Reset to Default", systemImage: "arrow.counterclockwise")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-                    .tint(.red)
-                }
-
-                Spacer()
-            }
-            .padding(24)
-            .navigationTitle("Category Color")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
     }
 }
 

@@ -451,21 +451,20 @@ struct SearchView: View {
                 searchHeader("Recently Watched")
 
                 ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(spacing: 14) {
+                    // The same card the home shelves use, at the same size —
+                    // a search result and a home shelf card are the same thing
+                    // and shouldn't look like two different components.
+                    LazyHStack(spacing: 10) {
                         ForEach(recents) { channel in
                             Button {
                                 viewModel.triggerSelectionHaptic()
                                 hideKeyboard()
                                 playAction(channel)
                             } label: {
-                                VStack(spacing: 8) {
-                                    recentTile(channel)
-                                    Text(channel.name)
-                                        .font(.caption2.weight(.medium))
-                                        .foregroundStyle(.white.opacity(0.85))
-                                        .lineLimit(1)
-                                        .frame(width: 84)
-                                }
+                                HomeChannelShelfCard(
+                                    channel: channel,
+                                    program: viewModel.getCurrentProgram(for: channel)
+                                )
                             }
                             .buttonStyle(.plain)
                         }
@@ -474,30 +473,6 @@ struct SearchView: View {
                 }
             }
         }
-    }
-
-    /// A single recently-watched channel tile: the logo centred on a soft
-    /// rounded card with a hairline border and a gentle top-lit gradient, so
-    /// the crest reads cleanly instead of floating on a flat grey square.
-    private func recentTile(_ channel: StreamChannel) -> some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(NuvioTheme.card)
-            if let icon = channel.icon, !icon.isEmpty {
-                CachedAsyncImage(urlString: icon, size: CGSize(width: 84, height: 84))
-                    .padding(12)
-            } else {
-                Image(systemName: "tv")
-                    .font(.system(size: 24, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.6))
-            }
-        }
-        .frame(width: 84, height: 84)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.10), lineWidth: 0.5)
-        )
     }
 
     // MARK: - Browse (empty query)

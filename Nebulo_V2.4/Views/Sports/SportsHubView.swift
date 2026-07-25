@@ -1285,7 +1285,8 @@ struct ScoreRow: View {
             }
             .padding(.vertical, 18).padding(.horizontal, 12)
             .frame(maxWidth: .infinity)
-            .background(Color.black.opacity(0.4)).clipShape(RoundedRectangle(cornerRadius: 12))
+            .background(teamColorBackdrop)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1)) 
             
             if isReminderSet {
@@ -1297,6 +1298,40 @@ struct ScoreRow: View {
         }
     }
     
+    /// Each club's colour bleeding in from ITS OWN side and meeting past the
+    /// middle, the way the home screen's live-game cards read. Only for team
+    /// sports: F1 and tennis have no two clubs to colour.
+    @ViewBuilder
+    private var teamColorBackdrop: some View {
+        if sport == .f1 || sport == .tennis {
+            Color.black.opacity(0.4)
+        } else {
+            ZStack {
+                Color.black.opacity(0.55)
+                LinearGradient(
+                    colors: [Self.teamColor(game.awayCompetitor).opacity(0.55),
+                             Self.teamColor(game.awayCompetitor).opacity(0.0)],
+                    startPoint: .leading,
+                    endPoint: UnitPoint(x: 0.62, y: 0.5)
+                )
+                LinearGradient(
+                    colors: [Self.teamColor(game.homeCompetitor).opacity(0.55),
+                             Self.teamColor(game.homeCompetitor).opacity(0.0)],
+                    startPoint: .trailing,
+                    endPoint: UnitPoint(x: 0.38, y: 0.5)
+                )
+            }
+        }
+    }
+
+    private static func teamColor(_ c: ESPNCompetitor?) -> Color {
+        guard let hex = c?.team?.color, !hex.isEmpty,
+              let col = Color(hex: hex.hasPrefix("#") ? hex : "#\(hex)") else {
+            return Color(white: 0.22)
+        }
+        return col
+    }
+
     private var teamLayout: some View { HStack(alignment: .center, spacing: 4) { if let away = game.awayCompetitor { TeamColumn(competitor: away, gameState: game.status.type.state, align: .trailing, isScoreHidden: isScoreHidden).frame(maxWidth: .infinity) }; VStack(spacing: 6) { Text(game.scheduleAwareDetail.uppercased()).font(.system(size: 11, weight: .bold)).foregroundStyle(game.status.type.state == "in" ? .red : .secondary).multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.8).frame(minWidth: 70, maxWidth: 100); if let cn = game.broadcastName { Text(cn).font(.system(size: 10, weight: .black)).foregroundStyle(.primary).padding(.horizontal, 6).padding(.vertical, 2).background(Color.white.opacity(0.15)).cornerRadius(4) }; Capsule().fill(Color.white.opacity(0.1)).frame(width: 1.5, height: 20) }; if let home = game.homeCompetitor { TeamColumn(competitor: home, gameState: game.status.type.state, align: .leading, isScoreHidden: isScoreHidden).frame(maxWidth: .infinity) } } }
     
     
