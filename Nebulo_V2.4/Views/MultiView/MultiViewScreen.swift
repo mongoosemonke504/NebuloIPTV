@@ -429,6 +429,12 @@ struct MultiViewScreen: View {
     /// the parent's `if showMultiView` already handles the visual fade —
     /// we just flip the binding and let SwiftUI animate.
     private func handleDismiss() {
+        // Tear the players down NOW, not in onDisappear. The screen leaves on a
+        // 0.35s crossfade, and `onDisappear` only fires once that has finished,
+        // so the streams were still decoding — and audible — the whole way out.
+        // onDisappear still calls releaseAll as the backstop for every other
+        // way this screen can go away.
+        MultiViewPlayerPool.shared.releaseAll()
         withAnimation(.easeInOut(duration: 0.35)) { showMultiView = false }
     }
 
@@ -1991,8 +1997,21 @@ final class MultiViewPlayerPool {
     private func cleanup(_ entry: Entry) {
         entry.watchdog?.invalidate()
         entry.watchdog = nil
-        entry.vlcPlayer?.stop()
-        entry.vlcPlayer?.drawable = nil
+        guard let player = entry.vlcPlayer else { return }
+        // SILENCE FIRST. `stop()` is asynchronous inside VLC, so a player that
+        // gets released while the stop is still in flight can carry on decoding
+        // — and the only thing you'd notice is the audio. Dropping the volume
+        // is immediate and unconditional.
+        player.audio?.volume = 0
+        if player.isPlaying { player.pause() }
+        player.stop()
+        player.drawable = nil
         entry.vlcPlayer = nil
+        // Hold the player alive past the stop so ARC can't free it mid-teardown,
+        // then stop once more and let it go.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+            player.audio?.volume = 0
+            player.stop()
+        }
     }
 }

@@ -17,6 +17,9 @@ struct SettingsView: View {
     /// visible) instead of a presented sheet: hides the Done button and
     /// pads the bottom clear of the floating bar.
     var isSection: Bool = false
+    /// Opens Multi-View. It lives here rather than on the home screen — a
+    /// utility alongside Recordings, not a browsing surface.
+    var openMultiView: (() -> Void)? = nil
     
     @AppStorage("xstreamURL") private var xstreamURL = ""
     @AppStorage("username") private var username = ""
@@ -74,7 +77,8 @@ struct SettingsView: View {
                             showAddPlaylist: $showAddPlaylist,
                             accountToEdit: $accountToEdit,
                             playAction: playAction,
-                            dismissSettings: { dismiss() }
+                            dismissSettings: { dismiss() },
+                            openMultiView: openMultiView
                         )
                         
                         
@@ -232,6 +236,9 @@ struct ContentManagementCard: View {
     @Binding var accountToEdit: Account?
     let playAction: ((StreamChannel) -> Void)?
     let dismissSettings: () -> Void
+    /// Opens Multi-View. It lives here rather than on the home screen — a
+    /// utility alongside Recordings, not a browsing surface.
+    var openMultiView: (() -> Void)? = nil
     
     @ObservedObject var accountManager = AccountManager.shared
     @Environment(\.dismiss) private var dismiss
@@ -368,6 +375,19 @@ struct ContentManagementCard: View {
                     SettingsRow(icon: "recordingtape", title: "Recordings", subtitle: "\(RecordingManager.shared.recordings.filter { $0.status == .completed }.count) Saved", iconColor: .red)
                 }
                 .foregroundStyle(.primary)
+
+                if let openMultiView {
+                    Button(action: {
+                        dismissSettings()
+                        openMultiView()
+                    }) {
+                        SettingsRow(icon: "square.grid.2x2.fill",
+                                    title: "Multi-View",
+                                    subtitle: viewModel.activeMultiViewCount > 0 ? "\(viewModel.activeMultiViewCount)/4 Active" : nil,
+                                    iconColor: .blue)
+                    }
+                    .foregroundStyle(.primary)
+                }
 
                 NavigationLink(destination: HiddenChannelsSettingsView(viewModel: viewModel)) {
                     SettingsRow(icon: "eye.slash.fill", title: "Hidden Channels", subtitle: !viewModel.hiddenIDs.isEmpty ? "\(viewModel.hiddenIDs.count)" : nil, iconColor: .gray)

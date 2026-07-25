@@ -738,37 +738,45 @@ class ScoreViewModel: ObservableObject {
         }
     }
 
-    func favoriteLiveGames() -> [ESPNEvent] {
+    func favoriteLiveGames() -> [ESPNEvent] { favoriteGames(states: ["in"]) }
+
+    /// Every game involving a favourited team, or belonging to a favourited
+    /// league, whose status is in `states` ("in" live, "pre" upcoming, "post"
+    /// finished). Live first, then soonest kickoff — the order the home
+    /// screen's Matches shelf wants.
+    func favoriteGames(states: Set<String>) -> [ESPNEvent] {
         guard !favoriteTeamIDs.isEmpty || !favoriteLeagueKeys.isEmpty else { return [] }
         var result: [ESPNEvent] = []
         var seen = Set<String>()
-        for (sport, games) in masterGames where !hiddenSportTabs.contains(sport) {
-            let leagueIsFav = isFavoriteLeague(sport: sport, leagueLabel: nil)
-            for game in games where game.status.type.state == "in" {
-                guard seen.insert(game.id).inserted else { continue }
-                if leagueIsFav { result.append(game); continue }
-                for comp in [game.homeCompetitor, game.awayCompetitor] {
-                    if let team = comp?.team, isFavoriteTeam(team, sport: sport) {
-                        result.append(game); break
-                    }
+
+        func consider(_ game: ESPNEvent, sport: SportType, leagueIsFav: Bool) {
+            guard states.contains(game.status.type.state) else { return }
+            guard seen.insert(game.id).inserted else { return }
+            if leagueIsFav { result.append(game); return }
+            for comp in [game.homeCompetitor, game.awayCompetitor] {
+                if let team = comp?.team, isFavoriteTeam(team, sport: sport) {
+                    result.append(game); return
                 }
             }
+        }
+
+        for (sport, games) in masterGames where !hiddenSportTabs.contains(sport) {
+            let leagueIsFav = isFavoriteLeague(sport: sport, leagueLabel: nil)
+            for game in games { consider(game, sport: sport, leagueIsFav: leagueIsFav) }
         }
         for (sport, sections) in masterSectionsMap where !hiddenSportTabs.contains(sport) {
             for section in sections {
                 let leagueIsFav = isFavoriteLeague(sport: sport, leagueLabel: section.league)
-                for game in section.games where game.status.type.state == "in" {
-                    guard seen.insert(game.id).inserted else { continue }
-                    if leagueIsFav { result.append(game); continue }
-                    for comp in [game.homeCompetitor, game.awayCompetitor] {
-                        if let team = comp?.team, isFavoriteTeam(team, sport: sport) {
-                            result.append(game); break
-                        }
-                    }
-                }
+                for game in section.games { consider(game, sport: sport, leagueIsFav: leagueIsFav) }
             }
         }
-        return result.sorted { $0.gameDate < $1.gameDate }
+
+        return result.sorted { a, b in
+            let aLive = a.status.type.state == "in"
+            let bLive = b.status.type.state == "in"
+            if aLive != bLive { return aLive }
+            return a.gameDate < b.gameDate
+        }
     }
 
     /// Best-guess sport classification for an arbitrary live game, used by

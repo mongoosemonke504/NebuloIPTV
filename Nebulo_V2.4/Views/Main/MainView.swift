@@ -57,6 +57,15 @@ struct MainView: SwiftUI.View {
     @State private var showSettings = false
     @State private var showSearch = false
     @State private var showMultiView = false
+
+    /// Mirrors `MainViewModifiers.dockVisible`: the bottom bar is only on the
+    /// root surfaces. The Multi-View pill anchors itself to that bar, so it
+    /// has to come and go with it rather than float over a drill-down page.
+    private var dockShowing: Bool {
+        guard let cat = selectedCategory else { return true }
+        return cat.id == -3 || cat.id == -4 || cat.id == -6
+    }
+
     @State private var showQuickSwitcher = false
     @State private var showSupportAlert = false
     @State private var selectedRecording: Recording?
@@ -165,7 +174,7 @@ struct MainView: SwiftUI.View {
 
                 contentLayout(isL: isL)
 
-                if viewModel.activeMultiViewCount > 0 && !showMultiView && selectedChannel == nil {
+                if viewModel.activeMultiViewCount > 0 && !showMultiView && selectedChannel == nil && dockShowing {
                     MultiViewIndicator(count: viewModel.activeMultiViewCount, accentColor: nil, action: { withAnimation(.spring()) { showMultiView = true } }).zIndex(5)
                 }
             }
@@ -657,6 +666,40 @@ struct StandardLayout: SwiftUI.View {
     /// straight away.
     @State private var homePreviewChannel: StreamChannel?
 
+    // ── My Teams shelf ───────────────────────────────────────────────────
+    /// Resolved favourites, cached off the body: resolving them walks the
+    /// whole team catalog, which must not happen on every render.
+    @State private var cachedFavTeams: [(team: ESPNTeam, sport: SportType?, leagueLabel: String?)] = []
+    @State private var cachedFavLeagues: [(sport: SportType, leagueLabel: String?, displayName: String)] = []
+    /// The interleaved body of the home page: category shelves in threes with
+    /// a themed row of big cards between them. Rebuilt only when the shelves
+    /// or the themed rows change.
+    @State private var homeRows: [HomeRow] = []
+
+    struct HomeRow: Identifiable {
+        enum Kind {
+            case category(StreamCategory)
+            case spotlight(ChannelViewModel.SpotlightGroup)
+        }
+        let id: String
+        let kind: Kind
+    }
+
+    struct HomeTeamSelection: Identifiable {
+        let team: ESPNTeam
+        let sport: SportType?
+        let leagueLabel: String?
+        var id: String { "\(sport?.rawValue ?? "-")|\(team.id)" }
+    }
+    struct HomeLeagueSelection: Identifiable {
+        let sport: SportType
+        let leagueLabel: String?
+        let displayName: String
+        var id: String { "\(sport.rawValue)|\(leagueLabel ?? "-")" }
+    }
+    @State private var openedTeam: HomeTeamSelection?
+    @State private var openedLeague: HomeLeagueSelection?
+
     /// Opens a featured hero page's destination: a live matchup goes to its
     /// game card, a plain channel to the channel preview popup.
     private func openFeatured(_ item: FeaturedItem) {
@@ -860,7 +903,8 @@ struct StandardLayout: SwiftUI.View {
                             scoreViewModel: scoreViewModel,
                             playAction: playAction,
                             onSave: { viewModel.saveCategorySettings() },
-                            isSection: true
+                            isSection: true,
+                            openMultiView: { withAnimation { showMultiView = true } }
                         )
                         .transition(.opacity)
                     } else {
@@ -1020,30 +1064,13 @@ struct StandardLayout: SwiftUI.View {
                                 }
                             }
 
-                            // 3. Quick Access — two compact cards in the same
-                            //    language as the settings rows (dark circle
-                            //    glyph + bold label on a flat charcoal card),
-                            //    so they sit quietly between the shelves.
-                            // The screen's only glass, and so the only thing
-                            // inside a glass container. spacing 0 keeps the two
-                            // capsules from merging into one another.
-                            GlassEffectContainer(spacing: 0) {
-                                HStack(spacing: 12) {
-                                    QuickAccessCard(title: "Recordings", icon: "record.circle.fill") {
-                                        viewModel.triggerSelectionHaptic()
-                                        viewModel.lastSelectedHomeID = -5
-                                        withAnimation(Self.pageAnimation) { selectedCategory = StreamCategory(id: -5, name: "Recordings") }
-                                    }
-                                    QuickAccessCard(title: "Multi-View", icon: "square.grid.2x2.fill") {
-                                        viewModel.triggerSelectionHaptic()
-                                        viewModel.lastSelectedHomeID = -99
-                                        withAnimation { showMultiView = true }
-                                    }
-                                }
-                            }
-                            .padding(.horizontal)
+                            // 3. Quick Access is GONE from here. Recordings and
+                            //    Multi-View are utilities, not things to
+                            //    browse, and they read as clutter between the
+                            //    shelves — both now live as rows in the Profile
+                            //    tab alongside the other library tools.
 
-                            // 6. Below Quick Access:
+                            // 6. Below the favourites:
                             //    • "For You" view → "Live Now" sports games shelf, then all
                             //      genre category shelves.
                             //    • Specific chip selected → only the subcategory shelves
@@ -1069,31 +1096,66 @@ struct StandardLayout: SwiftUI.View {
                                 }
                             }
 
-                            // 5. Category shelves — every CATEGORY is its own
-                            //    section, like the reference's "Popular -
-                            //    Movies" rows: underlined header (tap/chevron
-                            //    opens the full catalog page) over a shelf of
-                            //    that category's channels, playable in place.
-                            //    Lazy so off-screen shelves never build.
+                            // 4. Favorites — every favourited team and league
+                            //    as a poster tile. A team opens the full team
+                            //    page; a league opens its own page.
+                            if selectedHomeGroup == nil && !(cachedFavTeams.isEmpty && cachedFavLeagues.isEmpty) {
+                                VStack(alignment: .leading, spacing: 14) {
+                                    NuvioSectionHeader(
+                                        title: "Favorites",
+                                        showsChevron: true
+                                    ) {
+                                        viewModel.lastSelectedHomeID = -4
+                                        withAnimation(Self.pageAnimation) { selectedCategory = StreamCategory(id: -4, name: "Favorites") }
+                                    }
+
+                                    FavoriteTeamsShelf(
+                                        teams: cachedFavTeams,
+                                        leagues: cachedFavLeagues,
+                                        onTeam: { team, sport, league in
+                                            openedTeam = HomeTeamSelection(team: team, sport: sport, leagueLabel: league)
+                                        },
+                                        onLeague: { sport, label, name in
+                                            openedLeague = HomeLeagueSelection(sport: sport, leagueLabel: label, displayName: name)
+                                        }
+                                    )
+                                }
+                            }
+
+                            // 5. The rest of the page: category shelves in
+                            //    threes, with a row of BIG cards after each
+                            //    three, until the themed rows run out — then
+                            //    the remaining categories run on uninterrupted.
+                            //    Lazy so off-screen rows never build.
                             LazyVStack(alignment: .leading, spacing: 30) {
-                                // Flattened ONCE when the grouping changes,
-                                // not on every body pass — the shelf list is
-                                // rebuilt on any viewModel publish otherwise.
-                                ForEach(shelfCategories) { cat in
-                                    if let chans = channelsByCategory[cat.id], !chans.isEmpty {
-                                        HomeCategoryShelf(
-                                            category: cat,
-                                            channels: chans,
-                                            viewModel: viewModel,
-                                            playAction: playAction,
-                                            onSelect: { homePreviewChannel = $0 },
-                                            openCategory: {
-                                                viewModel.lastSelectedHomeID = cat.id
-                                                withAnimation(Self.pageAnimation) { selectedCategory = cat }
-                                            },
-                                            promptRename: { viewModel.triggerRenameCategory(cat) },
-                                            changeColor: { categoryForColor = cat }
-                                        )
+                                ForEach(homeRows) { row in
+                                    switch row.kind {
+                                    case .category(let cat):
+                                        if let chans = channelsByCategory[cat.id], !chans.isEmpty {
+                                            HomeCategoryShelf(
+                                                category: cat,
+                                                channels: chans,
+                                                viewModel: viewModel,
+                                                playAction: playAction,
+                                                onSelect: { homePreviewChannel = $0 },
+                                                openCategory: {
+                                                    viewModel.lastSelectedHomeID = cat.id
+                                                    withAnimation(Self.pageAnimation) { selectedCategory = cat }
+                                                },
+                                                promptRename: { viewModel.triggerRenameCategory(cat) },
+                                                changeColor: { categoryForColor = cat }
+                                            )
+                                        }
+                                    case .spotlight(let group):
+                                        VStack(alignment: .leading, spacing: 14) {
+                                            NuvioSectionHeader(title: group.title)
+                                                .padding(.horizontal, 20)
+                                            SpotlightShelf(
+                                                items: spotlightItems(for: group),
+                                                viewModel: viewModel,
+                                                onSelect: { homePreviewChannel = $0 }
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -1138,6 +1200,7 @@ struct StandardLayout: SwiftUI.View {
                         }
                         startingTodayCount = computeStartingToday()
                         favHeader = computeFavoriteHeader()
+                        if homeRows.isEmpty { homeRows = computeHomeRows() }
 
                         viewModel.lastSelectedHomeID = nil
                     }
@@ -1165,6 +1228,12 @@ struct StandardLayout: SwiftUI.View {
                     .task(id: featuredCacheKey) {
                         cachedDisplayedFeatured = computeDisplayedFeatured()
                     }
+                    // The themed rows land from a background task after the
+                    // first render, so rebuild the page when they do — and
+                    // whenever the category shelves themselves change.
+                    .task(id: "\(viewModel.spotlightGroups.count)-\(shelfCategories.count)") {
+                        homeRows = computeHomeRows()
+                    }
                     .task(id: categoryShelfCacheKey) {
                         channelsByCategory = computeChannelsByCategory()
                     }
@@ -1175,6 +1244,16 @@ struct StandardLayout: SwiftUI.View {
                         cachedHomeLiveGames = scoreViewModel.allLiveGames
                         startingTodayCount = computeStartingToday()
                         favHeader = computeFavoriteHeader()
+                        // The catalog these resolve against streams in with the
+                        // scores, so refresh the crests on the same signal.
+                        cachedFavTeams = scoreViewModel.resolvedFavoriteTeams()
+                        cachedFavLeagues = scoreViewModel.resolvedFavoriteLeagues()
+                    }
+                    // Adding or removing a favourite has to show up immediately,
+                    // not on the next score refresh.
+                    .task(id: "\(scoreViewModel.favoriteTeamIDs.count)-\(scoreViewModel.favoriteLeagueKeys.count)") {
+                        cachedFavTeams = scoreViewModel.resolvedFavoriteTeams()
+                        cachedFavLeagues = scoreViewModel.resolvedFavoriteLeagues()
                     }
                     // Header counts depend on the score maps, which stream in
                     // sport-by-sport after launch. `filteredGames.count` bumps
@@ -1238,6 +1317,26 @@ struct StandardLayout: SwiftUI.View {
                 viewModel: viewModel,
                 accentColor: accentColor,
                 playAction: { playAction($0) }
+            )
+        }
+        // My Teams — a full-screen page, not a sheet: it's a destination with
+        // its own hero, the same as a category catalog page.
+        .fullScreenCover(item: $openedTeam) { sel in
+            TeamDetailPage(
+                team: sel.team,
+                leagueLabel: sel.leagueLabel,
+                sport: sel.sport,
+                viewModel: viewModel,
+                scoreViewModel: scoreViewModel
+            )
+        }
+        .fullScreenCover(item: $openedLeague) { sel in
+            LeagueDetailPage(
+                sport: sel.sport,
+                leagueLabel: sel.leagueLabel,
+                displayName: sel.displayName,
+                viewModel: viewModel,
+                scoreViewModel: scoreViewModel
             )
         }
         // NO implicit animation on `selectedCategory` — deliberately.
@@ -1450,6 +1549,39 @@ struct StandardLayout: SwiftUI.View {
         }
 
         return result
+    }
+
+    /// Pairs a themed row's channels with whatever each is showing. The
+    /// ranking itself happened ONCE, off the main thread, alongside the
+    /// featured picks — this is only a guide lookup per card.
+    func spotlightItems(for group: ChannelViewModel.SpotlightGroup) -> [SpotlightItem] {
+        group.channels.map {
+            SpotlightItem(channel: $0, program: viewModel.getCurrentProgram(for: $0))
+        }
+    }
+
+    /// The page body: three category shelves, then a themed row of big cards,
+    /// repeating until the themed rows are used up — after which the remaining
+    /// categories simply carry on.
+    func computeHomeRows() -> [HomeRow] {
+        var rows: [HomeRow] = []
+        var groups = viewModel.spotlightGroups[...]
+        var sinceSpotlight = 0
+        for cat in shelfCategories {
+            rows.append(HomeRow(id: "c\(cat.id)", kind: .category(cat)))
+            sinceSpotlight += 1
+            if sinceSpotlight == 3, let group = groups.first {
+                groups = groups.dropFirst()
+                rows.append(HomeRow(id: "s\(group.id)", kind: .spotlight(group)))
+                sinceSpotlight = 0
+            }
+        }
+        // Fewer than three categories left over? The themed rows still owed
+        // still go on the end rather than being dropped.
+        for group in groups {
+            rows.append(HomeRow(id: "s\(group.id)", kind: .spotlight(group)))
+        }
+        return rows
     }
 
     /// Stores the grouping and the flattened shelf order together, so the two
@@ -2172,9 +2304,13 @@ struct MultiViewIndicator: SwiftUI.View {
                     .padding(.horizontal, 16).padding(.vertical, 12)
                     .modifier(GlassEffect(cornerRadius: 20, isSelected: true, accentColor: accentColor)) 
             }
-            .padding(.bottom, 15) 
+            // Rides just above the floating bottom bar. The bar ignores the
+            // bottom safe area (20pt off the physical edge, 61pt tall) while
+            // this stack respects it, so relative to the safe-area bottom the
+            // bar's top edge sits at 20 + 61 − ~34 ≈ 47pt.
+            .padding(.bottom, 57)
         }
-    } 
+    }
 }
 
 /// Thin wrapper that observes `EPGLoadingState` directly so high-frequency
@@ -2525,34 +2661,6 @@ struct MatchupHeroContent: View {
     }
 }
 
-/// Quick Access — a Liquid Glass capsule button in the exact language of
-/// the bottom bar, so the two shortcuts read as part of the app's glass
-/// chrome rather than another card.
-struct QuickAccessCard: View {
-    let title: String
-    let icon: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 9) {
-                Image(systemName: icon)
-                    .font(.system(size: 17, weight: .semibold))
-                Text(title)
-                    .font(.system(size: 15, weight: .bold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity)
-            .frame(height: 54)
-            .contentShape(Capsule())
-        }
-        .buttonStyle(PressableCardStyle())
-        .modifier(DockGlass(circular: false))
-    }
-}
-
 /// Horizontal scroller backed by `UIScrollView` with `delaysContentTouches`
 /// disabled — the missing piece that SwiftUI's `ScrollView` doesn't expose.
 /// Without this, the inner pan gesture stays in a tracking state for ~half
@@ -2729,7 +2837,7 @@ struct LiveGamesPreviewList: View {
             }
             .padding(.horizontal)
         }
-        .frame(height: 170)
+        .frame(height: LiveGameCard.cardHeight + 10)
     }
 }
 
@@ -2850,12 +2958,18 @@ struct LiveGameContextMenuModifier: ViewModifier {
     }
 }
 
-/// Compact card for a live sports game on the home shelf — team logos,
-/// score, and broadcast network. Mirrors the visual weight of the
-/// Continue Watching cards so the home page reads as one coherent list.
+/// Live game card on the home shelf, built to the reference app's "Live
+/// Sports" tile: a diagonal split of the two clubs' colours with both crests
+/// over it, a status badge in the top-left corner, and the league above the
+/// matchup along the bottom. The one departure from the reference is that
+/// those tiles are all upcoming, so they only carry a kickoff time — these
+/// are live, so the badge reads LIVE and the score sits opposite the title.
 struct LiveGameCard: View {
     let game: ESPNEvent
     let accentColor: Color
+
+    static let cardWidth: CGFloat = 245
+    static let cardHeight: CGFloat = 158
 
     private var homeName: String {
         game.homeCompetitor?.team?.shortDisplayName
@@ -2883,81 +2997,118 @@ struct LiveGameCard: View {
     }
     private var homeScore: String { game.homeCompetitor?.score ?? "0" }
     private var awayScore: String { game.awayCompetitor?.score ?? "0" }
+    private var isLive: Bool { game.status.type.state == "in" }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Top row: LIVE badge + status detail
-            HStack(spacing: 6) {
-                HStack(spacing: 4) {
-                    Circle().fill(Color.red).frame(width: 6, height: 6)
-                    Text("LIVE")
-                        .font(.system(size: 10, weight: .black))
-                        .kerning(0.6)
-                        .foregroundStyle(.white)
-                }
-                .padding(.horizontal, 7)
-                .padding(.vertical, 3)
-                .background(Color.red.opacity(0.85), in: Capsule())
-
-                Text(game.status.type.detail.uppercased())
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            .padding(.bottom, 12)
-
-            // Teams + scores
-            HStack(spacing: 0) {
-                teamColumn(name: awayName, logo: awayLogo, score: awayScore)
-                Text("vs")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 6)
-                teamColumn(name: homeName, logo: homeLogo, score: homeScore)
-            }
-
-            Spacer(minLength: 0)
-
-            // Footer: broadcast network
-            if let network = game.broadcastName, !network.isEmpty {
-                Text(network)
-                    .font(.system(size: 10, weight: .black))
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.white.opacity(0.15), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-                    .padding(.top, 10)
-            }
+    private func teamColor(_ c: ESPNCompetitor?) -> Color {
+        guard let hex = c?.team?.color, !hex.isEmpty,
+              let col = Color(hex: hex.hasPrefix("#") ? hex : "#\(hex)") else {
+            return Color(white: 0.16)
         }
-        .padding(14)
-        .frame(width: 230, height: 160, alignment: .topLeading)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(NuvioTheme.card)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.white.opacity(0.06), lineWidth: 0.5)
-        )
+        return col
     }
 
-    @ViewBuilder
-    private func teamColumn(name: String, logo: String, score: String) -> some View {
-        VStack(spacing: 6) {
-            CachedAsyncImage(urlString: logo, size: CGSize(width: 36, height: 36))
-                .frame(width: 36, height: 36)
-            Text(name)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-            Text(score)
-                .font(.system(size: 18, weight: .bold, design: .rounded))
-                .foregroundStyle(.primary)
-                .monospacedDigit()
+    /// League / competition caption — the reference's small grey "MLS".
+    private var leagueLabel: String? {
+        if let n = game.broadcastName, !n.isEmpty { return n.uppercased() }
+        return nil
+    }
+
+    private static let timeFmt: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "h:mm a"; return f
+    }()
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            // Hard diagonal split: away's colour on the left, home's on the
+            // right, meeting on a steep edge across the middle.
+            LinearGradient(
+                stops: [
+                    .init(color: teamColor(game.awayCompetitor), location: 0.5),
+                    .init(color: teamColor(game.homeCompetitor), location: 0.5)
+                ],
+                startPoint: UnitPoint(x: 0.02, y: 0),
+                endPoint: UnitPoint(x: 0.98, y: 1)
+            )
+
+            // Each crest sits centred in ITS OWN half — away at a quarter of
+            // the width, home at three quarters — so neither one crosses the
+            // diagonal onto the other club's colour. Centring them as a pair
+            // put the away crest right on the seam.
+            HStack(spacing: 0) {
+                CachedAsyncImage(urlString: awayLogo, size: CGSize(width: 46, height: 46))
+                    .frame(width: 46, height: 46)
+                    .frame(maxWidth: .infinity)
+                CachedAsyncImage(urlString: homeLogo, size: CGSize(width: 46, height: 46))
+                    .frame(width: 46, height: 46)
+                    .frame(maxWidth: .infinity)
+            }
+            .frame(width: Self.cardWidth, height: Self.cardHeight)
+            .offset(y: -14)
+
+            // Legibility wash so the caption reads over any club colour,
+            // pale ones included.
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0.42),
+                    .init(color: .black.opacity(0.72), location: 1.0)
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+
+            // Status badge, top-left.
+            Group {
+                if isLive {
+                    HStack(spacing: 4) {
+                        Circle().fill(Color.red).frame(width: 6, height: 6)
+                        Text("LIVE")
+                            .font(.system(size: 11, weight: .black))
+                            .kerning(0.5)
+                            .foregroundStyle(.white)
+                    }
+                } else {
+                    Text(Self.timeFmt.string(from: game.gameDate))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(Color.black.opacity(0.55)))
+            .padding(11)
+
+            // League above the matchup, bottom-left; score opposite it.
+            HStack(alignment: .bottom, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    if let league = leagueLabel {
+                        Text(league)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.7))
+                            .lineLimit(1)
+                    }
+                    Text("\(awayName) vs. \(homeName)")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                }
+                Spacer(minLength: 0)
+                if isLive {
+                    Text("\(awayScore)–\(homeScore)")
+                        .font(.system(size: 17, weight: .heavy, design: .rounded))
+                        .foregroundStyle(.white)
+                        .monospacedDigit()
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 11)
+            .frame(width: Self.cardWidth, height: Self.cardHeight, alignment: .bottomLeading)
         }
-        .frame(maxWidth: .infinity)
+        .frame(width: Self.cardWidth, height: Self.cardHeight)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(0.10), lineWidth: 0.5)
+        )
     }
 }
 
@@ -3015,6 +3166,9 @@ struct FeaturedCarousel: View {
     private static let backgroundScale: CGFloat = 1.14
     private static let contentParallax: CGFloat = 0.18
     private static let swipeThresholdFraction: CGFloat = 0.16
+    /// HERO_SWIPE_VELOCITY_THRESHOLD — a flick this fast commits regardless of
+    /// how far it actually travelled.
+    private static let swipeVelocityThreshold: CGFloat = 300
     private static let dwell: Double = 8
     /// Two lines of the 30pt title (≈36pt each) + the 13pt gap + the 15pt
     /// metadata line. Reserving it keeps the static pill from being nudged by
@@ -3202,15 +3356,15 @@ struct FeaturedCarousel: View {
                 }
                 .onEnded { value in
                     let dx = value.translation.width
-                    let flick = value.predictedEndTranslation.width
                     defer { timerKey += 1 }
                     guard items.count > 1, abs(dx) > abs(value.translation.height) else {
                         withAnimation(.easeOut(duration: 0.25)) { offsetFraction = 0 }
                         return
                     }
-                    // Nuvio commits on a sixth of the width, or on a flick.
+                    // Nuvio's resolveHeroTargetPage: commit on a sixth of the
+                    // width OR on 300pt/s of velocity, whichever comes first.
                     let travelled = abs(dx) > screenWidth * Self.swipeThresholdFraction
-                    let thrown = abs(flick) > screenWidth * 0.4
+                    let thrown = abs(value.velocity.width) > Self.swipeVelocityThreshold
                     if travelled || thrown {
                         step(dx < 0 ? 1 : -1, duration: 0.3)
                     } else {

@@ -49,9 +49,17 @@ nonisolated enum LeagueDetailService {
         let losses: String
         let goalDiff: String
         let points: String
+        /// US-league stats. ESPN reports these instead of draws/points, and a
+        /// table that shows "D" and "PTS" for baseball is nonsense — see
+        /// StandingsColumns, which picks a column set from these.
+        let winPercent: String
+        let gamesBehind: String
         /// Qualification note color (hex) ESPN attaches to promotion /
         /// advancement / relegation zones — rendered as a thin edge bar.
         let noteColor: String?
+        /// ESPN's own wording for that zone ("UEFA Champions League",
+        /// "Relegation"), which the league page turns into a legend.
+        let noteText: String?
     }
 
     struct StandingsGroup: Identifiable, Sendable {
@@ -99,7 +107,10 @@ nonisolated enum LeagueDetailService {
                                    losses: stat(["losses"]),
                                    goalDiff: stat(["pointDifferential", "differential"]),
                                    points: stat(["points"]),
-                                   noteColor: entry.note?.color)
+                                   winPercent: stat(["winPercent"]),
+                                   gamesBehind: stat(["gamesBehind"]),
+                                   noteColor: entry.note?.color,
+                                   noteText: entry.note?.description)
             }
             return StandingsGroup(id: child.name ?? "\(idx)",
                                   name: child.name ?? "Standings",

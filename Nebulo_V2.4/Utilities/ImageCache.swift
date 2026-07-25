@@ -209,17 +209,22 @@ class ImageLoader: ObservableObject {
     /// spinning forever — player headshots 404 constantly on ESPN's CDN.
     @Published var failed = false
     let urlString: String
+    /// Decode at this size instead of the shared 300x300 default. Opt-in, so
+    /// only the callers that need a big photographic image pay for one — the
+    /// cache is keyed by (url, size), so the two never collide.
+    let decodeSize: CGSize?
     private var loadedURL: String? = nil
 
-    init(urlString: String) {
+    init(urlString: String, decodeSize: CGSize? = nil) {
         self.urlString = urlString
+        self.decodeSize = decodeSize
         // Populate synchronously from memory OR disk cache so the first
         // frame never shows a placeholder for an already-cached image.
         // Without the disk fallback, rows created mid-transition (e.g. the
         // directional sport swipe) rendered gray boxes for a beat and their
         // logos popped in after the slide instead of moving with it.
-        if let cached = ImageCache.shared.getMemoryCache(forKey: urlString)
-            ?? ImageCache.shared.get(forKey: urlString) {
+        if let cached = ImageCache.shared.getMemoryCache(forKey: urlString, size: decodeSize)
+            ?? ImageCache.shared.get(forKey: urlString, size: decodeSize) {
             self.image = cached
             self.loadedURL = urlString
         }
@@ -237,7 +242,7 @@ class ImageLoader: ObservableObject {
         if loadedURL == url { return }
 
         // Memory cache — instant, no flicker.
-        if let cached = ImageCache.shared.getMemoryCache(forKey: url) {
+        if let cached = ImageCache.shared.getMemoryCache(forKey: url, size: decodeSize) {
             image = cached
             loadedURL = url
             return
@@ -247,7 +252,7 @@ class ImageLoader: ObservableObject {
         // main thread. The current image is kept on screen until the new one
         // is ready, so a channel switch never flashes a spinner for an image
         // that was already cached on disk.
-        let loaded = await ImageCache.shared.image(forKey: url)
+        let loaded = await ImageCache.shared.image(forKey: url, size: decodeSize)
         guard !Task.isCancelled, loadedURL != url else { return }
         if let loaded {
             image = loaded
@@ -267,11 +272,19 @@ struct CachedAsyncImage: View {
     /// (missing headshots, dead logo URLs) — a spinner that never resolves
     /// reads as broken.
     let failurePlaceholder: AnyView?
+    /// `.fit` letterboxes (right for logos); `.fill` crops to the frame, which
+    /// is what a photographic still wants.
+    let contentMode: ContentMode
 
-    init(urlString: String, size: CGSize? = nil, failurePlaceholder: AnyView? = nil) {
+    init(urlString: String,
+         size: CGSize? = nil,
+         contentMode: ContentMode = .fit,
+         decodeSize: CGSize? = nil,
+         failurePlaceholder: AnyView? = nil) {
         self.urlString = urlString
-        _loader = StateObject(wrappedValue: ImageLoader(urlString: urlString))
+        _loader = StateObject(wrappedValue: ImageLoader(urlString: urlString, decodeSize: decodeSize))
         self.size = size
+        self.contentMode = contentMode
         self.failurePlaceholder = failurePlaceholder
     }
 
@@ -280,7 +293,7 @@ struct CachedAsyncImage: View {
             if let image = loader.image {
                 Image(uiImage: image)
                     .resizable()
-                    .aspectRatio(contentMode: .fit)
+                    .aspectRatio(contentMode: contentMode)
             } else if loader.failed {
                 if let failurePlaceholder {
                     failurePlaceholder

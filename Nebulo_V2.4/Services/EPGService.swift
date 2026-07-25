@@ -323,6 +323,8 @@ nonisolated class EPGParserDelegate: NSObject, XMLParserDelegate {
     private var currentTitle = ""
     private var currentDesc = ""
     private var currentDisplayName = ""
+    private var currentImage: String?
+    private var inProgramme = false
     
     override init() {
         super.init()
@@ -341,6 +343,16 @@ nonisolated class EPGParserDelegate: NSObject, XMLParserDelegate {
             }
             currentTitle = ""
             currentDesc = ""
+            currentImage = nil
+            inProgramme = true
+        } else if elementName == "icon" || elementName == "image", inProgramme, currentImage == nil {
+            // Inside a <programme> both of these are the still for THAT show —
+            // XMLTV 1.0 added <image>, older feeds only have <icon>. The ones
+            // inside <channel> are the channel logo, which the playlist already
+            // gives us, so `inProgramme` gates both.
+            // <image> may carry the URL as text rather than an attribute; that
+            // case is picked up in foundCharacters.
+            currentImage = attributeDict["src"]
         } else if elementName == "channel" {
             currentChannelID = attributeDict["id"] ?? ""
             currentDisplayName = ""
@@ -354,19 +366,27 @@ nonisolated class EPGParserDelegate: NSObject, XMLParserDelegate {
             currentDesc += string
         } else if currentElement == "display-name" {
             currentDisplayName += string
+        } else if currentElement == "image", inProgramme, currentImage == nil {
+            let url = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            if url.hasPrefix("http") { currentImage = url }
         }
     }
     
     func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
         if elementName == "programme" {
+            // Cleared before the guard, so a malformed entry can't leave the
+            // parser thinking it's still inside a programme and misattribute
+            // the next <channel> logo as a programme still.
+            inProgramme = false
             guard !currentChannelID.isEmpty, let start = currentStart, let stop = currentStop else { return }
-            
+
             let program = EPGProgram(
                 channelID: currentChannelID,
                 title: currentTitle.trimmingCharacters(in: .whitespacesAndNewlines),
                 description: currentDesc.isEmpty ? nil : currentDesc.trimmingCharacters(in: .whitespacesAndNewlines),
                 start: start,
-                stop: stop
+                stop: stop,
+                image: currentImage
             )
             
             if epgData[currentChannelID] == nil {

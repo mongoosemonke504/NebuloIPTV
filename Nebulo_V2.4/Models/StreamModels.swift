@@ -7,6 +7,10 @@ struct EPGProgram: Identifiable, Codable, Sendable {
     let description: String?
     let start: Date
     let stop: Date
+    /// XMLTV `<icon src>` for this programme — the still most providers ship
+    /// with the guide. Optional so guide caches written before this field
+    /// existed still decode.
+    var image: String? = nil
 }
 
 struct StreamChannel: Identifiable, Codable, Hashable, Equatable, Sendable {

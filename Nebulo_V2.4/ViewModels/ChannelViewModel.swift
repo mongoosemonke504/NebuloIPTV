@@ -63,7 +63,35 @@ class ChannelViewModel: ObservableObject {
     /// Pre-computed curated carousel — one live channel per broad genre group.
     /// Populated on a background thread before isLoading flips to false so the
     /// home screen never has to compute this on first render.
-    @Published var featuredChannels: [StreamChannel] = [] 
+    @Published var featuredChannels: [StreamChannel] = []
+    /// The best-known networks this playlist carries, most-watched first —
+    /// ranked once alongside the featured picks, never re-derived per render.
+    @Published var popularChannels: [StreamChannel] = []
+
+    /// The themed rows of big cards, in the order the home screen shows them.
+    @Published var spotlightGroups: [SpotlightGroup] = []
+
+    /// One themed row of big cards.
+    struct SpotlightGroup: Identifiable, Sendable, Equatable {
+        let id: String
+        let title: String
+        let channels: [StreamChannel]
+    }
+
+    /// The themes, in home-screen order, and the words that put a channel in
+    /// one. Matched against the channel's CATEGORY name first (playlists group
+    /// by exactly these) and its own name second.
+    nonisolated static let spotlightThemes: [(id: String, title: String, keywords: [String])] = [
+        ("sports", "Sports",  ["sport", "espn", "nfl", "nba", "mlb", "nhl", "golf", "tennis",
+                               "soccer", "football", "ufc", "fight", "racing", "nascar", "f1"]),
+        ("usa",    "USA",     ["usa", "united states", "america", "us |", "us -", "us:"]),
+        ("news",   "News",    ["news", "cnn", "msnbc", "fox news", "bbc", "sky news"]),
+        ("kids",   "Kids",    ["kid", "cartoon", "children", "disney", "nick", "family", "junior"]),
+        ("latino", "Latino",  ["latino", "latin", "spanish", "espanol", "español", "mexico",
+                               "univision", "telemundo", "deportes"]),
+        ("247",    "24/7",    ["24/7", "24-7", "247 ", " 247", "24 7"])
+    ]
+
     private var epgProgress: Double = 0          // internal only — not published
     @Published var isUpdatingEPG: Bool = false
     @Published var loadingStatus: String = "Loading..."
@@ -586,7 +614,7 @@ class ChannelViewModel: ObservableObject {
         let favoriteIDs = self.favoriteIDs
         let recentIDs   = self.recentIDs
 
-        let picked = await Task.detached(priority: .userInitiated) {
+        let picked = await Task.detached(priority: .userInitiated) { () -> (channels: [StreamChannel], popular: [StreamChannel], groups: [ChannelViewModel.SpotlightGroup]) in
             // Fast lookups
             let catLookup = Dictionary(uniqueKeysWithValues: categories.map { ($0.id, $0) })
             let chanByID  = Dictionary(uniqueKeysWithValues: channels.map { ($0.id, $0) })
@@ -658,25 +686,114 @@ class ChannelViewModel: ObservableObject {
                 slotGenres = defaultGenres
             }
 
+            // ── ONE ranking pass over the playlist.
+            // Everything below reads this map instead of re-deriving a rank,
+            // because ranking inside a sort comparator meant re-cleaning every
+            // channel name tens of thousands of times — enough to hang a big
+            // playlist on the loading screen.
+            var rankOf: [Int: Int] = [:]
+            var bestForNetwork: [Int: StreamChannel] = [:]
+            for ch in visible {
+                guard let rank = ChannelViewModel.popularityRank(of: ch.name) else { continue }
+                rankOf[ch.id] = rank
+                // One channel per network: prefer the feed the guide covers.
+                if let existing = bestForNetwork[rank] {
+                    if !hasLiveProgram(existing), hasLiveProgram(ch) { bestForNetwork[rank] = ch }
+                } else {
+                    bestForNetwork[rank] = ch
+                }
+            }
+            let popularPicks = bestForNetwork.keys.sorted().compactMap { bestForNetwork[$0] }
+
             // Bucket all visible channels by genre once — avoids repeatedly
             // scanning the full channel list for each preferred genre.
+            //
+            // Each bucket is then sorted by how well-known the channel is,
+            // because picking `pool.first` meant picking whatever sorted first
+            // in the PLAYLIST — i.e. alphabetically, which is how the hero
+            // ended up leading with Australian channels beginning with "A".
             var byGenre: [HomeCategoryGroup: [StreamChannel]] = [:]
             for ch in visible {
                 let g = groupOf(ch)
                 byGenre[g, default: []].append(ch)
             }
+            for (genre, pool) in byGenre {
+                byGenre[genre] = pool.sorted { a, b in
+                    let ra = rankOf[a.id] ?? Int.max
+                    let rb = rankOf[b.id] ?? Int.max
+                    if ra != rb { return ra < rb }
+                    // Among equally unknown channels, one with a logo beats one
+                    // without — still deterministic, just not alphabetical.
+                    let la = !(a.icon ?? "").isEmpty
+                    let lb = !(b.icon ?? "").isEmpty
+                    if la != lb { return la }
+                    return a.id < b.id
+                }
+            }
+
+            var result: [StreamChannel] = []
+            var seen = Set<Int>()
+            // Brands already on a hero card. "ESPN", "ESPN News", "ESPNU" and
+            // "Latino ESPN" are all the same brand, and a carousel of four of
+            // them is what this exists to prevent — the genre slots pull
+            // several channels from one bucket, and that bucket is sorted by
+            // popularity, so the ESPN family sat at the front of it together.
+            var usedRoots = Set<String>()
+
+            @inline(__always)
+            func brandRoot(_ channel: StreamChannel) -> String {
+                let cleaned = NameCleaner.clean(channel.name).lowercased()
+                // The first alphanumeric word, with any trailing letters after
+                // a known brand stripped: "espnu" and "espn news" both give
+                // "espn".
+                let first = cleaned.split(separator: " ").first.map(String.init) ?? cleaned
+                for target in ChannelViewModel.popularNetworksLower where first.hasPrefix(target) { return target }
+                for target in ChannelViewModel.popularNetworksLower
+                where ChannelViewModel.matches(cleaned: cleaned, target: target) { return target }
+                return first
+            }
+
+            /// Takes a channel for the hero unless its brand is already there.
+            @discardableResult
+            @inline(__always)
+            func accept(_ channel: StreamChannel) -> Bool {
+                guard !seen.contains(channel.id) else { return false }
+                guard usedRoots.insert(brandRoot(channel)).inserted else { return false }
+                seen.insert(channel.id)
+                result.append(channel)
+                return true
+            }
+
+            // ── Cold start: the BIG networks lead.
+            // With no watch history there's nothing to personalise from, and
+            // "one channel per genre" surfaced whatever happened to sort first
+            // in each bucket. Lead with the networks people actually watch
+            // instead — ranked by 2024-2026 Nielsen total-viewer standings
+            // (CBS/NBC/ABC/Fox, then Fox News/ESPN, then the big cable
+            // entertainment and sports nets), matched against the playlist by
+            // name. Anything not carried is simply skipped, and the genre
+            // logic below fills whatever's left.
+            if !hasHistory {
+                // Variety matters more than rank order here: taken straight,
+                // the list opens with several sports networks in a row. One
+                // card per genre, on top of the brand-root rule below.
+                var usedGenres = Set<HomeCategoryGroup>()
+                for pick in popularPicks {
+                    guard result.count < 6 else { break }
+                    guard usedGenres.insert(groupOf(pick)).inserted else { continue }
+                    guard accept(pick) else { continue }
+                }
+            }
 
             // Pick: one channel per slot (a genre with 3 slots contributes
             // its 3 best channels), live programming first, falling back to
             // any visible channel in the genre. Cap 6.
-            var result: [StreamChannel] = []
-            var seen = Set<Int>()
             for genre in slotGenres {
                 guard let pool = byGenre[genre], !pool.isEmpty else { continue }
-                if let live = pool.first(where: { hasLiveProgram($0) && !seen.contains($0.id) }) {
-                    result.append(live); seen.insert(live.id)
-                } else if let any = pool.first(where: { !seen.contains($0.id) }) {
-                    result.append(any); seen.insert(any.id)
+                // `accept` rejects a repeat brand, so keep walking the bucket
+                // until a genuinely different channel takes the slot.
+                if !pool.filter({ hasLiveProgram($0) }).contains(where: { accept($0) }) {
+                    _ = pool.contains { accept($0) }
                 }
                 if result.count >= 6 { break }
             }
@@ -685,18 +802,64 @@ class ChannelViewModel: ObservableObject {
             // carousel still has hero-card-worthy content even when the user's
             // top genres are sparse.
             if result.count < 5 {
-                for ch in visible where !seen.contains(ch.id) {
+                for ch in visible {
                     guard hasLiveProgram(ch) else { continue }
-                    result.append(ch); seen.insert(ch.id)
+                    _ = accept(ch)
                     if result.count >= 5 { break }
                 }
             }
 
+            // The big home cards want the best-known channels the playlist
+            // carries, capped — the same ranking, no second pass.
+            let popular = Array(popularPicks.prefix(8))
+
+            // ── Themed rows, built from the SAME single pass.
+            // Each channel is filed under a theme by its category name (which
+            // is how playlists are organised) or its own name, then the theme's
+            // channels are ordered by the popularity rank already computed and
+            // thinned to one per brand so a Sports row isn't four ESPNs.
+            var themeBuckets: [String: [StreamChannel]] = [:]
+            for ch in visible {
+                let haystack = ((catLookup[ch.categoryID]?.name ?? "") + " " + ch.name).lowercased()
+                for theme in ChannelViewModel.spotlightThemes
+                where theme.keywords.contains(where: { haystack.contains($0) }) {
+                    themeBuckets[theme.id, default: []].append(ch)
+                    break
+                }
+            }
+
+            var groups: [ChannelViewModel.SpotlightGroup] = []
+            if !popular.isEmpty {
+                groups.append(.init(id: "popular", title: "Popular Channels", channels: popular))
+            }
+            for theme in ChannelViewModel.spotlightThemes {
+                guard let bucket = themeBuckets[theme.id], !bucket.isEmpty else { continue }
+                let ordered = bucket.sorted { a, b in
+                    let ra = rankOf[a.id] ?? Int.max
+                    let rb = rankOf[b.id] ?? Int.max
+                    if ra != rb { return ra < rb }
+                    let la = hasLiveProgram(a), lb = hasLiveProgram(b)
+                    if la != lb { return la }
+                    return a.id < b.id
+                }
+                var picks: [StreamChannel] = []
+                var roots = Set<String>()
+                for ch in ordered {
+                    guard picks.count < 8 else { break }
+                    let cleaned = NameCleaner.clean(ch.name).lowercased()
+                    let root = cleaned.split(separator: " ").first.map(String.init) ?? cleaned
+                    guard roots.insert(root).inserted else { continue }
+                    picks.append(ch)
+                }
+                guard picks.count >= 3 else { continue }
+                groups.append(.init(id: theme.id, title: theme.title, channels: picks))
+            }
+
             // Last resort — surface favourites for users with no EPG at all.
             if result.isEmpty {
-                return Array(channels.filter { favoriteIDs.contains($0.id) }.prefix(5))
+                return (Array(channels.filter { favoriteIDs.contains($0.id) }.prefix(5)), popular, groups)
             }
-            return result
+            return (result, popular, groups)
         }.value
 
         // Prefetch carousel icons before flipping isLoading off so the home
@@ -710,7 +873,7 @@ class ChannelViewModel: ObservableObject {
             }
             group.addTask {
                 await withTaskGroup(of: Void.self) { inner in
-                    for channel in picked {
+                    for channel in picked.channels {
                         guard let url = channel.icon, !url.isEmpty else { continue }
                         inner.addTask {
                             await ImageCache.prefetchAndWait(urlString: url)
@@ -737,9 +900,105 @@ class ChannelViewModel: ObservableObject {
             }
         }
 
-        self.featuredChannels = picked
+        self.featuredChannels = picked.channels
+        self.popularChannels = picked.popular
+        self.spotlightGroups = picked.groups
     }
 
+
+    /// The networks a brand-new user's hero carousel leads with, most-watched
+    /// first. Ranked from Nielsen total-viewer standings — the four broadcast
+    /// networks and Fox News/ESPN top every published table — then the biggest
+    /// cable news, sports and entertainment channels.
+    ///
+    /// Order matters twice over: the first six that the playlist actually
+    /// carries are the ones that get hero cards, and a network is consumed
+    /// once, so the SPECIFIC names (Fox News, Fox Sports 1) deliberately come
+    /// before the generic ones (FOX) — otherwise "Fox Sports 1" would be
+    /// claimed by "FOX".
+    nonisolated static let popularNetworks: [String] = [
+        "ESPN", "CBS", "Fox News", "NBC", "CNN", "ABC",
+        "Fox Sports 1", "FS1", "TNT", "USA Network", "FOX", "MSNBC",
+        "TBS", "HGTV", "Discovery", "History", "Food Network", "TLC",
+        "AMC", "A&E", "Bravo", "FX", "Paramount Network", "Comedy Central",
+        "NFL Network", "NBA TV", "MLB Network", "Golf Channel", "CBS Sports Network",
+        "National Geographic", "Syfy", "Lifetime", "Hallmark Channel",
+        "Cartoon Network", "Nickelodeon", "Disney Channel", "CNBC",
+        "Sky Sports Main Event", "TSN", "BBC One", "ITV1"
+    ]
+
+    /// Country codes playlists prefix names with. Used to keep the US-centric
+    /// popular list from claiming another country's channel of the same name —
+    /// "AU: ABC" is the Australian broadcaster, not the American one, and it is
+    /// exactly what "ABC" was matching before this existed.
+    nonisolated static let foreignPrefixes: [String] = [
+        "au", "uk", "gb", "ca", "nz", "ie", "za", "in", "ph", "sg", "my",
+        "de", "fr", "es", "it", "nl", "pt", "br", "mx", "ar", "pl", "ro",
+        "tr", "gr", "se", "no", "dk", "fi", "ru", "ua", "ar", "ae", "sa"
+    ]
+
+    /// The country marker a playlist name carries, lowercased, or nil.
+    /// Recognises "US: Foo", "US| Foo", "(US) Foo", "[US] Foo", "USA - Foo".
+    nonisolated static func countryMarker(of name: String) -> String? {
+        let trimmed = name.trimmingCharacters(in: .whitespaces).lowercased()
+        for sep in [":", "|", ")", "]", " -"] {
+            guard let idx = trimmed.firstIndex(of: sep.last!) else { continue }
+            let head = trimmed[trimmed.startIndex..<idx]
+                .trimmingCharacters(in: CharacterSet(charactersIn: "([| -"))
+            guard head.count >= 2, head.count <= 3,
+                  head.allSatisfy({ $0.isLetter }) else { continue }
+            return head
+        }
+        return nil
+    }
+
+    /// `popularNetworks` lowercased once, so matching never re-lowercases
+    /// forty strings per channel.
+    nonisolated static let popularNetworksLower: [String] = popularNetworks.map { $0.lowercased() }
+
+    /// Word-boundary match against an ALREADY cleaned, lowercased name:
+    /// "espn hd" matches "espn", "espn2" does not.
+    nonisolated static func matches(cleaned: String, target: String) -> Bool {
+        if cleaned == target { return true }
+        return cleaned.hasPrefix(target + " ")
+            || cleaned.hasSuffix(" " + target)
+            || cleaned.contains(" " + target + " ")
+    }
+
+    /// How well-known a channel is: its index in `popularNetworks`, or nil if
+    /// it isn't one of them. Lower is more popular.
+    ///
+    /// The name is cleaned ONCE here and then compared against every network.
+    /// Doing it the other way round — asking "does this channel match network
+    /// N?" forty times — re-ran the cleaner forty times per channel, which on
+    /// a ten-thousand-channel playlist was minutes of work and hung the app on
+    /// its loading screen.
+    nonisolated static func popularityRank(of channelName: String) -> Int? {
+        // A non-US country marker disqualifies the channel outright: "AU: ABC"
+        // is the Australian broadcaster, not the American one.
+        if let marker = countryMarker(of: channelName),
+           marker != "us", marker != "usa",
+           foreignPrefixes.contains(marker) {
+            return nil
+        }
+        let cleaned = NameCleaner.clean(channelName).lowercased()
+        for (idx, target) in popularNetworksLower.enumerated()
+        where matches(cleaned: cleaned, target: target) { return idx }
+        return nil
+    }
+
+    /// Whether a playlist channel IS the given US network. Convenience over
+    /// `popularityRank` for the rare one-off check — never call this in a loop
+    /// over the whole playlist.
+    nonisolated static func channelMatches(_ channelName: String, network: String) -> Bool {
+        if let marker = countryMarker(of: channelName),
+           marker != "us", marker != "usa",
+           foreignPrefixes.contains(marker) {
+            return false
+        }
+        return matches(cleaned: NameCleaner.clean(channelName).lowercased(),
+                       target: network.lowercased())
+    }
 
     /// Maximum number of results returned per result bucket (EPG matches and
     /// channel-name matches). The UI never shows more than this and computing

@@ -816,13 +816,22 @@ struct LeagueGamesSheet: View {
 
     // MARK: Standings (league table, or tournament group tables)
 
+    /// Shares the league page's board so a table looks — and picks its columns
+    /// — the same everywhere. The old card hard-coded football's PL/W/D/L/GD/PTS,
+    /// which made the MLB table meaningless.
     @ViewBuilder private var standingsContent: some View {
-        VStack(spacing: 16) {
+        VStack(alignment: .leading, spacing: 16) {
             ForEach(standings) { group in
-                StandingsTableCard(group: group, showName: standings.count > 1)
+                if standings.count > 1 {
+                    Text(group.name)
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 20)
+                }
+                StandingsBoard(group: group)
             }
+            StandingsLegend(rows: standings.flatMap { $0.rows })
         }
-        .padding(.horizontal, 16)
     }
 
     // MARK: Bracket (knockout rounds as horizontally scrolling columns)
@@ -992,99 +1001,6 @@ struct TeamGameRow: View {
     }
 }
 
-// MARK: - Standings table
-
-/// One standings table — the whole league, or a single tournament group.
-struct StandingsTableCard: View {
-    let group: LeagueDetailService.StandingsGroup
-    let showName: Bool
-
-    /// Stat columns, dropping any the API didn't provide for this league
-    /// (e.g. draws/points aren't a thing for US sports).
-    private var columns: [(header: String, value: (LeagueDetailService.StandingRow) -> String)] {
-        let all: [(String, (LeagueDetailService.StandingRow) -> String)] = [
-            ("P",   { $0.played }),
-            ("W",   { $0.wins }),
-            ("D",   { $0.draws }),
-            ("L",   { $0.losses }),
-            ("GD",  { $0.goalDiff }),
-            ("PTS", { $0.points })
-        ]
-        return all.filter { col in group.rows.contains { col.1($0) != "–" } }
-    }
-
-    private func columnWidth(_ header: String) -> CGFloat {
-        switch header {
-        case "GD":  return 34
-        case "PTS": return 30
-        default:    return 22
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if showName {
-                Text(group.name)
-                    .font(.system(size: 14, weight: .bold))
-                    .padding(.horizontal, 12)
-                    .padding(.top, 12)
-            }
-
-            HStack(spacing: 6) {
-                Text("#").frame(width: 18, alignment: .leading)
-                Text("Team").frame(maxWidth: .infinity, alignment: .leading)
-                ForEach(columns, id: \.header) { col in
-                    Text(col.header).frame(width: columnWidth(col.header), alignment: .trailing)
-                }
-            }
-            .font(.system(size: 10, weight: .black))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-
-            ForEach(Array(group.rows.enumerated()), id: \.offset) { idx, row in
-                HStack(spacing: 6) {
-                    Text(row.rank)
-                        .frame(width: 18, alignment: .leading)
-                        .foregroundStyle(.secondary)
-                    HStack(spacing: 6) {
-                        if let logo = row.team.logo, !logo.isEmpty {
-                            CachedAsyncImage(urlString: logo, size: CGSize(width: 18, height: 18))
-                        }
-                        Text(row.team.shortDisplayName ?? row.team.displayName ?? row.team.abbreviation ?? "—")
-                            .lineLimit(1)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    ForEach(columns, id: \.header) { col in
-                        Text(col.value(row))
-                            .fontWeight(col.header == "PTS" ? .bold : .medium)
-                            .frame(width: columnWidth(col.header), alignment: .trailing)
-                    }
-                }
-                .font(.system(size: 12, weight: .medium).monospacedDigit())
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(alignment: .leading) {
-                    // Qualification zone marker (advance / relegation colors
-                    // as published by ESPN).
-                    if let hex = row.noteColor,
-                       let c = Color(hex: hex.hasPrefix("#") ? hex : "#\(hex)") {
-                        Rectangle().fill(c).frame(width: 3)
-                    }
-                }
-                if idx < group.rows.count - 1 {
-                    Divider().padding(.leading, 12)
-                }
-            }
-        }
-        .padding(.bottom, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-}
 
 // MARK: - Bracket match card
 

@@ -130,7 +130,7 @@ struct HorizontalPreviewList: View {
                 }
             }.padding(.horizontal)
         }
-        .frame(height: 172)
+        .frame(height: ContinueWatchingCard.cardHeight + 9)
         .alert(item: $channelForDescription) { channel in
             Alert(
                 title: Text("Program Description"),
@@ -146,6 +146,12 @@ struct HorizontalPreviewList: View {
 /// dark gradient and the guide's remaining time as a black badge in the
 /// top-right corner.
 struct ContinueWatchingCard: View {
+    /// Measured off the reference screenshot on the user's iPhone (1206px
+    /// wide, 3x): the tile runs 50→610px with its neighbour starting at 640,
+    /// i.e. 245pt wide, 170pt tall, 14pt apart.
+    static let cardWidth: CGFloat = 245
+    static let cardHeight: CGFloat = 170
+
     let channel: StreamChannel
     let program: EPGProgram?
     let glowStrength: Double
@@ -174,7 +180,7 @@ struct ContinueWatchingCard: View {
         ZStack(alignment: .bottomLeading) {
             CachedAsyncImage(urlString: channel.icon ?? "", size: nil)
                 .padding(30)
-                .frame(width: 290, height: 163)
+                .frame(width: ContinueWatchingCard.cardWidth, height: ContinueWatchingCard.cardHeight)
 
             // Legibility gradient behind the overlaid name.
             LinearGradient(
@@ -184,7 +190,7 @@ struct ContinueWatchingCard: View {
                 ],
                 startPoint: .top, endPoint: .bottom
             )
-            .frame(width: 290, height: 163)
+            .frame(width: ContinueWatchingCard.cardWidth, height: ContinueWatchingCard.cardHeight)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(channel.name)
@@ -199,9 +205,9 @@ struct ContinueWatchingCard: View {
                 }
             }
             .padding(12)
-            .frame(width: 290, alignment: .leading)
+            .frame(width: ContinueWatchingCard.cardWidth, alignment: .leading)
         }
-        .frame(width: 290, height: 163)
+        .frame(width: ContinueWatchingCard.cardWidth, height: ContinueWatchingCard.cardHeight)
         // Home screen card — carries Nuvio's glass rim.
         .nuvioCard(fill: fill, depth: true)
         .overlay(alignment: .topTrailing) {
@@ -805,4 +811,286 @@ struct ChannelPreviewSheet: View {
             glowTick += 1
         }
     }
+}
+
+// MARK: - Favorite teams shelf
+
+/// One favourited team or league on the home screen, shaped like the
+/// reference's Top 10 poster tiles: a portrait card filled with the club's own
+/// colour, the crest centred on it, and the name captioned across the bottom.
+///
+/// Measured off the reference screenshot on the user's iPhone (1206px, 3x):
+/// the tiles run 99pt wide by 153pt tall, 16pt apart.
+struct FavoriteBadge: View {
+    let logo: String?
+    let name: String
+    /// Brand colour hex (team), or nil for leagues, which get charcoal.
+    let colorHex: String?
+    let action: () -> Void
+
+    static let cardWidth: CGFloat = 99
+    static let cardHeight: CGFloat = 153
+
+    private var fill: Color {
+        guard let hex = colorHex, !hex.isEmpty,
+              let c = Color(hex: hex.hasPrefix("#") ? hex : "#\(hex)") else {
+            return Color(white: 0.15)
+        }
+        return c
+    }
+
+    var body: some View {
+        Button(action: {
+            guard SwipeTapGuard.tapsAllowed else { return }
+            ChannelViewModel.shared.triggerSelectionHaptic()
+            action()
+        }) {
+            ZStack(alignment: .bottom) {
+                CachedAsyncImage(urlString: logo ?? "", size: nil)
+                    .padding(20)
+                    .frame(width: Self.cardWidth, height: Self.cardHeight)
+                    // Lifted clear of the caption, the way the reference's
+                    // poster art sits above its genre line.
+                    .offset(y: -10)
+
+                // Legibility wash under the caption, so a pale kit colour
+                // can't swallow the name.
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0.45),
+                        .init(color: .black.opacity(0.70), location: 1.0)
+                    ],
+                    startPoint: .top, endPoint: .bottom
+                )
+
+                Text(name)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.75)
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 10)
+            }
+            .frame(width: Self.cardWidth, height: Self.cardHeight)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous).fill(fill)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.white.opacity(0.10), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(PressableCardStyle())
+    }
+}
+
+/// The home screen's "My Teams" shelf — every favourited team and league as a
+/// round crest, in the user's own order.
+struct FavoriteTeamsShelf: View {
+    let teams: [(team: ESPNTeam, sport: SportType?, leagueLabel: String?)]
+    let leagues: [(sport: SportType, leagueLabel: String?, displayName: String)]
+    let onTeam: (ESPNTeam, SportType?, String?) -> Void
+    let onLeague: (SportType, String?, String) -> Void
+
+    var body: some View {
+        TouchPassingHorizontalScroll {
+            HStack(alignment: .top, spacing: 16) {
+                // Positional ids — a team id alone can repeat across sports.
+                ForEach(Array(teams.enumerated()), id: \.offset) { _, item in
+                    FavoriteBadge(
+                        logo: item.team.logo,
+                        name: item.team.shortDisplayName ?? item.team.displayName ?? "Team",
+                        colorHex: item.team.color
+                    ) {
+                        onTeam(item.team, item.sport, item.leagueLabel)
+                    }
+                }
+                ForEach(Array(leagues.enumerated()), id: \.offset) { _, item in
+                    FavoriteBadge(
+                        logo: LeagueLogoURL.url(sport: item.sport, leagueLabel: item.leagueLabel),
+                        name: item.displayName,
+                        colorHex: nil
+                    ) {
+                        onLeague(item.sport, item.leagueLabel, item.displayName)
+                    }
+                }
+            }
+            .padding(.horizontal)
+        }
+        .frame(height: FavoriteBadge.cardHeight + 6)
+    }
+}
+
+// MARK: - Spotlight shelf
+
+/// One of the playlist's best-known channels as the reference's big editorial
+/// tile: a near-full-width portrait card carrying a PHOTO of whatever is on
+/// right now — the still the guide ships with the programme — then the status
+/// badge, the programme title and a dot-separated line along the bottom.
+///
+/// Without a guide still there's nothing photographic to show, so the card
+/// falls back to the channel's brand tone with its logo floating over it.
+///
+/// Measured off the reference screenshot on the user's iPhone (1206px, 3x):
+/// 357pt wide by 454pt tall with a 22pt peek either side.
+struct SpotlightCard: View {
+    let channel: StreamChannel
+    let program: EPGProgram?
+    let categoryName: String?
+    let action: () -> Void
+
+    static var cardWidth: CGFloat { UIScreen.main.bounds.width - 44 }
+    static let cardHeight: CGFloat = 454
+
+    /// Bumped when the tone lands in the shared cache; derived per render so a
+    /// recycled card can't paint the previous channel's colour.
+    @State private var glowTick = 0
+    private var fill: Color {
+        _ = glowTick
+        return LogoGlow.tone(for: channel.icon) ?? NuvioTheme.card
+    }
+
+    /// Artwork found for the programme title when the guide shipped no still.
+    @State private var fetchedArt: String?
+
+    private var still: String? {
+        if let image = program?.image, !image.isEmpty { return image }
+        return fetchedArt
+    }
+
+    private static let timeFmt: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "h:mm a"; return f
+    }()
+
+    /// "ON NOW" while a programme is running, otherwise when it starts.
+    private var badgeText: String {
+        guard let program else { return "LIVE" }
+        return program.start <= Date() ? "ON NOW" : "AT \(Self.timeFmt.string(from: program.start))"
+    }
+
+    private var metadataParts: [String] {
+        var parts = [channel.name]
+        if let categoryName, !categoryName.isEmpty { parts.append(categoryName) }
+        return parts
+    }
+
+    var body: some View {
+        Button(action: {
+            guard SwipeTapGuard.tapsAllowed else { return }
+            ChannelViewModel.shared.triggerSelectionHaptic()
+            action()
+        }) {
+            ZStack(alignment: .bottomLeading) {
+                if let still {
+                    // The guide's own still, cropped to fill the WHOLE card —
+                    // and decoded at card size, because the shared 300x300
+                    // default would be upscaled 3x here and look soft.
+                    CachedAsyncImage(urlString: still,
+                                     size: CGSize(width: Self.cardWidth, height: Self.cardHeight),
+                                     contentMode: .fill,
+                                     decodeSize: CGSize(width: Self.cardWidth, height: Self.cardHeight))
+                        .frame(width: Self.cardWidth, height: Self.cardHeight)
+                        .clipped()
+                } else {
+                    CachedAsyncImage(urlString: channel.icon ?? "", size: nil)
+                        .frame(maxWidth: 190, maxHeight: 190)
+                        .frame(width: Self.cardWidth, height: Self.cardHeight)
+                        .offset(y: -Self.cardHeight * 0.14)
+                }
+
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0.40),
+                        .init(color: .black.opacity(0.55), location: 0.70),
+                        .init(color: .black.opacity(0.90), location: 1.0)
+                    ],
+                    startPoint: .top, endPoint: .bottom
+                )
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(badgeText)
+                        .font(.system(size: 11, weight: .black))
+                        .kerning(0.5)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(Color.black.opacity(0.55)))
+
+                    Text(program?.title ?? channel.name)
+                        .font(.system(size: 26, weight: .heavy))
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.7)
+                        .shadow(color: .black.opacity(0.6), radius: 8, x: 0, y: 2)
+
+                    NuvioMetadataLine(parts: metadataParts)
+                }
+                .padding(.horizontal, 18)
+                .padding(.bottom, 20)
+            }
+            .frame(width: Self.cardWidth, height: Self.cardHeight)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous).fill(fill)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.white.opacity(0.10), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(PressableCardStyle())
+        .task(id: channel.icon) {
+            guard let icon = channel.icon, LogoGlow.cache[icon] == nil else { return }
+            _ = await LogoGlow.color(for: icon)
+            glowTick += 1
+        }
+        // Only when the guide gave us nothing: look the programme up. Results
+        // (including misses) are cached on disk, so this is one request per
+        // title ever, and the card shows its brand treatment until it lands.
+        .task(id: program?.title) {
+            fetchedArt = nil
+            guard let title = program?.title, !title.isEmpty,
+                  (program?.image ?? "").isEmpty else { return }
+            fetchedArt = await ProgramArtworkService.shared.artwork(for: title)
+        }
+    }
+}
+
+/// The big-card row. SwiftUI's own ScrollView here rather than the app's
+/// UIScrollView wrapper, because only it can SNAP card-to-card the way the
+/// reference does — `.scrollTargetBehavior(.viewAligned)`. Taps are still
+/// protected by SwipeTapGuard, which is what the wrapper was there for.
+struct SpotlightShelf: View {
+    let items: [SpotlightItem]
+    let viewModel: ChannelViewModel
+    let onSelect: (StreamChannel) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 12) {
+                ForEach(items) { item in
+                    SpotlightCard(
+                        channel: item.channel,
+                        program: item.program,
+                        categoryName: viewModel.categories.first(where: { $0.id == item.channel.categoryID })?.name
+                    ) {
+                        onSelect(item.channel)
+                    }
+                }
+            }
+            .scrollTargetLayout()
+            .padding(.horizontal, 22)
+        }
+        .scrollTargetBehavior(.viewAligned)
+        .frame(height: SpotlightCard.cardHeight + 6)
+    }
+}
+
+/// A well-known channel and whatever it is showing.
+struct SpotlightItem: Identifiable {
+    let channel: StreamChannel
+    let program: EPGProgram?
+    var id: Int { channel.id }
 }
