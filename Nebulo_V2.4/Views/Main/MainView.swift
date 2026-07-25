@@ -48,7 +48,7 @@ extension View {
 struct MainView: SwiftUI.View {
     @ObservedObject var viewModel: ChannelViewModel
     @ObservedObject var scoreViewModel: ScoreViewModel
-    @AppStorage("xstreamURL") private var xstreamURL = ""; @AppStorage("username") private var username = ""; @AppStorage("password") private var password = ""; @AppStorage("loginTypeRaw") private var loginTypeRaw = LoginType.xtream.rawValue; @AppStorage("viewMode") private var viewMode = ViewMode.automatic.rawValue; @AppStorage("customAccentHex") private var customAccentHex = "#FFFFFF"; @AppStorage("nebColor1") private var nebColor1 = "#1A2538"; @AppStorage("nebColor2") private var nebColor2 = "#11101A"; @AppStorage("nebColor3") private var nebColor3 = "#1F1A24"; @AppStorage("nebX1") private var nebX1 = 0.5; @AppStorage("nebY1") private var nebY1 = 0.0; @AppStorage("nebX2") private var nebX2 = 0.5; @AppStorage("nebY2") private var nebY2 = 0.5; @AppStorage("nebX3") private var nebX3 = 0.5; @AppStorage("nebY3") private var nebY3 = 1.0
+    @AppStorage("xstreamURL") private var xstreamURL = ""; @AppStorage("username") private var username = ""; @AppStorage("password") private var password = ""; @AppStorage("loginTypeRaw") private var loginTypeRaw = LoginType.xtream.rawValue; @AppStorage("viewMode") private var viewMode = ViewMode.automatic.rawValue; @AppStorage("customAccentHex") private var customAccentHex = "#FFFFFF"
     @AppStorage("showSupportPopup") private var showSupportPopup = true
     @AppStorage("lastSupportPopupTime") private var lastSupportPopupTime: Double = 0
     
@@ -147,7 +147,7 @@ struct MainView: SwiftUI.View {
 
 
     private var backgroundLayer: some View {
-        NebulaBackgroundView(color1: Color(hex: nebColor1) ?? .purple, color2: Color(hex: nebColor2) ?? .blue, color3: Color(hex: nebColor3) ?? .pink, point1: UnitPoint(x: nebX1, y: nebY1), point2: UnitPoint(x: nebX2, y: nebY2), point3: UnitPoint(x: nebX3, y: nebY3))
+        AppBackground()
             .ignoresSafeArea()
             .zIndex(0)
     }
@@ -223,9 +223,11 @@ struct MainViewModifiers: ViewModifier {
     @State private var searchQuery = ""
     @FocusState private var searchFieldFocused: Bool
 
-    /// The section-switch tempo — quick plain crossfade, matching the
-    /// reference app's tab switches.
-    static let sectionAnimation: Animation = .easeOut(duration: 0.15)
+    /// The section-switch tempo. Measured off the reference recording: the
+    /// outgoing and incoming pages blend for roughly a third of a second,
+    /// eased both ends — a clean crossfade rather than the snappier cut a
+    /// shorter easeOut produced.
+    static let sectionAnimation: Animation = .easeInOut(duration: 0.3)
 
     /// The bar shows on the root surfaces (Home, Sports hub, Favorites hub,
     /// Settings, Search). Drill-down pages (plain categories, Recently
@@ -339,7 +341,9 @@ struct MainViewModifiers: ViewModifier {
                 if !showMultiView && (dockVisible || showSearch) {
                     NuvioBottomBar(
                         active: activeDockTab,
-                        tint: accentColor,
+                        // The reference bar's exact selected-tab blue, sampled
+                        // from a screenshot of it: #55AFF9.
+                        tint: Color(red: 0.333, green: 0.686, blue: 0.976),
                         searchMode: showSearch,
                         queryText: $searchQuery,
                         fieldFocused: $searchFieldFocused,
@@ -552,8 +556,6 @@ extension MainView {
 }
 
 struct StandardLayout: SwiftUI.View {
-    @AppStorage("glassOpacity") private var glassOpacity = 0.15
-    @AppStorage("glassShade") private var glassShade = 1.0
     @ObservedObject var viewModel: ChannelViewModel
     @ObservedObject var scoreViewModel: ScoreViewModel
     @Binding var selectedCategory: StreamCategory?; @Binding var selectedChannel: StreamChannel?; @Binding var searchText: String
@@ -606,7 +608,7 @@ struct StandardLayout: SwiftUI.View {
         var dict: [Int: [StreamChannel]] = [:]
         for c in viewModel.channels {
             if viewModel.hiddenIDs.contains(c.id) { continue }
-            if dict[c.categoryID, default: []].count < 15 {
+            if dict[c.categoryID, default: []].count < 10 {
                 dict[c.categoryID, default: []].append(c)
             }
         }
@@ -1343,9 +1345,25 @@ struct StandardLayout: SwiftUI.View {
 
         var result: [FeaturedItem] = []
         var usedIDs = Set<Int>()
+        var usedGameIDs = Set<String>()
 
+        // Live games lead the hero — favorites first, then any other live
+        // game whose broadcast resolves to a channel (capped so the carousel
+        // stays mostly featured content). Each renders as the full-bleed
+        // matchup hero page: big title, dot metadata, white Watch pill.
         for game in scoreViewModel.favoriteLiveGames() {
             if let ch = viewModel.resolveChannel(forGame: game), usedIDs.insert(ch.id).inserted {
+                usedGameIDs.insert(game.id)
+                result.append(FeaturedItem(channel: ch, game: game))
+            }
+        }
+        for game in scoreViewModel.allLiveGames {
+            guard result.count < 3 else { break }
+            guard !usedGameIDs.contains(game.id),
+                  game.homeCompetitor?.team?.logo != nil,
+                  game.awayCompetitor?.team?.logo != nil else { continue }
+            if let ch = viewModel.resolveChannel(forGame: game), usedIDs.insert(ch.id).inserted {
+                usedGameIDs.insert(game.id)
                 result.append(FeaturedItem(channel: ch, game: game))
             }
         }
@@ -1813,7 +1831,6 @@ struct SidebarLayout: SwiftUI.View {
 
 struct CategoryDetailView: SwiftUI.View {
     let title: String; let channels: [StreamChannel]; let accentColor: Color; let playAction: (StreamChannel) -> Void; let toggleFav: (Int) -> Void; let promptRename: (StreamChannel) -> Void; let hideChannel: (Int) -> Void; let favoriteIDs: Set<Int>; @ObservedObject var viewModel: ChannelViewModel; @Binding var showMultiView: Bool; var onBack: (() -> Void)? = nil; var onCategorySelect: ((StreamCategory) -> Void)? = nil; var zoomNS: Namespace.ID? = nil
-    @AppStorage("nebColor1") private var nebColor1 = "#1A2538"; @AppStorage("nebColor2") private var nebColor2 = "#11101A"; @AppStorage("nebColor3") private var nebColor3 = "#1F1A24"; @AppStorage("nebX1") private var nebX1 = 0.5; @AppStorage("nebY1") private var nebY1 = 0.0; @AppStorage("nebX2") private var nebX2 = 0.5; @AppStorage("nebY2") private var nebY2 = 0.5; @AppStorage("nebX3") private var nebX3 = 0.5; @AppStorage("nebY3") private var nebY3 = 1.0
     @State private var channelForDescription: StreamChannel?
     /// Tap-through preview: what's on, description, and the play button.
     @State private var previewChannel: StreamChannel?
@@ -1822,7 +1839,7 @@ struct CategoryDetailView: SwiftUI.View {
 
     var body: some SwiftUI.View {
         ZStack {
-            NebulaBackgroundView(color1: Color(hex: nebColor1) ?? .purple, color2: Color(hex: nebColor2) ?? .blue, color3: Color(hex: nebColor3) ?? .pink, point1: UnitPoint(x: nebX1, y: nebY1), point2: UnitPoint(x: nebX2, y: nebY2), point3: UnitPoint(x: nebX3, y: nebY3))
+            AppBackground()
             
             VStack(spacing: 0) {
                 ScrollViewReader { proxy in
@@ -2940,6 +2957,10 @@ struct NuvioHeroPage: View {
     let height: CGFloat
     let onPlay: () -> Void
 
+    /// The channel logo's dominant colour — fills the page behind a
+    /// logo-only channel so the hero is never part-empty.
+    @State private var glow: Color?
+
     private var hasMatchup: Bool {
         game?.homeCompetitor?.team?.logo != nil && game?.awayCompetitor?.team?.logo != nil
     }
@@ -2972,46 +2993,71 @@ struct NuvioHeroPage: View {
                 let home = g.homeCompetitor
                 ZStack {
                     Color(white: 0.06)
+                    // Each team's colour floods from its side PAST the
+                    // centre, so the two washes meet in the middle instead
+                    // of leaving a dead black band.
                     LinearGradient(
-                        stops: [
-                            .init(color: teamColor(away).opacity(0.85), location: 0.0),
-                            .init(color: teamColor(away).opacity(0.30), location: 0.38),
-                            .init(color: Color.clear, location: 0.5),
-                            .init(color: teamColor(home).opacity(0.30), location: 0.62),
-                            .init(color: teamColor(home).opacity(0.85), location: 1.0)
-                        ],
+                        colors: [teamColor(away).opacity(0.85), teamColor(away).opacity(0.0)],
                         startPoint: .leading,
-                        endPoint: .trailing
+                        endPoint: UnitPoint(x: 0.72, y: 0.5)
                     )
-                    HStack {
+                    LinearGradient(
+                        colors: [teamColor(home).opacity(0.85), teamColor(home).opacity(0.0)],
+                        startPoint: .trailing,
+                        endPoint: UnitPoint(x: 0.28, y: 0.5)
+                    )
+                    // Crests fully on-screen, one per half, floating above
+                    // the bottom cluster.
+                    HStack(spacing: 0) {
                         CachedAsyncImage(urlString: away?.team?.logo ?? "",
-                                         size: CGSize(width: 220, height: 220))
-                            .opacity(0.6)
-                            .offset(x: -30, y: -40)
-                        Spacer()
+                                         size: CGSize(width: 150, height: 150))
+                            .frame(maxWidth: .infinity)
                         CachedAsyncImage(urlString: home?.team?.logo ?? "",
-                                         size: CGSize(width: 220, height: 220))
-                            .opacity(0.6)
-                            .offset(x: 30, y: -40)
+                                         size: CGSize(width: 150, height: 150))
+                            .frame(maxWidth: .infinity)
                     }
-                    .padding(.horizontal, 4)
+                    .padding(.horizontal, 16)
+                    .opacity(0.9)
+                    .offset(y: -height * 0.13)
                 }
+                // Rasterise the whole backdrop once: its gradients and
+                // crests are static, and re-compositing them on every
+                // scroll frame (the hero also scales while overscrolling)
+                // was the home screen's biggest per-frame cost.
+                .drawingGroup()
             } else {
+                // A channel has no poster art — only a logo — so the page is
+                // built from the logo's own brand colour: a wash that fills
+                // the WHOLE hero (a blurred logo alone left dark bands top
+                // and bottom, since a wide logo only occupies a middle strip
+                // of its box), with the blurred artwork and the sharp logo
+                // layered over it.
+                let base = glow ?? Color(white: 0.28)
                 ZStack {
-                    Color(white: 0.05)
-                    // Big soft wash of the channel's own artwork filling the
-                    // page — the "poster" for a logo-only channel.
-                    CachedAsyncImage(urlString: channel.icon ?? "",
-                                     size: CGSize(width: 300, height: 300))
-                        .blur(radius: 70)
-                        .opacity(0.55)
-                        .scaleEffect(2.4)
+                    LinearGradient(
+                        colors: [base.opacity(0.75), base.opacity(0.34), Color(white: 0.05)],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                    RadialGradient(
+                        colors: [base.opacity(0.55), .clear],
+                        center: UnitPoint(x: 0.5, y: 0.34),
+                        startRadius: 0,
+                        endRadius: height * 0.55
+                    )
+                    // NOTE: no blurred copy of the artwork here. Blurring a
+                    // fixed-size image and rasterising it clipped the blur to
+                    // that frame, so once scaled up it showed as a hard-edged
+                    // lighter RECTANGLE floating in the middle of the hero
+                    // (and its loading placeholder was a grey box). The
+                    // gradients above already fill the page, so the sharp
+                    // logo is the only artwork layer.
                     // The sharp logo floats in the upper half like the
                     // reference poster art.
                     CachedAsyncImage(urlString: channel.icon ?? "", size: nil)
                         .frame(maxWidth: 190, maxHeight: 190)
                         .offset(y: -height * 0.17)
                 }
+                .task(id: channel.icon) { glow = await LogoGlow.color(for: channel.icon) }
             }
 
             // ── Dissolve into the black canvas ──────────────────────────

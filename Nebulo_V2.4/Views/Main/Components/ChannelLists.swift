@@ -162,14 +162,21 @@ struct ContinueWatchingCard: View {
             // Blurred backdrop + logo-derived glow, rasterised once via
             // drawingGroup so the blurs don't re-composite every scroll frame.
             ZStack {
+                // Brand-colour fill so the whole card is covered — a blurred
+                // wide logo alone left black bands top and bottom.
+                LinearGradient(
+                    colors: [(glow ?? Color(white: 0.34)).opacity(0.30 + 0.5 * glowStrength),
+                             (glow ?? Color(white: 0.34)).opacity(0.10 + 0.25 * glowStrength)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                )
+                RadialGradient(
+                    colors: [(glow ?? Color(white: 0.5)).opacity(0.5 * glowStrength), .clear],
+                    center: .center, startRadius: 0, endRadius: 170
+                )
                 CachedAsyncImage(urlString: channel.icon ?? "", size: CGSize(width: 290, height: 163))
                     .blur(radius: 22)
-                    .opacity(0.10 + 0.85 * glowStrength)
+                    .opacity(0.10 + 0.7 * glowStrength)
                     .clipped()
-                Circle()
-                    .fill((glow ?? Color(white: 0.5)).opacity(min(1.0, 0.75 * glowStrength)))
-                    .frame(width: 130, height: 130)
-                    .blur(radius: 36)
             }
             .frame(width: 290, height: 163)
             .drawingGroup()
@@ -249,7 +256,10 @@ struct HomeCategoryShelf: View {
             // UIScrollView wrapper — same tap-lockout fix as the other
             // home shelves (see TouchPassingHorizontalScroll).
             TouchPassingHorizontalScroll {
-                HStack(spacing: 14) {
+                // Lazy: a shelf that scrolls into view builds only the cards
+                // actually on screen, so entering a new category shelf never
+                // costs a full row of logo art at once.
+                LazyHStack(spacing: 14) {
                     ForEach(channels) { c in
                         Button {
                             guard SwipeTapGuard.tapsAllowed else { return }
@@ -326,22 +336,30 @@ struct HorizontalChannelCardArt: View {
     @State private var glow: Color?
 
     var body: some View {
+        // A channel logo is usually wide, so a blurred COPY of it only tints a
+        // strip across the middle of the tile and the rest stays black — the
+        // "small square of colour" look. Base the tile on the logo's dominant
+        // colour instead so the whole card is filled, then layer the blurred
+        // artwork and the sharp logo over it.
+        let base = glow ?? Color(white: 0.34)
         ZStack {
-            // Blurred backdrop + logo-derived glow, rasterised once via
-            // drawingGroup so the two blurs don't re-composite on the GPU every
-            // scroll frame. Isolated to the blur layers so the sharp logo on
-            // top and the glass below stay live.
             ZStack {
+                LinearGradient(
+                    colors: [base.opacity(0.30 + 0.55 * glowStrength),
+                             base.opacity(0.10 + 0.30 * glowStrength)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                )
+                RadialGradient(
+                    colors: [base.opacity(0.45 * glowStrength), .clear],
+                    center: .center, startRadius: 0, endRadius: 120
+                )
                 CachedAsyncImage(urlString: icon ?? "", size: CGSize(width: 200, height: 112))
                     .blur(radius: 20)
-                    .opacity(0.08 + 0.92 * glowStrength)
+                    .opacity(0.08 + 0.72 * glowStrength)
                     .clipped()
-                Circle()
-                    .fill((glow ?? Color(white: 0.55)).opacity(min(1.0, 0.85 * glowStrength)))
-                    .frame(width: 100, height: 100)
-                    .blur(radius: 30)
             }
             .frame(width: 200, height: 112)
+            // Rasterised once so the blur isn't re-composited every frame.
             .drawingGroup()
 
             CachedAsyncImage(urlString: icon ?? "", size: nil)

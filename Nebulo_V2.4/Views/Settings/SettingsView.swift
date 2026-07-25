@@ -22,23 +22,15 @@ struct SettingsView: View {
     @AppStorage("username") private var username = ""
     @AppStorage("password") private var password = ""
     @AppStorage("loginTypeRaw") private var loginTypeRaw = LoginType.xtream.rawValue 
-    @AppStorage("customBackgroundVersion") private var customBackgroundVersion = 0
     @AppStorage("showSupportPopup") private var showSupportPopup = true
 
     @ObservedObject var accountManager = AccountManager.shared
     @ObservedObject var updateService = UpdateService.shared
     
-    @State private var showImagePicker = false
-    @State private var showFilePicker = false
-    @State private var showSourceSelection = false
     @State private var showAddPlaylist = false
     @State private var accountToEdit: Account? = nil
-    @State private var inputImage: UIImage?
     
     
-    @AppStorage("nebColor1") private var nebColor1 = "#1A2538"; @AppStorage("nebColor2") private var nebColor2 = "#11101A"; @AppStorage("nebColor3") private var nebColor3 = "#1F1A24"; @AppStorage("nebX1") private var nebX1 = 0.5; @AppStorage("nebY1") private var nebY1 = 0.0; @AppStorage("nebX2") private var nebX2 = 0.5; @AppStorage("nebY2") private var nebY2 = 0.5; @AppStorage("nebX3") private var nebX3 = 0.5; @AppStorage("nebY3") private var nebY3 = 1.0
-    @AppStorage("useCustomBackground") private var useCustomBackground = false
-    @AppStorage("customBackgroundBlur") private var customBackgroundBlur = 0.0
     
     var body: some View {
         NavigationStack {
@@ -46,7 +38,7 @@ struct SettingsView: View {
                 // Same NebulaBackgroundView treatment as the rest of the app —
                 // no .opacity(0.3) dimmer, no Color.black underlay, so settings
                 // visually belongs to the same surface as the home screen.
-                NebulaBackgroundView(color1: Color(hex: nebColor1) ?? .purple, color2: Color(hex: nebColor2) ?? .blue, color3: Color(hex: nebColor3) ?? .pink, point1: UnitPoint(x: nebX1, y: nebY1), point2: UnitPoint(x: nebX2, y: nebY2), point3: UnitPoint(x: nebX3, y: nebY3))
+                AppBackground()
                     .ignoresSafeArea()
                 
                 ScrollView(showsIndicators: false) {
@@ -62,13 +54,7 @@ struct SettingsView: View {
                             .padding(.bottom, -6)
 
                         SettingsSectionHeader(title: "Appearance")
-                        AppearanceCard(
-                            showSourceSelection: $showSourceSelection,
-                            showImagePicker: $showImagePicker,
-                            showFilePicker: $showFilePicker,
-                            inputImage: $inputImage,
-                            accentColor: accentColor
-                        )
+                        AppearanceCard()
                         
                         
                         SettingsSectionHeader(title: "Playback")
@@ -130,53 +116,14 @@ struct SettingsView: View {
             // whenever the tab goes away instead.
             .onDisappear { if isSection { onSave() } }
             .sheet(isPresented: $showAddPlaylist) { AddPlaylistSheet(accountToEdit: accountToEdit) }
-            .sheet(isPresented: $showImagePicker) { PhotoPicker(image: $inputImage) }
-            .sheet(isPresented: $showFilePicker) { FilePicker(image: $inputImage) }
-            .onChangeCompat(of: inputImage) { newImage in if let img = newImage { saveImage(img) } }
-            .onAppear { loadSavedImage() }
         }
     }
 
-    func saveImage(_ image: UIImage) {
-        if let data = image.jpegData(compressionQuality: 0.8) {
-            if let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-                try? data.write(to: dir.appendingPathComponent("custom_background.jpg"))
-                // Sample the photo's top colour so the compact-header vignette
-                // tints to match it (updates every vignette in the app).
-                if let hex = image.averageTopColorHex() {
-                    UserDefaults.standard.set(hex, forKey: "customBgTintHex")
-                }
-                customBackgroundVersion += 1
-            }
-        }
-    }
-
-    func loadSavedImage() {
-        if let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-            let fileURL = dir.appendingPathComponent("custom_background.jpg")
-            if let data = try? Data(contentsOf: fileURL), let uiImage = UIImage(data: data) {
-                self.inputImage = uiImage
-                // Backfill the vignette tint for photos saved before this existed.
-                if UserDefaults.standard.string(forKey: "customBgTintHex")?.isEmpty ?? true,
-                   let hex = uiImage.averageTopColorHex() {
-                    UserDefaults.standard.set(hex, forKey: "customBgTintHex")
-                }
-            }
-        }
-    }
 }
 
 struct AppearanceCard: View {
     @AppStorage("customAccentHex") private var customAccentHex = "#FFFFFF"
-    @AppStorage("useCustomBackground") private var useCustomBackground = false
-    @AppStorage("customBackgroundBlur") private var customBackgroundBlur = 0.0
     @AppStorage("featuredGlowStrength") private var featuredGlowStrength = 0.5
-
-    @Binding var showSourceSelection: Bool
-    @Binding var showImagePicker: Bool
-    @Binding var showFilePicker: Bool
-    @Binding var inputImage: UIImage?
-    let accentColor: Color
 
     var body: some View {
         SettingsCard {
@@ -201,31 +148,6 @@ struct AppearanceCard: View {
                     }
                     Slider(value: $featuredGlowStrength, in: 0...1, step: 0.05)
                         .tint(Color(hex: customAccentHex) ?? .blue)
-                }
-            }
-            .padding()
-
-            Divider().background(Color.white.opacity(0.1))
-
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Background Style")
-                    .font(.caption.bold())
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 4)
-
-                SettingsToggle(title: "Use Custom Photo", isOn: $useCustomBackground)
-
-                if useCustomBackground {
-                    CustomBackgroundEditor(
-                        showSourceSelection: $showSourceSelection,
-                        showImagePicker: $showImagePicker,
-                        showFilePicker: $showFilePicker,
-                        inputImage: $inputImage,
-                        customBackgroundBlur: $customBackgroundBlur,
-                        accentColor: accentColor
-                    )
-                } else {
-                    NebulaEditorView()
                 }
             }
             .padding()
@@ -297,92 +219,6 @@ struct SportsPreferencesCard: View {
                 }
             }
             .padding()
-        }
-    }
-}
-
-struct CustomBackgroundEditor: View {
-    @Binding var showSourceSelection: Bool
-    @Binding var showImagePicker: Bool
-    @Binding var showFilePicker: Bool
-    @Binding var inputImage: UIImage?
-    @Binding var customBackgroundBlur: Double
-    let accentColor: Color
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Button(action: { showSourceSelection = true }) {
-                SettingsRow(icon: "photo.on.rectangle", title: "Select Photo", subtitle: "Choose from Photos or Files")
-            }
-            .buttonStyle(.plain)
-            .confirmationDialog("Choose Background Source", isPresented: $showSourceSelection) {
-                Button("Photos") { showImagePicker = true }
-                Button("Files") { showFilePicker = true }
-                Button("Cancel", role: .cancel) { }
-            }
-            
-            if let img = inputImage {
-                let ratio = img.size.width / img.size.height
-                Image(uiImage: img)
-                    .resizable()
-                    .aspectRatio(ratio, contentMode: .fit)
-                    .frame(maxWidth: .infinity)
-                    .cornerRadius(8)
-                    .clipped()
-                    .padding(.vertical, 4)
-            }
-            
-            VStack(alignment: .leading) {
-                Text("Blur: \(Int(customBackgroundBlur))%")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Slider(value: $customBackgroundBlur, in: 0...50, step: 1)
-                    .tint(accentColor)
-            }
-        }
-    }
-}
-
-struct NebulaEditorView: View {
-    @AppStorage("nebColor1") private var nebColor1 = "#1A2538"; @AppStorage("nebColor2") private var nebColor2 = "#11101A"; @AppStorage("nebColor3") private var nebColor3 = "#1F1A24"; @AppStorage("nebX1") private var nebX1 = 0.5; @AppStorage("nebY1") private var nebY1 = 0.0; @AppStorage("nebX2") private var nebX2 = 0.5; @AppStorage("nebY2") private var nebY2 = 0.5; @AppStorage("nebX3") private var nebX3 = 0.5; @AppStorage("nebY3") private var nebY3 = 1.0
-    
-    var body: some View {
-        VStack(spacing: 12) {
-            HStack {
-                Spacer()
-                ZStack {
-                    let screenBounds = UIScreen.main.bounds
-                    let screenRatio = screenBounds.width / screenBounds.height
-                    
-                    NebulaBackgroundView(color1: Color(hex: nebColor1) ?? .purple, color2: Color(hex: nebColor2) ?? .blue, color3: Color(hex: nebColor3) ?? .pink, point1: UnitPoint(x: nebX1, y: nebY1), point2: UnitPoint(x: nebX2, y: nebY2), point3: UnitPoint(x: nebX3, y: nebY3))
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.2), lineWidth: 1))
-                    
-                    GeometryReader { geo in
-                        DragHandle(x: $nebX1, y: $nebY1, color: Color(hex: nebColor1) ?? .purple, size: geo.size)
-                        DragHandle(x: $nebX2, y: $nebY2, color: Color(hex: nebColor2) ?? .blue, size: geo.size)
-                        DragHandle(x: $nebX3, y: $nebY3, color: Color(hex: nebColor3) ?? .pink, size: geo.size)
-                    }
-                    .aspectRatio(screenRatio, contentMode: .fit)
-                }
-                .aspectRatio(UIScreen.main.bounds.width / UIScreen.main.bounds.height, contentMode: .fit)
-                .frame(maxHeight: 250)
-                Spacer()
-            }
-            .padding(.bottom, 8)
-            
-            HStack(spacing: 20) {
-                ColorPicker("Aura 1", selection: Binding(get: { Color(hex: nebColor1) ?? .purple }, set: { if let h = $0.toHex() { nebColor1 = h } })).labelsHidden()
-                ColorPicker("Aura 2", selection: Binding(get: { Color(hex: nebColor2) ?? .blue }, set: { if let h = $0.toHex() { nebColor2 = h } })).labelsHidden()
-                ColorPicker("Aura 3", selection: Binding(get: { Color(hex: nebColor3) ?? .pink }, set: { if let h = $0.toHex() { nebColor3 = h } })).labelsHidden()
-                Spacer()
-                Button("Reset") {
-                    nebColor1 = "#1A2538"; nebColor2 = "#11101A"; nebColor3 = "#1F1A24"
-                    nebX1 = 0.5; nebY1 = 0.0; nebX2 = 0.5; nebY2 = 0.5; nebX3 = 0.5; nebY3 = 1.0
-                }
-                .font(.caption.bold())
-                .foregroundStyle(.secondary)
-            }
         }
     }
 }
@@ -762,8 +598,6 @@ struct SettingsToggle: View {
     }
 }
 
-struct DragHandle: View { @Binding var x: Double; @Binding var y: Double; let color: Color; let size: CGSize; var body: some View { Circle().fill(color).frame(width: 30, height: 30).overlay(Circle().stroke(Color.white, lineWidth: 2)).shadow(radius: 4).position(x: x * size.width, y: y * size.height).gesture(DragGesture().onChanged { v in x = min(max(v.location.x / size.width, 0), 1); y = min(max(v.location.y / size.height, 0), 1) }) } }
-
 struct CategoriesManagerView: View {
     @Binding var categories: [StreamCategory]
     let accentColor: Color
@@ -1043,78 +877,3 @@ struct HiddenChannelsSettingsView: View {
         }
     }
 }
-
-struct PhotoPicker: UIViewControllerRepresentable {
-    @Binding var image: UIImage?
-    @Environment(\.presentationMode) var presentationMode
-
-    func makeUIViewController(context: Context) -> PHPickerViewController {
-        var config = PHPickerConfiguration()
-        config.filter = .images
-        config.selectionLimit = 1
-        let picker = PHPickerViewController(configuration: config)
-        picker.delegate = context.coordinator
-        return picker
-    }
-
-    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
-    }
-
-    class Coordinator: NSObject, PHPickerViewControllerDelegate {
-        let parent: PhotoPicker
-
-        init(_ parent: PhotoPicker) {
-            self.parent = parent
-        }
-
-        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
-            parent.presentationMode.wrappedValue.dismiss()
-            guard let provider = results.first?.itemProvider, provider.canLoadObject(ofClass: UIImage.self) else { return }
-            
-            provider.loadObject(ofClass: UIImage.self) { image, error in
-                if let uiImage = image as? UIImage {
-                    DispatchQueue.main.async {
-                        self.parent.image = uiImage
-                    }
-                }
-            }
-        }
-    }
-}
-
-struct FilePicker: UIViewControllerRepresentable {
-    @Binding var image: UIImage?
-    @Environment(\.presentationMode) var presentationMode
-    
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.image])
-        picker.allowsMultipleSelection = false
-        picker.delegate = context.coordinator
-        return picker
-    }
-    
-    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
-    
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-    
-    class Coordinator: NSObject, UIDocumentPickerDelegate {
-        let parent: FilePicker
-        init(_ parent: FilePicker) { self.parent = parent }
-        
-        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-            guard let url = urls.first, url.startAccessingSecurityScopedResource() else { return }
-            defer { url.stopAccessingSecurityScopedResource() }
-            
-            if let data = try? Data(contentsOf: url), let uiImage = UIImage(data: data) {
-                DispatchQueue.main.async {
-                    self.parent.image = uiImage
-                }
-            }
-            parent.presentationMode.wrappedValue.dismiss()
-        }
-    }
-}
-

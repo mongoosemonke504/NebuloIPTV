@@ -28,15 +28,6 @@ struct FavoritesView: View {
     /// the iPad sidebar layout).
     var onOpenSearch: (() -> Void)? = nil
 
-    @AppStorage("nebColor1") private var nebColor1 = "#1A2538"
-    @AppStorage("nebColor2") private var nebColor2 = "#11101A"
-    @AppStorage("nebColor3") private var nebColor3 = "#1F1A24"
-    @AppStorage("nebX1") private var nebX1 = 0.5
-    @AppStorage("nebY1") private var nebY1 = 0.0
-    @AppStorage("nebX2") private var nebX2 = 0.5
-    @AppStorage("nebY2") private var nebY2 = 0.5
-    @AppStorage("nebX3") private var nebX3 = 0.5
-    @AppStorage("nebY3") private var nebY3 = 1.0
 
     @State private var filter: FavoritesFilter = .all
     @State private var showAddSheet = false
@@ -142,14 +133,7 @@ struct FavoritesView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            NebulaBackgroundView(
-                color1: Color(hex: nebColor1) ?? .purple,
-                color2: Color(hex: nebColor2) ?? .blue,
-                color3: Color(hex: nebColor3) ?? .pink,
-                point1: UnitPoint(x: nebX1, y: nebY1),
-                point2: UnitPoint(x: nebX2, y: nebY2),
-                point3: UnitPoint(x: nebX3, y: nebY3)
-            )
+            AppBackground()
 
             // One scroll for the whole screen, exactly like Recordings: the
             // big "Favorites" title is scroll content and physically scrolls

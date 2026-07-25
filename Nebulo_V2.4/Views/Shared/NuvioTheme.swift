@@ -280,29 +280,49 @@ struct NuvioBottomBar: View {
 
     @Namespace private var ns
 
+    /// True for a beat after a tab switch — swells the glass selection blob
+    /// and the landing glyph, the system bar's magnifying-lens hop.
+    @State private var pillBoost = false
+
     private static let mainTabs: [NuvioTab] = [.home, .sports, .favorites, .profile]
 
     /// Keyboard up in search — the Home circle hides and the ✕ appears.
     private var typing: Bool { searchMode && fieldFocused.wrappedValue }
 
     var body: some View {
-        Group {
-            if #available(iOS 26.0, *) {
-                // The container lets glass shapes melt into each other as
-                // they appear, disappear and reshape.
-                GlassEffectContainer(spacing: 10) { barContent }
-            } else {
-                barContent
+        // The bar positions ITSELF against the physical bottom of the screen
+        // rather than trusting whatever bottom inset its host container
+        // reports — that dependency is why it previously landed at a
+        // different height than the reference bar. A full-height stack that
+        // ignores the container's bottom inset reaches the true screen edge;
+        // the bar then sits a measured 20pt above it. `.container` only, so
+        // SwiftUI's keyboard avoidance still lifts the whole thing while the
+        // user types.
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            Group {
+                if #available(iOS 26.0, *) {
+                    // The container lets glass shapes melt into each other as
+                    // they appear, disappear and reshape.
+                    GlassEffectContainer(spacing: 0) { barContent }
+                } else {
+                    barContent
+                }
             }
+            // Margins measured off the reference bar.
+            .padding(.horizontal, 21)
+            .padding(.bottom, typing ? 10 : 20)
         }
-        .padding(.horizontal, 20)
-        .padding(.bottom, 2)
+        // A hair of transparency on top of the system glass so a little more
+        // of the content behind reads through.
+        .opacity(0.96)
+        .ignoresSafeArea(.container, edges: .bottom)
         .animation(.spring(response: 0.38, dampingFraction: 0.8), value: searchMode)
         .animation(.spring(response: 0.32, dampingFraction: 0.85), value: typing)
     }
 
     private var barContent: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             // ── LEFT: tab capsule ⇄ Home circle (one persistent glass shape,
             //    its frame animates) — tucked away while typing.
             if !typing {
@@ -314,8 +334,11 @@ struct NuvioBottomBar: View {
                         .foregroundStyle(.white)
                         .opacity(searchMode ? 1 : 0)
                 }
-                .frame(maxWidth: searchMode ? 48 : .infinity)
-                .frame(height: searchMode ? 48 : 62)
+                .frame(maxWidth: searchMode ? 50 : .infinity)
+                // Slab height. The bar stays pinned at the same bottom
+                // position, so changing this moves its TOP edge only.
+                // (Apple's measures 58pt; this runs 3pt taller by request.)
+                .frame(height: searchMode ? 50 : 61)
                 .modifier(DockGlass(circular: false, morphID: "left", morphNS: ns))
                 .contentShape(Capsule())
                 .onTapGesture {
@@ -329,7 +352,7 @@ struct NuvioBottomBar: View {
             // ── RIGHT: search circle ⇄ field (one persistent glass shape).
             ZStack {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 19, weight: .semibold))
+                    .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(.white)
                     .opacity(searchMode ? 0 : 1)
 
@@ -358,8 +381,8 @@ struct NuvioBottomBar: View {
                 .allowsHitTesting(searchMode)
                 .animation(.spring(response: 0.3, dampingFraction: 0.8), value: queryText.isEmpty)
             }
-            .frame(maxWidth: searchMode ? .infinity : 58)
-            .frame(height: searchMode ? 48 : 58)
+            .frame(maxWidth: searchMode ? .infinity : 62)
+            .frame(height: searchMode ? 50 : 62)
             .modifier(DockGlass(circular: false, morphID: "right", morphNS: ns))
             .contentShape(Capsule())
             .onTapGesture {
@@ -392,31 +415,61 @@ struct NuvioBottomBar: View {
     }
 
     /// The four main tabs with the gliding Liquid Glass selection blob.
+    /// Switching tabs swells the blob (and the landing tab's glyph) for a
+    /// beat — the system bar's magnifying-lens hop.
     private var tabsRow: some View {
         HStack(spacing: 0) {
             ForEach(Self.mainTabs, id: \.self) { tab in
                 Button {
                     ChannelViewModel.shared.triggerSelectionHaptic()
+                    if tab != active {
+                        withAnimation(.spring(response: 0.2, dampingFraction: 0.68)) {
+                            pillBoost = true
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                            withAnimation(.spring(response: 0.34, dampingFraction: 0.78)) {
+                                pillBoost = false
+                            }
+                        }
+                    }
                     onSelect(tab)
                 } label: {
                     VStack(spacing: 3) {
                         Image(systemName: tab.icon)
-                            .font(.system(size: 19, weight: .semibold))
-                            .frame(height: 22)
+                            .font(.system(size: 23, weight: .bold))
+                            .frame(height: 25)
                         Text(tab.rawValue)
-                            .font(.system(size: 10.5, weight: .medium))
+                            .font(.system(size: 11, weight: .semibold))
                             .lineLimit(1)
                             .minimumScaleFactor(0.8)
                     }
-                    .foregroundStyle(tab == active ? tint : Color.white.opacity(0.8))
+                    // Active tab reads in the accent tint (blue), idle tabs
+                    // stay white — exactly like the reference bar.
+                    .foregroundStyle(tab == active ? tint : Color.white.opacity(0.82))
+                    // Under the lens the glyph and label are genuinely
+                    // MAGNIFIED — measured ~1.45x at the peak of the hop in
+                    // the reference recording.
+                    .scaleEffect(tab == active && pillBoost ? 1.45 : 1.0)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 7)
+                    .padding(.vertical, 4)
                     .background {
-                        // The selection blob glides between tabs — a Liquid
-                        // Glass lens like the system tab bar's.
+                        // The selection lens glides between tabs. It always
+                        // keeps the reference's rounded-RECT shape — during
+                        // the hop it simply swells past the bar's edges,
+                        // magnifying the landing tab, then settles back.
                         if tab == active {
-                            DockPillBlob()
+                            // Reference capsule: 74x52pt in a 58pt slab, so
+                            // it is slightly WIDER than the tab slot and
+                            // inset ~3pt top and bottom.
+                            DockPillBlob(boosted: pillBoost)
+                                .padding(.horizontal, -2)
+                                .padding(.vertical, -2)
                                 .matchedGeometryEffect(id: "dockPill", in: ns)
+                                // At the peak of the hop the lens swells past
+                                // the bar's edges — the bulging glass droplet
+                                // in the reference.
+                                .scaleEffect(x: pillBoost ? 1.30 : 1.0,
+                                             y: pillBoost ? 1.35 : 1.0)
                         }
                     }
                     .contentShape(Capsule())
@@ -424,7 +477,7 @@ struct NuvioBottomBar: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(4)
+        .padding(5)
         // Slight overshoot — the system pill's springy glide.
         .animation(.spring(response: 0.4, dampingFraction: 0.75), value: active)
     }
@@ -443,22 +496,27 @@ struct DockGlass: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
+            // `.regular.interactive()` — the system tab bar's own material.
+            // It refracts AND dims the backdrop, which is what makes the
+            // reference bar read as a surface over bright content; `.clear`
+            // passed the backdrop through at full brightness so the bar
+            // vanished into whatever was behind it.
             if circular {
-                glassed(content.glassEffect(.regular, in: Circle()))
+                glassed(content.glassEffect(.regular.interactive(), in: Circle()))
             } else {
-                glassed(content.glassEffect(.regular, in: Capsule()))
+                glassed(content.glassEffect(.regular.interactive(), in: Capsule()))
             }
         } else {
+            // No material either — a plain dark translucent fill, so there
+            // is no blur behind the glass on older systems.
             if circular {
                 content
-                    .background(.ultraThinMaterial)
-                    .clipShape(Circle())
-                    .overlay(Circle().stroke(Color.white.opacity(0.10), lineWidth: 0.5))
+                    .background(Color(white: 0.13).opacity(0.82), in: Circle())
+                    .overlay(Circle().stroke(Color.white.opacity(0.12), lineWidth: 0.5))
             } else {
                 content
-                    .background(.ultraThinMaterial)
-                    .clipShape(Capsule())
-                    .overlay(Capsule().stroke(Color.white.opacity(0.10), lineWidth: 0.5))
+                    .background(Color(white: 0.13).opacity(0.82), in: Capsule())
+                    .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.5))
             }
         }
     }
@@ -477,19 +535,25 @@ struct DockGlass: ViewModifier {
     }
 }
 
-/// The dock's active-tab highlight — a Liquid Glass lens on iOS 26 (glass
-/// riding on the bar's glass, exactly like the system tab bar's selection
-/// blob), a plain lighter capsule below.
+/// The dock's active-tab highlight — a Liquid Glass lens riding on the
+/// bar's glass, shaped as the reference's rounded rectangle (never a
+/// circle) with a light wash so the selected tab still reads.
 private struct DockPillBlob: View {
+    /// True at the peak of a tab hop — the lens brightens its rim, the
+    /// refractive edge visible on the swelling droplet in the reference.
+    var boosted: Bool = false
+
     var body: some View {
-        if #available(iOS 26.0, *) {
-            Capsule()
-                .fill(Color.white.opacity(0.05))
-                .glassEffect(.regular.tint(Color.white.opacity(0.08)), in: Capsule())
-        } else {
-            Capsule()
-                .fill(Color.white.opacity(0.14))
-        }
+        // Deliberately NOT a nested glassEffect: glass layered on the bar's
+        // own glass came out muddy (a brown blob over warm content). The
+        // reference selection is simply a lighter capsule with a hairline
+        // edge, letting the bar's glass show through it.
+        Capsule()
+            .fill(Color.white.opacity(boosted ? 0.20 : 0.16))
+            .overlay(
+                Capsule().stroke(Color.white.opacity(boosted ? 0.42 : 0.14),
+                                 lineWidth: boosted ? 1.2 : 0.5)
+            )
     }
 }
 

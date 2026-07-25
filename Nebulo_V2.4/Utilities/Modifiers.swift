@@ -1,27 +1,5 @@
 import SwiftUI
 import Combine
-import CoreImage
-
-extension UIImage {
-    /// Average colour of the image's top strip — used to tint the
-    /// compact-header vignette so it blends into a custom photo background.
-    func averageTopColorHex() -> String? {
-        guard let cg = cgImage else { return nil }
-        let topRect = CGRect(x: 0, y: 0, width: cg.width, height: max(1, cg.height / 4))
-        guard let cropped = cg.cropping(to: topRect) else { return nil }
-        let ci = CIImage(cgImage: cropped)
-        guard let filter = CIFilter(name: "CIAreaAverage", parameters: [
-            kCIInputImageKey: ci,
-            kCIInputExtentKey: CIVector(cgRect: ci.extent)
-        ]), let output = filter.outputImage else { return nil }
-        var bitmap = [UInt8](repeating: 0, count: 4)
-        let context = CIContext(options: [.workingColorSpace: NSNull()])
-        context.render(output, toBitmap: &bitmap, rowBytes: 4,
-                       bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
-                       format: .RGBA8, colorSpace: nil)
-        return String(format: "#%02X%02X%02X", bitmap[0], bitmap[1], bitmap[2])
-    }
-}
 
 struct ShimmerModifier: ViewModifier {
     @State private var phase: CGFloat = 0
@@ -362,26 +340,9 @@ struct CompactHeaderScrim: View {
     /// own dark surface, so a background-tinted vignette read as a colour cast
     /// rather than a shadow.
     var tintOverride: Color? = nil
-    /// The tint is derived from the user's chosen app background, darkened, so
-    /// the vignette matches whatever background they pick — the top nebula
-    /// colour for the gradient background, or the sampled top colour of a
-    /// custom photo. Both are @AppStorage, so the vignette updates live the
-    /// moment the user changes their background.
-    @AppStorage("nebColor1") private var nebColor1 = "#1A2538"
-    @AppStorage("useCustomBackground") private var useCustomBackground = false
-    @AppStorage("customBgTintHex") private var customBgTintHex = ""
-
-    private var tint: Color {
-        if let tintOverride { return tintOverride }
-        // Nuvio redesign: the canvas is pure black, so the vignette is a
-        // plain black wash — deriving it from the (now unused) nebula
-        // palette would cast a colour over the black screens. A custom
-        // photo background still gets its sampled tint.
-        if useCustomBackground && !customBgTintHex.isEmpty {
-            return (Color(hex: customBgTintHex) ?? .black).mix(with: .black, by: 0.4)
-        }
-        return .black
-    }
+    /// The canvas is pure black since the redesign, so the vignette is a
+    /// plain black wash unless a caller overrides it.
+    private var tint: Color { tintOverride ?? .black }
 
     var body: some View {
         ZStack {
