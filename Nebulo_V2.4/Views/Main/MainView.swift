@@ -642,6 +642,23 @@ struct StandardLayout: SwiftUI.View {
     /// hero's stretch so no black gap ever opens above it.
     @State private var heroPull = ScrollProgress()
 
+    /// Channel tapped anywhere on the home screen. Opens the same preview
+    /// popup a channel tap in a category does, rather than starting playback
+    /// straight away.
+    @State private var homePreviewChannel: StreamChannel?
+
+    /// Opens a featured hero page's destination: a live matchup goes to its
+    /// game card, a plain channel to the channel preview popup.
+    private func openFeatured(_ item: FeaturedItem) {
+        if let game = item.game {
+            scoreViewModel.deepLinkRequest = scoreViewModel.makeDetailRequest(
+                for: game, sport: scoreViewModel.sportType(for: game)
+            )
+        } else {
+            homePreviewChannel = item.channel
+        }
+    }
+
     /// Same idea for the hub sections (Sports/Favorites/Recordings): their
     /// scroll probes bubble up via preference, and this drives the compact
     /// title shown in the chrome row between the Back pill and the gear.
@@ -939,7 +956,7 @@ struct StandardLayout: SwiftUI.View {
                                     items: cachedDisplayedFeatured,
                                     viewModel: viewModel,
                                     accentColor: accentColor,
-                                    playAction: playAction
+                                    openAction: openFeatured
                                 )
                                 .id(selectedHomeGroup?.rawValue ?? "for-you")
                                 // Rubber-banding past the top stretches the
@@ -975,7 +992,8 @@ struct StandardLayout: SwiftUI.View {
                                         playAction: playAction,
                                         promptRenameChannel: viewModel.triggerRenameChannel,
                                         hideChannel: viewModel.hideChannel,
-                                        removeFromRecent: viewModel.removeFromRecent
+                                        removeFromRecent: viewModel.removeFromRecent,
+                                        onSelect: { homePreviewChannel = $0 }
                                     )
                                 }
                             }
@@ -1038,6 +1056,7 @@ struct StandardLayout: SwiftUI.View {
                                             channels: chans,
                                             viewModel: viewModel,
                                             playAction: playAction,
+                                            onSelect: { homePreviewChannel = $0 },
                                             openCategory: {
                                                 viewModel.lastSelectedHomeID = cat.id
                                                 withAnimation { selectedCategory = cat }
@@ -1176,6 +1195,16 @@ struct StandardLayout: SwiftUI.View {
                     .allowsHitTesting(searchText.isEmpty && selectedCategory == nil)
                     .zIndex(0)
             }
+        }
+        // Channel preview popup for a home tap — the same sheet a channel tap
+        // in a category opens, so playback always starts from the preview.
+        .sheet(item: $homePreviewChannel) { channel in
+            ChannelPreviewSheet(
+                channel: channel,
+                viewModel: viewModel,
+                accentColor: accentColor,
+                playAction: { playAction($0) }
+            )
         }
         // Quick plain crossfade between sections — the Apple TV app's
         // tab-switch feel: no blur, no slide, no bounce.
@@ -2632,10 +2661,13 @@ struct LiveGamesPreviewList: View {
                     LiveGameCard(game: game, accentColor: accentColor)
                         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .onTapGesture {
+                            // Opens the game card first — the stream starts
+                            // from there (or from the long-press menu's
+                            // "Watch Stream"), never straight from a tap.
+                            guard SwipeTapGuard.tapsAllowed else { return }
                             viewModel.triggerSelectionHaptic()
-                            let (h, a) = game.searchTerms
                             let sport = scoreViewModel.sportType(for: game)
-                            viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.broadcastName)
+                            scoreViewModel.deepLinkRequest = scoreViewModel.makeDetailRequest(for: game, sport: sport)
                         }
                         .liveGameContextMenu(game: game, viewModel: viewModel, scoreViewModel: scoreViewModel)
                 }
@@ -2885,89 +2917,297 @@ struct LiveGameCard: View {
 /// bottom (title, dot-separated metadata, white capsule pill, page dots),
 /// and the image dissolves into the black canvas below. Auto-advances like
 /// the reference carousel.
+/// Full-bleed hero carousel, ported from Nuvio's `HomeHeroSection.kt`
+/// (github.com/luqmanfadlli/NuvioMobile-iOS). That implementation keeps a
+/// paging position as `page + offsetFraction`, derives each visible page's
+/// alpha from `1 - |offset|`, and moves the backdrop and the text block at
+/// DIFFERENT parallax rates — which is what makes the title fade and drift
+/// while the artwork barely shifts. Its constants are reproduced below.
+///
+/// The backdrop is scaled rather than widened: a scale is layout-neutral, so
+/// the parallax shift never exposes a bare edge AND the hero can't widen the
+/// home layout (sizing pages wider did exactly that, pushing every shelf
+/// off-screen).
 struct FeaturedCarousel: View {
     let items: [FeaturedItem]
     @ObservedObject var viewModel: ChannelViewModel
     let accentColor: Color
-    let playAction: (StreamChannel) -> Void
+    /// Opens the page's destination — the channel preview popup, or the game
+    /// card for a live matchup. Playback starts from there, not from here.
+    let openAction: (FeaturedItem) -> Void
 
-    @State private var currentIndex: Int = 0
+    /// Snapped page.
+    @State private var page = 0
+    /// How far the pager sits past `page`, in pages. Positive while dragging
+    /// toward the NEXT card. Everything visual is a function of this.
+    @State private var offsetFraction: CGFloat = 0
+    /// 0 → 1 across the dwell time; drives the dot's countdown fill.
+    @State private var progress: CGFloat = 0
+    /// Bumped when a drag ends, restarting the dwell countdown — so swiping
+    /// resets the timer even when the swipe didn't commit.
+    @State private var timerKey = 0
 
-    /// Matches the reference: the hero fills roughly the top 60% of the
-    /// screen, dots included.
+    // ── Nuvio's constants ────────────────────────────────────────────────
+    private static let backgroundParallax: CGFloat = 0.055
+    private static let backgroundScale: CGFloat = 1.14
+    private static let contentParallax: CGFloat = 0.18
+    private static let swipeThresholdFraction: CGFloat = 0.16
+    private static let dwell: Double = 8
+
+    private var screenWidth: CGFloat { UIScreen.main.bounds.width }
     private var heroHeight: CGFloat { UIScreen.main.bounds.height * 0.60 }
 
-    /// Auto-advance cadence, mirroring the reference carousel.
-    private static let autoAdvance = Timer.publish(every: 6, on: .main, in: .common).autoconnect()
+    /// The pages worth drawing: the current one, plus the neighbour being
+    /// dragged toward. Sorted least-visible first so the more visible card
+    /// always composites on top, as Nuvio does.
+    private var layers: [(index: Int, visibility: CGFloat, offset: CGFloat)] {
+        let n = items.count
+        guard n > 0 else { return [] }
+        var result: [(Int, CGFloat, CGFloat)] = []
+        // rel 0 is the current page; offset = -rel + fraction.
+        for rel in [0, offsetFraction > 0 ? 1 : -1] {
+            if rel != 0 && (n < 2 || offsetFraction == 0) { continue }
+            let offset = CGFloat(-rel) + offsetFraction
+            let visibility = max(0, min(1, 1 - abs(offset)))
+            guard visibility > 0 else { continue }
+            result.append((((page + rel) % n + n) % n, visibility, offset))
+        }
+        return result.sorted { $0.1 < $1.1 }
+    }
+
+    /// Steps to a neighbouring page WITHOUT any deferred work: the page index
+    /// moves now and the fraction is rebased by the same amount, which leaves
+    /// the two layers in pixel-identical positions. Then the fraction eases to
+    /// zero. Because nothing is scheduled for later, a second fast swipe lands
+    /// on clean state instead of colliding with a pending hand-off.
+    private func step(_ delta: Int, duration: Double) {
+        guard items.count > 1 else { return }
+        let n = items.count
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            page = ((page + delta) % n + n) % n
+            offsetFraction -= CGFloat(delta)
+        }
+        withAnimation(.easeOut(duration: duration)) { offsetFraction = 0 }
+    }
 
     var body: some View {
-        TabView(selection: $currentIndex) {
-            ForEach(0 ..< items.count, id: \.self) { i in
-                let item = items[i]
-                NuvioHeroPage(
+        ZStack {
+            // ── Artwork, barely shifting, scaled so the shift never bares an
+            //    edge. Alpha is the page's visibility.
+            ForEach(layers, id: \.index) { layer in
+                NuvioHeroBackdrop(item: items[layer.index], height: heroHeight)
+                    .scaleEffect(Self.backgroundScale)
+                    .offset(x: -layer.offset * screenWidth * Self.backgroundParallax)
+                    .opacity(Double(layer.visibility))
+            }
+
+            // ── The dissolve into the black canvas is drawn ONCE, not per
+            //    page, so it never double-composites mid-transition.
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0.0),
+                    .init(color: .clear, location: 0.42),
+                    .init(color: .black.opacity(0.55), location: 0.72),
+                    .init(color: .black.opacity(0.96), location: 0.94),
+                    .init(color: .black, location: 1.0)
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+            .allowsHitTesting(false)
+
+            // ── Title · metadata · pill: fades with the page and travels at
+            //    roughly three times the backdrop's parallax.
+            ForEach(layers, id: \.index) { layer in
+                let item = items[layer.index]
+                NuvioHeroContent(
                     channel: item.channel,
                     program: viewModel.getCurrentProgram(for: item.channel),
                     categoryName: viewModel.categories.first(where: { $0.id == item.channel.categoryID })?.name,
                     game: item.game,
-                    height: heroHeight,
                     onPlay: {
+                        guard SwipeTapGuard.tapsAllowed else { return }
                         viewModel.triggerSelectionHaptic()
-                        playAction(item.channel)
+                        openAction(item)
                     }
                 )
-                .tag(i)
+                .frame(width: screenWidth)
+                .offset(x: -layer.offset * screenWidth * Self.contentParallax)
+                .opacity(Double(layer.visibility))
+                // Only the frontmost page should take taps.
+                .allowsHitTesting(layer.visibility > 0.5)
             }
         }
-        .tabViewStyle(.page(indexDisplayMode: .never))
-        .background(Color.clear)
         .frame(height: heroHeight)
+        // Clips after the parallax offsets, so the scaled artwork covers the
+        // full width at every point of the gesture.
+        .clipped()
+        .contentShape(Rectangle())
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 12)
+                .onChanged { value in
+                    let dx = value.translation.width
+                    guard abs(dx) > abs(value.translation.height) else { return }
+                    // A horizontal drag over the hero must not also fire the
+                    // page's tap action on release.
+                    SwipeTapGuard.suppress()
+                    guard items.count > 1 else { return }
+                    offsetFraction = max(-1, min(1, -dx / screenWidth))
+                }
+                .onEnded { value in
+                    let dx = value.translation.width
+                    let flick = value.predictedEndTranslation.width
+                    defer { timerKey += 1 }
+                    guard items.count > 1, abs(dx) > abs(value.translation.height) else {
+                        withAnimation(.easeOut(duration: 0.25)) { offsetFraction = 0 }
+                        return
+                    }
+                    // Nuvio commits on a sixth of the width, or on a flick.
+                    let travelled = abs(dx) > screenWidth * Self.swipeThresholdFraction
+                    let thrown = abs(flick) > screenWidth * 0.4
+                    if travelled || thrown {
+                        step(dx < 0 ? 1 : -1, duration: 0.3)
+                    } else {
+                        withAnimation(.easeOut(duration: 0.25)) { offsetFraction = 0 }
+                    }
+                }
+        )
         .overlay(alignment: .bottom) {
             if items.count > 1 {
-                NuvioPageDots(count: items.count, index: currentIndex)
+                NuvioPageDots(count: items.count, index: page, progress: progress)
                     .padding(.bottom, 14)
                     .allowsHitTesting(false)
             }
         }
-        .onReceive(Self.autoAdvance) { _ in
+        // Keyed to the page AND the drag generation, so any page change or
+        // finished swipe cancels and restarts the countdown from zero.
+        .task(id: "\(page)-\(timerKey)") {
+            progress = 0
             guard items.count > 1 else { return }
-            withAnimation(.easeInOut(duration: 0.45)) {
-                currentIndex = (currentIndex + 1) % items.count
-            }
+            withAnimation(.linear(duration: Self.dwell)) { progress = 1 }
+            try? await Task.sleep(nanoseconds: UInt64(Self.dwell * 1_000_000_000))
+            guard !Task.isCancelled, offsetFraction == 0 else { return }
+            // Rebase so the OUTGOING card starts fully visible, then ease to
+            // zero — the same crossfade a finished swipe produces.
+            step(1, duration: 0.6)
         }
         // The featured list can shrink in place (a live game ends and its
-        // channel drops out) without the carousel being recreated — clamp
-        // the page index so the pager never points at a missing tag.
+        // channel drops out) — clamp so the pager never points past the end.
         .onChangeCompat(of: items.count) { n in
-            if currentIndex >= n { currentIndex = 0 }
+            if page >= n { page = 0 }
         }
     }
 }
 
-/// One page of the full-bleed hero. Two variants sharing the same bottom
-/// cluster layout:
-///   • Channel — blurred-artwork backdrop with the sharp logo floating in
-///     the upper half, channel name as the big title.
-///   • Matchup — team-colour washes with the big translucent crests, the
-///     matchup/score as the title.
-struct NuvioHeroPage: View {
-    let channel: StreamChannel
-    let program: EPGProgram?
-    let categoryName: String?
-    var game: ESPNEvent? = nil
+/// The hero's ARTWORK layer — the part that barely moves and is scaled up so
+/// the parallax shift never exposes an edge. Two variants:
+///   • Matchup — team-colour washes meeting in the middle, big crests.
+///   • Channel — a wash built from the logo's own brand colour (a channel has
+///     no poster art, and a blurred wide logo only tinted a middle strip),
+///     with the sharp logo floating in the upper half.
+struct NuvioHeroBackdrop: View {
+    let item: FeaturedItem
     let height: CGFloat
-    let onPlay: () -> Void
 
-    /// The channel logo's dominant colour — fills the page behind a
-    /// logo-only channel so the hero is never part-empty.
-    @State private var glow: Color?
+    /// Bumped once the logo's colour lands in the shared cache, purely to
+    /// trigger a re-render.
+    @State private var glowTick = 0
+
+    private var channel: StreamChannel { item.channel }
+    private var game: ESPNEvent? { item.game }
 
     private var hasMatchup: Bool {
         game?.homeCompetitor?.team?.logo != nil && game?.awayCompetitor?.team?.logo != nil
     }
 
+    /// Read from the process-wide cache on every render so it always matches
+    /// THIS card's channel. Held in `@State`, a view reused for a different
+    /// card kept the previous channel's colour for a frame and flashed.
+    private var glow: Color? {
+        guard let icon = channel.icon, !icon.isEmpty else { return nil }
+        _ = glowTick
+        return LogoGlow.cache[icon]
+    }
+
     private func teamColor(_ c: ESPNCompetitor?) -> Color {
         guard let hex = c?.team?.color, !hex.isEmpty else { return Color(white: 0.22) }
         return Color(hex: hex.hasPrefix("#") ? hex : "#\(hex)") ?? Color(white: 0.22)
+    }
+
+    var body: some View {
+        Group {
+            if hasMatchup, let g = game {
+                let away = g.awayCompetitor
+                let home = g.homeCompetitor
+                ZStack {
+                    Color(white: 0.06)
+                    // Each team's colour floods from its side PAST the centre,
+                    // so the two washes meet instead of leaving a dead band.
+                    LinearGradient(
+                        colors: [teamColor(away).opacity(0.85), teamColor(away).opacity(0.0)],
+                        startPoint: .leading,
+                        endPoint: UnitPoint(x: 0.72, y: 0.5)
+                    )
+                    LinearGradient(
+                        colors: [teamColor(home).opacity(0.85), teamColor(home).opacity(0.0)],
+                        startPoint: .trailing,
+                        endPoint: UnitPoint(x: 0.28, y: 0.5)
+                    )
+                    HStack(spacing: 0) {
+                        CachedAsyncImage(urlString: away?.team?.logo ?? "",
+                                         size: CGSize(width: 150, height: 150))
+                            .frame(maxWidth: .infinity)
+                        CachedAsyncImage(urlString: home?.team?.logo ?? "",
+                                         size: CGSize(width: 150, height: 150))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .padding(.horizontal, 16)
+                    .opacity(0.9)
+                    .offset(y: -height * 0.13)
+                }
+            } else {
+                let base = glow ?? Color(white: 0.28)
+                ZStack {
+                    LinearGradient(
+                        colors: [base.opacity(0.75), base.opacity(0.34), Color(white: 0.05)],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                    RadialGradient(
+                        colors: [base.opacity(0.55), .clear],
+                        center: UnitPoint(x: 0.5, y: 0.34),
+                        startRadius: 0,
+                        endRadius: height * 0.55
+                    )
+                    CachedAsyncImage(urlString: channel.icon ?? "", size: nil)
+                        .frame(maxWidth: 190, maxHeight: 190)
+                        .offset(y: -height * 0.17)
+                }
+                .task(id: channel.icon) {
+                    guard let icon = channel.icon, LogoGlow.cache[icon] == nil else { return }
+                    _ = await LogoGlow.color(for: icon)
+                    glowTick += 1
+                }
+            }
+        }
+        .frame(height: height)
+        .frame(maxWidth: .infinity)
+        .allowsHitTesting(false)
+    }
+}
+
+/// The hero's CONTENT layer — big title, dot-separated metadata, white pill.
+/// Travels at roughly three times the backdrop's parallax and fades with the
+/// page, which is what reads as the title sliding and dissolving.
+struct NuvioHeroContent: View {
+    let channel: StreamChannel
+    let program: EPGProgram?
+    let categoryName: String?
+    var game: ESPNEvent? = nil
+    let onPlay: () -> Void
+
+    private var hasMatchup: Bool {
+        game?.homeCompetitor?.team?.logo != nil && game?.awayCompetitor?.team?.logo != nil
     }
 
     private var metadataParts: [String] {
@@ -2986,93 +3226,8 @@ struct NuvioHeroPage: View {
     }
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            // ── Backdrop ────────────────────────────────────────────────
-            if hasMatchup, let g = game {
-                let away = g.awayCompetitor
-                let home = g.homeCompetitor
-                ZStack {
-                    Color(white: 0.06)
-                    // Each team's colour floods from its side PAST the
-                    // centre, so the two washes meet in the middle instead
-                    // of leaving a dead black band.
-                    LinearGradient(
-                        colors: [teamColor(away).opacity(0.85), teamColor(away).opacity(0.0)],
-                        startPoint: .leading,
-                        endPoint: UnitPoint(x: 0.72, y: 0.5)
-                    )
-                    LinearGradient(
-                        colors: [teamColor(home).opacity(0.85), teamColor(home).opacity(0.0)],
-                        startPoint: .trailing,
-                        endPoint: UnitPoint(x: 0.28, y: 0.5)
-                    )
-                    // Crests fully on-screen, one per half, floating above
-                    // the bottom cluster.
-                    HStack(spacing: 0) {
-                        CachedAsyncImage(urlString: away?.team?.logo ?? "",
-                                         size: CGSize(width: 150, height: 150))
-                            .frame(maxWidth: .infinity)
-                        CachedAsyncImage(urlString: home?.team?.logo ?? "",
-                                         size: CGSize(width: 150, height: 150))
-                            .frame(maxWidth: .infinity)
-                    }
-                    .padding(.horizontal, 16)
-                    .opacity(0.9)
-                    .offset(y: -height * 0.13)
-                }
-                // Rasterise the whole backdrop once: its gradients and
-                // crests are static, and re-compositing them on every
-                // scroll frame (the hero also scales while overscrolling)
-                // was the home screen's biggest per-frame cost.
-                .drawingGroup()
-            } else {
-                // A channel has no poster art — only a logo — so the page is
-                // built from the logo's own brand colour: a wash that fills
-                // the WHOLE hero (a blurred logo alone left dark bands top
-                // and bottom, since a wide logo only occupies a middle strip
-                // of its box), with the blurred artwork and the sharp logo
-                // layered over it.
-                let base = glow ?? Color(white: 0.28)
-                ZStack {
-                    LinearGradient(
-                        colors: [base.opacity(0.75), base.opacity(0.34), Color(white: 0.05)],
-                        startPoint: .top, endPoint: .bottom
-                    )
-                    RadialGradient(
-                        colors: [base.opacity(0.55), .clear],
-                        center: UnitPoint(x: 0.5, y: 0.34),
-                        startRadius: 0,
-                        endRadius: height * 0.55
-                    )
-                    // NOTE: no blurred copy of the artwork here. Blurring a
-                    // fixed-size image and rasterising it clipped the blur to
-                    // that frame, so once scaled up it showed as a hard-edged
-                    // lighter RECTANGLE floating in the middle of the hero
-                    // (and its loading placeholder was a grey box). The
-                    // gradients above already fill the page, so the sharp
-                    // logo is the only artwork layer.
-                    // The sharp logo floats in the upper half like the
-                    // reference poster art.
-                    CachedAsyncImage(urlString: channel.icon ?? "", size: nil)
-                        .frame(maxWidth: 190, maxHeight: 190)
-                        .offset(y: -height * 0.17)
-                }
-                .task(id: channel.icon) { glow = await LogoGlow.color(for: channel.icon) }
-            }
-
-            // ── Dissolve into the black canvas ──────────────────────────
-            LinearGradient(
-                stops: [
-                    .init(color: .clear, location: 0.0),
-                    .init(color: .clear, location: 0.42),
-                    .init(color: .black.opacity(0.55), location: 0.72),
-                    .init(color: .black.opacity(0.96), location: 0.94),
-                    .init(color: .black, location: 1.0)
-                ],
-                startPoint: .top, endPoint: .bottom
-            )
-
-            // ── Bottom cluster: title · metadata · pill ─────────────────
+        VStack {
+            Spacer(minLength: 0)
             VStack(spacing: 13) {
                 Group {
                     if hasMatchup, let g = game {
@@ -3104,9 +3259,6 @@ struct NuvioHeroPage: View {
             // Room for the carousel's page dots below the pill.
             .padding(.bottom, 44)
         }
-        .frame(height: height)
-        .frame(maxWidth: .infinity)
-        .clipped()
         .contentShape(Rectangle())
         .onTapGesture(perform: onPlay)
     }

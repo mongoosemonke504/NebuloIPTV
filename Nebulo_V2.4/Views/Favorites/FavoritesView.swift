@@ -22,6 +22,9 @@ struct FavoritesView: View {
     @ObservedObject var scoreViewModel: ScoreViewModel
     let accentColor: Color
     let playAction: (StreamChannel) -> Void
+    /// Channel tapped in the Channels list — shows the preview popup rather
+    /// than starting playback outright.
+    @State private var previewChannel: StreamChannel?
     let onBack: () -> Void
     /// Hook for the main app's full-screen search overlay. Falls back to the
     /// local AddFavoriteSheet if the host can't surface the main search (e.g.
@@ -220,6 +223,14 @@ struct FavoritesView: View {
                 }
             }
         }
+        .sheet(item: $previewChannel) { channel in
+            ChannelPreviewSheet(
+                channel: channel,
+                viewModel: viewModel,
+                accentColor: accentColor,
+                playAction: { playAction($0) }
+            )
+        }
         .sheet(isPresented: $showAddSheet) {
             AddFavoriteSheet(viewModel: viewModel, scoreViewModel: scoreViewModel)
         }
@@ -385,7 +396,7 @@ struct FavoritesView: View {
                 count: favoriteChannels.count,
                 trailingIcon: favoriteChannels.count > 1 ? "arrow.up.arrow.down" : nil,
                 accentColor: accentColor,
-                onTrailingTap: { showReorderChannels = true }
+                onTrailingTap: { guard SwipeTapGuard.tapsAllowed else { return }; showReorderChannels = true }
             )
             .padding(.horizontal, 20)
 
@@ -407,7 +418,9 @@ struct FavoritesView: View {
                             epgProgram: viewModel.getCurrentProgram(for: channel),
                             isFavorite: true,
                             accentColor: accentColor,
-                            playAction: { playAction(channel) },
+                            // Opens the same preview popup as a category
+                            // list — description, upcoming guide, Play button.
+                            playAction: { previewChannel = channel },
                             toggleFav: { viewModel.toggleFavorite(channel.id) }
                         )
                     }
@@ -429,13 +442,13 @@ struct FavoritesView: View {
                 // neutral circular buttons — no accent-colored text.
                 trailingIcon: (favoriteTeams.count + favoriteLeagues.count) > 3 ? "chevron.right" : nil,
                 accentColor: accentColor,
-                onTrailingTap: { showSeeAllTeams = true },
-                onAddTap: { showAddSheet = true }
+                onTrailingTap: { guard SwipeTapGuard.tapsAllowed else { return }; showSeeAllTeams = true },
+                onAddTap: { guard SwipeTapGuard.tapsAllowed else { return }; showAddSheet = true }
             )
             .padding(.horizontal, 20)
 
             if favoriteTeams.isEmpty && favoriteLeagues.isEmpty {
-                Button(action: { showAddSheet = true }) {
+                Button(action: { guard SwipeTapGuard.tapsAllowed else { return }; showAddSheet = true }) {
                     FavoritesEmptyTile(
                         icon: "sportscourt.fill",
                         title: "Add a team or league",
@@ -486,7 +499,7 @@ struct FavoritesView: View {
                     // "Add another" row so users can keep adding teams even
                     // after the first favorite. Tapping opens the same picker
                     // sheet as the empty-state tile.
-                    Button(action: { showAddSheet = true }) {
+                    Button(action: { guard SwipeTapGuard.tapsAllowed else { return }; showAddSheet = true }) {
                         HStack(spacing: 12) {
                             Image(systemName: "plus")
                                 .font(.system(size: 18, weight: .bold))
@@ -587,7 +600,7 @@ struct FavoritesView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 36)
             }
-            Button(action: { showAddSheet = true }) {
+            Button(action: { guard SwipeTapGuard.tapsAllowed else { return }; showAddSheet = true }) {
                 Text("Add a team or league")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white)

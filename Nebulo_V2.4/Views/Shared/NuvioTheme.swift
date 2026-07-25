@@ -219,21 +219,43 @@ struct NuvioPillButton: View {
 
 // MARK: - Page dots
 
-/// Hero pager dots — the current page is an elongated white capsule, the
-/// rest are small translucent circles.
+/// Hero pager dots. The current page is an elongated capsule TRACK that
+/// fills with white left-to-right as its dwell time elapses — the reference's
+/// countdown to the next auto-advance — while the others stay small
+/// translucent circles.
 struct NuvioPageDots: View {
     let count: Int
     let index: Int
+    /// 0 → 1 across the current page's dwell time.
+    var progress: CGFloat = 0
+
+    private static let activeWidth: CGFloat = 30
+    private static let dotSize: CGFloat = 7
 
     var body: some View {
         HStack(spacing: 8) {
             ForEach(0..<count, id: \.self) { i in
-                Capsule()
-                    .fill(Color.white.opacity(i == index ? 1.0 : 0.55))
-                    .frame(width: i == index ? 26 : 7, height: 7)
-                    .animation(.spring(response: 0.35, dampingFraction: 0.8), value: index)
+                if i == index {
+                    // Track + fill, so the white edge sweeps across as the
+                    // countdown runs.
+                    Capsule()
+                        .fill(Color.white.opacity(0.35))
+                        .frame(width: Self.activeWidth, height: Self.dotSize)
+                        .overlay(alignment: .leading) {
+                            Capsule()
+                                .fill(.white)
+                                .frame(width: max(Self.dotSize,
+                                                  Self.activeWidth * min(max(progress, 0), 1)))
+                        }
+                        .clipShape(Capsule())
+                } else {
+                    Circle()
+                        .fill(Color.white.opacity(0.4))
+                        .frame(width: Self.dotSize, height: Self.dotSize)
+                }
             }
         }
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: index)
     }
 }
 

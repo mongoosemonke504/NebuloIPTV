@@ -85,6 +85,10 @@ struct SearchChannelContent: View {
 struct HorizontalPreviewList: View {
     let channels: [StreamChannel]; let isRecent: Bool; let accentColor: Color; let viewModel: ChannelViewModel
     let playAction: (StreamChannel) -> Void; let promptRenameChannel: (StreamChannel) -> Void; let hideChannel: (Int) -> Void; let removeFromRecent: (Int) -> Void
+    /// Tapping a card opens the channel preview popup (what's on, the guide
+    /// and a Play button) rather than starting playback outright. The context
+    /// menu's Play still goes straight to the stream.
+    var onSelect: ((StreamChannel) -> Void)? = nil
     @State private var channelForDescription: StreamChannel?
     /// Controlled by the "Channel Glow" slider in Settings → Appearance.
     @AppStorage("featuredGlowStrength") private var glowStrength = 0.5
@@ -98,8 +102,9 @@ struct HorizontalPreviewList: View {
             HStack(spacing: 14) {
                 ForEach(channels) { c in
                     Button(action: {
+                        guard SwipeTapGuard.tapsAllowed else { return }
                         ChannelViewModel.shared.triggerSelectionHaptic()
-                        playAction(c)
+                        (onSelect ?? playAction)(c)
                     }) {
                         // Nuvio continue-watching card: big 16:9 tile, the
                         // channel name overlaid bottom-left over a dark
@@ -144,7 +149,14 @@ struct ContinueWatchingCard: View {
     let channel: StreamChannel
     let program: EPGProgram?
     let glowStrength: Double
-    @State private var glow: Color?
+    /// Bumped when the colour lands in the shared cache; the colour itself is
+    /// derived per render so a recycled view can't show a stale one.
+    @State private var glowTick = 0
+    private var glow: Color? {
+        guard let icon = channel.icon, !icon.isEmpty else { return nil }
+        _ = glowTick
+        return LogoGlow.cache[icon]
+    }
 
     private var timeLeftLabel: String? {
         guard let prog = program else { return nil }
@@ -218,7 +230,11 @@ struct ContinueWatchingCard: View {
                     .padding(9)
             }
         }
-        .task(id: channel.icon) { glow = await LogoGlow.color(for: channel.icon) }
+        .task(id: channel.icon) {
+            guard let icon = channel.icon, LogoGlow.cache[icon] == nil else { return }
+            _ = await LogoGlow.color(for: icon)
+            glowTick += 1
+        }
     }
 }
 
@@ -232,6 +248,9 @@ struct HomeCategoryShelf: View {
     let channels: [StreamChannel]
     let viewModel: ChannelViewModel
     let playAction: (StreamChannel) -> Void
+    /// Tapping a card opens the channel preview popup; the context menu's
+    /// Play still starts the stream directly.
+    var onSelect: ((StreamChannel) -> Void)? = nil
     let openCategory: () -> Void
     let promptRename: () -> Void
     let changeColor: () -> Void
@@ -264,7 +283,7 @@ struct HomeCategoryShelf: View {
                         Button {
                             guard SwipeTapGuard.tapsAllowed else { return }
                             ChannelViewModel.shared.triggerSelectionHaptic()
-                            playAction(c)
+                            (onSelect ?? playAction)(c)
                         } label: {
                             HomeChannelShelfCard(
                                 channel: c,
@@ -333,7 +352,12 @@ struct HomeChannelShelfCard: View {
 struct HorizontalChannelCardArt: View {
     let icon: String?
     let glowStrength: Double
-    @State private var glow: Color?
+    @State private var glowTick = 0
+    private var glow: Color? {
+        guard let icon, !icon.isEmpty else { return nil }
+        _ = glowTick
+        return LogoGlow.cache[icon]
+    }
 
     var body: some View {
         // A channel logo is usually wide, so a blurred COPY of it only tints a
@@ -367,7 +391,11 @@ struct HorizontalChannelCardArt: View {
         }
         .frame(width: 200, height: 112)
         .nuvioCard()
-        .task(id: icon) { glow = await LogoGlow.color(for: icon) }
+        .task(id: icon) {
+            guard let icon, LogoGlow.cache[icon] == nil else { return }
+            _ = await LogoGlow.color(for: icon)
+            glowTick += 1
+        }
     }
 }
 
@@ -412,8 +440,15 @@ struct ChannelRow: View, Equatable {
     }
 
     // Logo-derived glow behind the tile — carries the channel's brand hue
-    // instead of a flat accent, matching the featured/shelf cards.
-    @State private var glow: Color?
+    // instead of a flat accent, matching the featured/shelf cards. Read from
+    // the shared cache per render: List recycles these rows across channels,
+    // and view state would keep a previous channel's colour for a frame.
+    @State private var glowTick = 0
+    private var glow: Color? {
+        guard let icon = channel.icon, !icon.isEmpty else { return nil }
+        _ = glowTick
+        return LogoGlow.cache[icon]
+    }
 
     var body: some View {
         Button(action: {
@@ -511,7 +546,11 @@ struct ChannelRow: View, Equatable {
             .contentShape(Rectangle())
         }
         .buttonStyle(ChannelRowButtonStyle())
-        .task(id: channel.icon) { glow = await LogoGlow.color(for: channel.icon) }
+        .task(id: channel.icon) {
+            guard let icon = channel.icon, LogoGlow.cache[icon] == nil else { return }
+            _ = await LogoGlow.color(for: icon)
+            glowTick += 1
+        }
     }
 }
 
