@@ -223,11 +223,11 @@ struct MainViewModifiers: ViewModifier {
     @State private var searchQuery = ""
     @FocusState private var searchFieldFocused: Bool
 
-    /// The section-switch tempo. Measured off the reference recording: the
-    /// outgoing and incoming pages blend for roughly a third of a second,
-    /// eased both ends — a clean crossfade rather than the snappier cut a
-    /// shorter easeOut produced.
-    static let sectionAnimation: Animation = .easeInOut(duration: 0.3)
+    /// Tab switches carry NO animation at all — Nuvio's tab host swaps the
+    /// selected screen in a single frame, and copying that is what makes the
+    /// switch feel instant instead of clunky. The state changes below are
+    /// therefore plain assignments; the bottom bar animates its own selection
+    /// pill and glass morph internally, so the chrome still glides.
 
     /// The bar shows on the root surfaces (Home, Sports hub, Favorites hub,
     /// Settings, Search). Drill-down pages (plain categories, Recently
@@ -248,12 +248,12 @@ struct MainViewModifiers: ViewModifier {
         }
     }
 
-    /// Leaves search: clears the query and crossfades back, then navigates.
+    /// Leaves search: clears the query and cuts back, then navigates.
     private func closeSearch() {
         searchFieldFocused = false
         searchQuery = ""
         viewModel.searchText = ""
-        withAnimation(Self.sectionAnimation) { showSearch = false }
+        showSearch = false
     }
 
     private func handleDockTap(_ tab: NuvioTab) {
@@ -263,21 +263,21 @@ struct MainViewModifiers: ViewModifier {
         switch tab {
         case .home:
             guard selectedCategory != nil else { return }
-            withAnimation(Self.sectionAnimation) { selectedCategory = nil }
+            selectedCategory = nil
         case .search:
             guard !showSearch else { return }
-            withAnimation(Self.sectionAnimation) { showSearch = true }
+            showSearch = true
         case .sports:
             guard selectedCategory?.id != -3 else { return }
             viewModel.lastSelectedHomeID = -3
-            withAnimation(Self.sectionAnimation) { selectedCategory = StreamCategory(id: -3, name: "Sports") }
+            selectedCategory = StreamCategory(id: -3, name: "Sports")
         case .favorites:
             guard selectedCategory?.id != -4 else { return }
             viewModel.lastSelectedHomeID = -4
-            withAnimation(Self.sectionAnimation) { selectedCategory = StreamCategory(id: -4, name: "Favorites") }
+            selectedCategory = StreamCategory(id: -4, name: "Favorites")
         case .profile:
             guard selectedCategory?.id != -6 else { return }
-            withAnimation(Self.sectionAnimation) { selectedCategory = StreamCategory(id: -6, name: "Settings") }
+            selectedCategory = StreamCategory(id: -6, name: "Settings")
         }
     }
 
@@ -322,15 +322,13 @@ struct MainViewModifiers: ViewModifier {
                             viewModel.lastSelectedHomeID = cat.id
                             viewModel.lastSourceCategory = cat
                             closeSearch()
-                            withAnimation(Self.sectionAnimation) { selectedCategory = cat }
+                            selectedCategory = cat
                         },
                         onDismiss: { closeSearch() }
                     )
                     .ignoresSafeArea()
-                    .transition(.opacity)
                 }
             }
-            .animation(Self.sectionAnimation, value: showSearch)
             // The bottom bar: dock on the root sections, morphing into the
             // Home-circle + search-field pair while search is open. Content
             // scrolls BEHIND the glass; each screen pads its own scrollable
@@ -563,6 +561,11 @@ struct StandardLayout: SwiftUI.View {
     @Binding var selectedRecording: Recording?
     @State private var categoryForColor: StreamCategory?
     var zoomNS: Namespace.ID? = nil
+
+    /// Push/pop tempo for DRILL-DOWNS (open a category, Recently Watched,
+    /// Recordings, and the way back). Tab switches deliberately don't use it —
+    /// see the note on the missing implicit animation at the end of `body`.
+    static let pageAnimation: Animation = .easeInOut(duration: 0.2)
 
     /// When `false` the active detail view doesn't intercept touches.
     /// Set to `false` the moment a back navigation fires so the departing
@@ -811,7 +814,7 @@ struct StandardLayout: SwiftUI.View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             } else if !searchText.isEmpty {
                 searchView
-                    .modifier(SwipeBackModifier(onBack: { withAnimation { searchText = "" } }))
+                    .modifier(SwipeBackModifier(onBack: { withAnimation(Self.pageAnimation) { searchText = "" } }))
                     .zIndex(2)
             } else if let cat = selectedCategory {
                 // `.allowsHitTesting(isDetailInteractive)` is the key fix for
@@ -854,7 +857,7 @@ struct StandardLayout: SwiftUI.View {
                         )
                         .transition(.opacity)
                     } else {
-                        CategoryDetailView(title: cat.name, channels: getChannelsToShow(for: cat), accentColor: accentColor, playAction: playAction, toggleFav: viewModel.toggleFavorite, promptRename: viewModel.triggerRenameChannel, hideChannel: viewModel.hideChannel, favoriteIDs: viewModel.favoriteIDs, viewModel: viewModel, showMultiView: $showMultiView, onBack: handleBackNavigation, onCategorySelect: { cat in withAnimation { selectedCategory = cat; searchText = "" } }, zoomNS: zoomNS)
+                        CategoryDetailView(title: cat.name, channels: getChannelsToShow(for: cat), accentColor: accentColor, playAction: playAction, toggleFav: viewModel.toggleFavorite, promptRename: viewModel.triggerRenameChannel, hideChannel: viewModel.hideChannel, favoriteIDs: viewModel.favoriteIDs, viewModel: viewModel, showMultiView: $showMultiView, onBack: handleBackNavigation, onCategorySelect: { cat in withAnimation(Self.pageAnimation) { selectedCategory = cat; searchText = "" } }, zoomNS: zoomNS)
                             .transition(.opacity)
                             .modifier(SwipeBackModifier(onBack: handleBackNavigation))
                     }
@@ -981,7 +984,7 @@ struct StandardLayout: SwiftUI.View {
                                         showsChevron: true
                                     ) {
                                         viewModel.lastSelectedHomeID = -2
-                                        withAnimation { selectedCategory = StreamCategory(id: -2, name: "Recently Watched") }
+                                        withAnimation(Self.pageAnimation) { selectedCategory = StreamCategory(id: -2, name: "Recently Watched") }
                                     }
 
                                     HorizontalPreviewList(
@@ -1006,7 +1009,7 @@ struct StandardLayout: SwiftUI.View {
                                 QuickAccessCard(title: "Recordings", icon: "record.circle.fill") {
                                     viewModel.triggerSelectionHaptic()
                                     viewModel.lastSelectedHomeID = -5
-                                    withAnimation { selectedCategory = StreamCategory(id: -5, name: "Recordings") }
+                                    withAnimation(Self.pageAnimation) { selectedCategory = StreamCategory(id: -5, name: "Recordings") }
                                 }
                                 QuickAccessCard(title: "Multi-View", icon: "square.grid.2x2.fill") {
                                     viewModel.triggerSelectionHaptic()
@@ -1030,7 +1033,7 @@ struct StandardLayout: SwiftUI.View {
                                         showsChevron: true
                                     ) {
                                         viewModel.lastSelectedHomeID = -3
-                                        withAnimation { selectedCategory = StreamCategory(id: -3, name: "Sports") }
+                                        withAnimation(Self.pageAnimation) { selectedCategory = StreamCategory(id: -3, name: "Sports") }
                                     }
 
                                     LiveGamesPreviewList(
@@ -1059,7 +1062,7 @@ struct StandardLayout: SwiftUI.View {
                                             onSelect: { homePreviewChannel = $0 },
                                             openCategory: {
                                                 viewModel.lastSelectedHomeID = cat.id
-                                                withAnimation { selectedCategory = cat }
+                                                withAnimation(Self.pageAnimation) { selectedCategory = cat }
                                             },
                                             promptRename: { viewModel.triggerRenameCategory(cat) },
                                             changeColor: { categoryForColor = cat }
@@ -1206,9 +1209,23 @@ struct StandardLayout: SwiftUI.View {
                 playAction: { playAction($0) }
             )
         }
-        // Quick plain crossfade between sections — the Apple TV app's
-        // tab-switch feel: no blur, no slide, no bounce.
-        .animation(.easeInOut(duration: 0.2), value: selectedCategory)
+        // NO implicit animation on `selectedCategory` — deliberately.
+        //
+        // Nuvio's tab host is a bare `when (selectedTab)` switch: the outgoing
+        // screen is gone and the incoming one is on screen in the SAME frame,
+        // with nothing animating. That is the whole reason its tab switching
+        // feels instant. A crossfade here did the opposite — it kept two
+        // full-screen hierarchies alive and compositing for its whole
+        // duration, and the arriving screen ran its first layout, image
+        // decodes and glass blurs DURING the fade, which is exactly what read
+        // as clunky.
+        //
+        // Drill-downs still fade, via the explicit `pageAnimation` at their
+        // call sites; only the tab switches (which never wrap their state
+        // change in `withAnimation`) cut straight over. The bottom bar's own
+        // pill glide and glass morph are unaffected — it animates those from
+        // inside itself with `.animation(_:value:)`, independent of whatever
+        // transaction changed the tab.
         // Re-enable detail interaction the moment any forward navigation fires,
         // so the arriving view is always fully tappable even if the user
         // navigates back and forward again within the 0.8 s reset window.
@@ -1260,7 +1277,7 @@ struct StandardLayout: SwiftUI.View {
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 12) {
                                     ForEach(viewModel.filteredCategories) { cat in
-                                        Button(action: { withAnimation { selectedCategory = cat; searchText = "" } }) {
+                                        Button(action: { withAnimation(Self.pageAnimation) { selectedCategory = cat; searchText = "" } }) {
                                             CategoryCard(title: cat.name, color: .secondary, lineLimit: 1)
                                                 .multilineTextAlignment(.leading)
                                                 .frame(width: 200, height: 85)
@@ -1429,7 +1446,7 @@ struct StandardLayout: SwiftUI.View {
         // only to the CURRENT render's view, not the one kept alive for the
         // removal transition.
         DispatchQueue.main.async {
-            withAnimation { selectedCategory = nil }
+            withAnimation(Self.pageAnimation) { selectedCategory = nil }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                 isDetailInteractive = true
             }
@@ -2953,6 +2970,10 @@ struct FeaturedCarousel: View {
     private static let contentParallax: CGFloat = 0.18
     private static let swipeThresholdFraction: CGFloat = 0.16
     private static let dwell: Double = 8
+    /// Two lines of the 30pt title (≈36pt each) + the 13pt gap + the 15pt
+    /// metadata line. Reserving it keeps the static pill from being nudged by
+    /// a card whose title wraps.
+    private static let contentBlockHeight: CGFloat = 104
 
     private var screenWidth: CGFloat { UIScreen.main.bounds.width }
     private var heroHeight: CGFloat { UIScreen.main.bounds.height * 0.60 }
@@ -2973,6 +2994,24 @@ struct FeaturedCarousel: View {
             result.append((((page + rel) % n + n) % n, visibility, offset))
         }
         return result.sorted { $0.1 < $1.1 }
+    }
+
+    /// The card the static pill belongs to: the most visible layer, which is
+    /// the last one after the least-visible-first sort. Nuvio resolves its
+    /// button's target the same way, so the label and destination always match
+    /// the words you're actually reading.
+    private var currentItem: FeaturedItem? {
+        guard !items.isEmpty else { return nil }
+        if let front = layers.last { return items[front.index] }
+        return items[min(page, items.count - 1)]
+    }
+
+    private var pillTitle: String { currentItem?.game != nil ? "Watch" : "Watch Now" }
+
+    private func open(_ item: FeaturedItem) {
+        guard SwipeTapGuard.tapsAllowed else { return }
+        viewModel.triggerSelectionHaptic()
+        openAction(item)
     }
 
     /// Steps to a neighbouring page WITHOUT any deferred work: the page index
@@ -3017,27 +3056,51 @@ struct FeaturedCarousel: View {
             )
             .allowsHitTesting(false)
 
-            // ── Title · metadata · pill: fades with the page and travels at
-            //    roughly three times the backdrop's parallax.
-            ForEach(layers, id: \.index) { layer in
-                let item = items[layer.index]
-                NuvioHeroContent(
-                    channel: item.channel,
-                    program: viewModel.getCurrentProgram(for: item.channel),
-                    categoryName: viewModel.categories.first(where: { $0.id == item.channel.categoryID })?.name,
-                    game: item.game,
-                    onPlay: {
-                        guard SwipeTapGuard.tapsAllowed else { return }
-                        viewModel.triggerSelectionHaptic()
-                        openAction(item)
+            // ── Title · metadata move and cross-dissolve at roughly three
+            //    times the backdrop's parallax; the pill below them is drawn
+            //    ONCE and never moves, exactly as Nuvio arranges its hero
+            //    column (layered text block, then a static button).
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+
+                ZStack(alignment: .bottom) {
+                    ForEach(layers, id: \.index) { layer in
+                        let item = items[layer.index]
+                        NuvioHeroContent(
+                            channel: item.channel,
+                            program: viewModel.getCurrentProgram(for: item.channel),
+                            categoryName: viewModel.categories.first(where: { $0.id == item.channel.categoryID })?.name,
+                            game: item.game,
+                            onPlay: { open(item) }
+                        )
+                        .frame(width: screenWidth)
+                        .offset(x: -layer.offset * screenWidth * Self.contentParallax)
+                        .opacity(Double(layer.visibility))
+                        // Only the frontmost page should take taps.
+                        .allowsHitTesting(layer.visibility > 0.5)
                     }
-                )
-                .frame(width: screenWidth)
-                .offset(x: -layer.offset * screenWidth * Self.contentParallax)
-                .opacity(Double(layer.visibility))
-                // Only the frontmost page should take taps.
-                .allowsHitTesting(layer.visibility > 0.5)
+                }
+                // A FIXED, bottom-aligned block: a two-line title grows UPWARD
+                // into the artwork instead of shoving the pill down, so the
+                // button holds still from card to card as well as mid-swipe.
+                .frame(height: Self.contentBlockHeight, alignment: .bottom)
+
+                // Reproduces the old spacing exactly: the 13pt stack gap plus
+                // the pill's 3pt top inset.
+                Spacer().frame(height: 16)
+
+                // ── The call to action, drawn ONCE outside the layers. It
+                //    neither travels nor fades; only its label and target
+                //    follow whichever card is in front.
+                NuvioPillButton(title: pillTitle) {
+                    guard let item = currentItem else { return }
+                    open(item)
+                }
+                // The label only ever swaps between "Watch" and "Watch Now" —
+                // never let that ride the swipe's ease-out.
+                .animation(nil, value: pillTitle)
             }
+            .padding(.bottom, 44)
         }
         .frame(height: heroHeight)
         // Clips after the parallax offsets, so the scaled artwork covers the
@@ -3196,9 +3259,14 @@ struct NuvioHeroBackdrop: View {
     }
 }
 
-/// The hero's CONTENT layer — big title, dot-separated metadata, white pill.
+/// The hero's MOVING content — big title and dot-separated metadata only.
 /// Travels at roughly three times the backdrop's parallax and fades with the
 /// page, which is what reads as the title sliding and dissolving.
+///
+/// The Watch pill is deliberately NOT here: Nuvio draws its call-to-action
+/// once, outside the per-page layers, so the button holds absolutely still
+/// while the words slide and cross-dissolve behind it. `FeaturedCarousel`
+/// owns it.
 struct NuvioHeroContent: View {
     let channel: StreamChannel
     let program: EPGProgram?
@@ -3226,39 +3294,32 @@ struct NuvioHeroContent: View {
     }
 
     var body: some View {
-        VStack {
-            Spacer(minLength: 0)
-            VStack(spacing: 13) {
-                Group {
-                    if hasMatchup, let g = game {
-                        let away = g.awayCompetitor?.team?.shortDisplayName ?? "—"
-                        let home = g.homeCompetitor?.team?.shortDisplayName ?? "—"
-                        if g.status.type.state == "pre" {
-                            Text("\(away) vs \(home)")
-                        } else {
-                            Text("\(away) \(g.awayCompetitor?.score ?? "0") – \(g.homeCompetitor?.score ?? "0") \(home)")
-                        }
+        VStack(spacing: 13) {
+            Group {
+                if hasMatchup, let g = game {
+                    let away = g.awayCompetitor?.team?.shortDisplayName ?? "—"
+                    let home = g.homeCompetitor?.team?.shortDisplayName ?? "—"
+                    if g.status.type.state == "pre" {
+                        Text("\(away) vs \(home)")
                     } else {
-                        Text(channel.name)
+                        Text("\(away) \(g.awayCompetitor?.score ?? "0") – \(g.homeCompetitor?.score ?? "0") \(home)")
                     }
+                } else {
+                    Text(channel.name)
                 }
-                .font(.system(size: 30, weight: .heavy))
-                .foregroundStyle(.white)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .minimumScaleFactor(0.6)
-                .padding(.horizontal, 28)
-                .shadow(color: .black.opacity(0.6), radius: 8, x: 0, y: 2)
-
-                NuvioMetadataLine(parts: metadataParts)
-                    .padding(.horizontal, 24)
-
-                NuvioPillButton(title: game != nil ? "Watch" : "Watch Now", action: onPlay)
-                    .padding(.top, 3)
             }
-            // Room for the carousel's page dots below the pill.
-            .padding(.bottom, 44)
+            .font(.system(size: 30, weight: .heavy))
+            .foregroundStyle(.white)
+            .multilineTextAlignment(.center)
+            .lineLimit(2)
+            .minimumScaleFactor(0.6)
+            .padding(.horizontal, 28)
+            .shadow(color: .black.opacity(0.6), radius: 8, x: 0, y: 2)
+
+            NuvioMetadataLine(parts: metadataParts)
+                .padding(.horizontal, 24)
         }
+        .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
         .onTapGesture(perform: onPlay)
     }
