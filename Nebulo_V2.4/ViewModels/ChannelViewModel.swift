@@ -2309,7 +2309,11 @@ class ChannelViewModel: ObservableObject {
             let originalID = mutable[i].id
             
             mutable[i] = StreamCategory(id: originalID + idOffset, name: mutable[i].name)
-            if let custom = renames[originalID] { mutable[i].name = custom }
+            // Renames are stored under the DISPLAYED id (raw + idOffset) — the
+            // same id renameCategory is handed. Looking them up under the raw
+            // id here meant a rename made before the first saveCategorySettings
+            // was dropped on the next launch.
+            if let custom = renames[originalID + idOffset] { mutable[i].name = custom }
             mutable[i].order = i + idOffset
         }
         return mutable.sorted { $0.order < $1.order }

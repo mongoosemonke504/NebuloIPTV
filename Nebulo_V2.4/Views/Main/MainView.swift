@@ -1201,8 +1201,21 @@ struct StandardLayout: SwiftUI.View {
                     // A rename changes a name but not the count, so refresh the
                     // cached shelves on the rename signal too — otherwise the
                     // new name only showed after a relaunch.
+                    //
+                    // `homeRows` has to be rebuilt HERE, in the same task, not
+                    // left to the spotlight/shelf-count task below: that task's
+                    // key is built from two counts, and a rename changes
+                    // neither, so it never re-fired. The rows kept the
+                    // StreamCategory values captured when they were first
+                    // built, and every shelf header went on drawing the old
+                    // name no matter how many times shelfCategories refreshed.
+                    // Doing both here also fixes the ordering — computeHomeRows
+                    // reads shelfCategories, so it must run after
+                    // setGroupedCategories, which two independent tasks could
+                    // not guarantee.
                     .task(id: viewModel.categoryRevision) {
                         setGroupedCategories(groupedCategories)
+                        homeRows = computeHomeRows()
                     }
                     .task(id: viewModel.channels.count) {
                         // Build the id → channel lookup. Done off the body so
