@@ -80,7 +80,6 @@ nonisolated enum LeagueDetailService {
 
         return (res.children ?? []).enumerated().compactMap { idx, child in
             guard let entries = child.standings?.entries, !entries.isEmpty else { return nil }
-            // ESPN returns entries pre-sorted by rank — preserve that order.
             let rows: [StandingRow] = entries.map { entry in
                 func stat(_ names: [String]) -> String {
                     for n in names {
@@ -98,8 +97,13 @@ nonisolated enum LeagueDetailService {
                                     shortDisplayName: t?.shortDisplayName,
                                     logo: t?.logos?.first?.href,
                                     color: nil)
+                // Football reports `rank`; every US league reports
+                // `playoffSeed` instead and no rank at all. A seed of 0 is
+                // ESPN's "not seeded yet" (the whole NFL preseason), so it's
+                // treated as missing rather than printed as position zero.
+                let position = stat(["rank", "playoffSeed"])
                 return StandingRow(id: team.id,
-                                   rank: stat(["rank"]),
+                                   rank: (Int(position) ?? 0) > 0 ? position : "–",
                                    team: team,
                                    played: stat(["gamesPlayed"]),
                                    wins: stat(["wins"]),
@@ -114,7 +118,67 @@ nonisolated enum LeagueDetailService {
             }
             return StandingsGroup(id: child.name ?? "\(idx)",
                                   name: child.name ?? "Standings",
-                                  rows: rows)
+                                  rows: sortedByPosition(rows))
+        }
+    }
+
+    /// Puts a table in table order.
+    ///
+    /// Only football's standings arrive sorted, and only football reports a
+    /// `rank`. Everything else hands back entries in an order of its own — the
+    /// Western Conference came out Lakers (.646) above Spurs (.756) — and since
+    /// the row index was also the fallback position, every number in the "#"
+    /// column was wrong too.
+    ///
+    /// The US leagues' `playoffSeed` is NOT a substitute: baseball's is
+    /// division-winners-then-wildcards, which put the Yankees (.567) below the
+    /// White Sox (.524). So those tables are ordered by record and numbered by
+    /// their own position, which is what a standings table means.
+    private static func sortedByPosition(_ rows: [StandingRow]) -> [StandingRow] {
+        func number(_ text: String) -> Double {
+            Double(text.replacingOccurrences(of: "+", with: "")) ?? -.greatestFiniteMagnitude
+        }
+        // Same discriminator StandingsColumns uses to choose its column set.
+        let isAmerican = rows.contains { $0.gamesBehind != "–" }
+
+        if !isAmerican {
+            func position(_ row: StandingRow) -> Int? {
+                guard let n = Int(row.rank), n > 0 else { return nil }
+                return n
+            }
+            if rows.allSatisfy({ position($0) != nil }) {
+                return rows.sorted { position($0)! < position($1)! }
+            }
+            return rows.sorted { a, b in
+                let pa = number(a.points), pb = number(b.points)
+                if pa != pb { return pa > pb }
+                return number(a.goalDiff) > number(b.goalDiff)
+            }
+        }
+
+        // Win percentage is the currency in basketball, baseball and football;
+        // hockey reports none at all and keeps score in points.
+        let usesWinPercent = rows.contains { $0.winPercent != "–" }
+        let ordered = rows.sorted { a, b in
+            if usesWinPercent {
+                let pa = number(a.winPercent), pb = number(b.winPercent)
+                if pa != pb { return pa > pb }
+            } else {
+                let pa = number(a.points), pb = number(b.points)
+                if pa != pb { return pa > pb }
+            }
+            let wa = number(a.wins), wb = number(b.wins)
+            if wa != wb { return wa > wb }
+            return number(a.goalDiff) > number(b.goalDiff)
+        }
+        // Drop the seed so the "#" column shows the table position instead of a
+        // playoff seed that disagrees with the order the rows are in.
+        return ordered.map { row in
+            StandingRow(id: row.id, rank: "–", team: row.team, played: row.played,
+                        wins: row.wins, draws: row.draws, losses: row.losses,
+                        goalDiff: row.goalDiff, points: row.points,
+                        winPercent: row.winPercent, gamesBehind: row.gamesBehind,
+                        noteColor: row.noteColor, noteText: row.noteText)
         }
     }
 

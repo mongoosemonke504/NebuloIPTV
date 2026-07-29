@@ -1,14 +1,17 @@
 import SwiftUI
 
-/// The page a favourited team opens. The hero behaves exactly like the home
-/// screen's — full-bleed behind the status bar, artwork parallaxing as you
+/// The page a favourited team opens — from the Favorites tab and from the home
+/// screen's Favorites shelf alike. The hero behaves exactly like the home
+/// screen's: full-bleed behind the status bar, artwork parallaxing as you
 /// scroll, stretching from its bottom edge when you rubber-band past the top —
 /// just without the pager, since there's only ever one team here.
 ///
-/// Below it, the reference football app's team layout in this app's language:
-/// next match, recent form, the team's own slice of the table, then the record
-/// splits, results, schedule and club info. Every section is about THIS team —
-/// nothing league-wide except the three table rows around them.
+/// Below it, the reference football app's team screen in this app's language,
+/// split across the same tabs: Overview, Matches, Table, Stats and Squad.
+/// Nothing here is football-only — the tabs, the columns and the roster
+/// sections all take their shape from what ESPN returns for the sport, so a
+/// baseball club gets Pitchers/Catchers/Infielders where a football club gets
+/// Goalkeepers/Defenders/Midfielders.
 struct TeamDetailPage: View {
     let team: ESPNTeam
     let leagueLabel: String?
@@ -17,16 +20,41 @@ struct TeamDetailPage: View {
     @ObservedObject var scoreViewModel: ScoreViewModel
     @Environment(\.dismiss) private var dismiss
 
+    enum Tab: String, CaseIterable, Identifiable {
+        case overview = "Overview"
+        case matches = "Matches"
+        case table = "Table"
+        case stats = "Stats"
+        case squad = "Squad"
+        var id: String { rawValue }
+    }
+
+    @State private var tab: Tab = .overview
     @State private var profile: TeamDetailService.Profile?
     @State private var schedule: [ESPNEvent] = []
     @State private var standings: [LeagueDetailService.StandingsGroup] = []
     @State private var squad: [TeamDetailService.Player] = []
+    @State private var squadPhotos: [String: String] = [:]
+    @State private var seasonStats: TeamDetailService.SeasonStats?
+    @State private var clubInfo: TeamDetailService.ClubInfo?
+    @State private var aboutExpanded = false
+    @State private var lastLineup: GDLineup?
+    @State private var lastLineupOpponent: String?
     @State private var loading = true
-    @State private var showFullTable = false
 
     /// Same two scroll-driven leaves the home hero uses.
     @State private var heroPull = ScrollProgress()
     @State private var heroScroll = ScrollProgress()
+    /// 0 → big title visible, 1 → collapsed onto the chrome row. A leaf so the
+    /// per-frame writes re-render the two faded views and nothing else.
+    @State private var titleProgress = ScrollProgress()
+
+    /// Horizontal-swipe plumbing, lifted from the Sports hub.
+    @State private var scrollLock = FlagBox()
+    @State private var swipeConsumed = false
+    @State private var isSliding = false
+    @State private var slideFromTrailing = true
+    @State private var chipBarFrame: CGRect = .zero
 
     private static let dateFmt: DateFormatter = {
         let f = DateFormatter(); f.dateStyle = .medium; f.timeStyle = .short; return f
@@ -38,7 +66,22 @@ struct TeamDetailPage: View {
         let f = DateFormatter(); f.dateFormat = "h:mm a"; return f
     }()
 
-    private var heroHeight: CGFloat { UIScreen.main.bounds.height * 0.60 }
+    /// Shorter than the home screen's hero. Home's fills the screen because
+    /// it's the whole point of that page; here the tabs and the content under
+    /// them are, and 60% of the screen pushed the chips most of a screen down.
+    private var heroHeight: CGFloat { UIScreen.main.bounds.height * 0.47 }
+
+    /// Where the pinned chip row has to come to rest: clear of the status bar
+    /// and the back chevron. The scroll view deliberately ignores the top safe
+    /// area (so the hero can bleed behind the status bar), which means a pinned
+    /// header would otherwise stick at the very top of the screen, under the
+    /// Dynamic Island.
+    private var pinnedInset: CGFloat {
+        let top = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow }
+            .first?.safeAreaInsets.top ?? 0
+        return top + 44
+    }
 
     // MARK: Derived
 
@@ -126,102 +169,173 @@ struct TeamDetailPage: View {
 
     private var leagueName: String { leagueLabel ?? profile?.leagueName ?? sport?.rawValue ?? "League" }
 
+    /// Squad sections in the order ESPN listed them — "Goalkeepers, Defenders,
+    /// Midfielders, Forwards" for football, "Pitchers, Catchers, …" for
+    /// baseball. Never alphabetised: the API order IS the meaningful one.
+    private var squadSections: [(title: String, players: [TeamDetailService.Player])] {
+        var order: [String] = []
+        var buckets: [String: [TeamDetailService.Player]] = [:]
+        for player in squad {
+            if buckets[player.group] == nil { order.append(player.group) }
+            buckets[player.group, default: []].append(player)
+        }
+        return order.map { (title: $0, players: buckets[$0] ?? []) }
+    }
+
+    /// Tabs with nothing behind them are dropped rather than opening empty —
+    /// plenty of competitions have no table, and some sports no roster.
+    private var availableTabs: [Tab] {
+        Tab.allCases.filter { t in
+            switch t {
+            case .overview: return true
+            case .matches:  return !allGames.isEmpty
+            case .table:    return standingsGroup != nil
+            case .stats:    return seasonStats != nil || !(profile?.records.isEmpty ?? true)
+            case .squad:    return !squad.isEmpty
+            }
+        }
+    }
+
     // MARK: Body
 
     var body: some View {
         ZStack(alignment: .top) {
             AppBackground().ignoresSafeArea()
 
+            // One scroll for the whole page, same shape as the Sports hub: the
+            // hero and the title block are ordinary content that scrolls away,
+            // and the chip row rides in a PINNED section header so it's always
+            // reachable no matter how deep a 90-man roster goes.
             ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 30) {
+                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                     hero
                         .modifier(HeroStretch(pull: heroPull, height: heroHeight))
+                        // Cancels the pinned header's own top padding (see
+                        // pinnedChipHeader) so the chips sit tight under the
+                        // hero until the moment they pin. It has to hang off the
+                        // HERO, not off the zero-height probe below: SwiftUI
+                        // won't take a view's height below zero, so negative
+                        // padding on the probe was silently dropped and left a
+                        // ~120pt hole above the chips.
+                        .padding(.bottom, -pinnedInset)
 
-                    if let game = liveGame ?? nextGame {
-                        section(liveGame != nil ? "Live Now" : "Next Match") {
-                            nextMatchCard(game)
-                        }
-                    }
+                    // Zero-height anchor: reports where the chip row sits so the
+                    // compact title and the scrim can fade in exactly as it pins.
+                    ScrollOffsetProbe(space: "teamScroll", id: "team")
 
-                    if recentResults.count >= 2 {
-                        section("Form") { formStrip }
-                    }
-
-                    if !tableSlice.isEmpty {
-                        section(leagueName, chevron: standingsGroup != nil) {
-                            showFullTable = true
-                        } content: {
-                            tableSliceCard
-                        }
-                    }
-
-                    if let records = profile?.records, !records.isEmpty {
-                        section("Record") { recordGrid(records) }
-                    }
-
-                    if !recentResults.isEmpty {
-                        section("Recent Results") {
-                            VStack(spacing: 10) {
-                                ForEach(recentResults.prefix(8)) { gameRow($0) }
+                    Section(header: pinnedChipHeader) {
+                        // ZStack so the outgoing and incoming tab overlap during
+                        // the directional slide instead of stacking vertically.
+                        ZStack(alignment: .top) {
+                            Group {
+                                switch tab {
+                                case .overview: overviewTab
+                                case .matches:  matchesTab
+                                case .table:    tableTab
+                                case .stats:    statsTab
+                                case .squad:    squadTab
+                                }
                             }
-                            .padding(.horizontal, 16)
+                            .id(tab)
+                            .transition(.asymmetric(
+                                insertion: .move(edge: slideFromTrailing ? .trailing : .leading).combined(with: .opacity),
+                                removal: .move(edge: slideFromTrailing ? .leading : .trailing).combined(with: .opacity)
+                            ))
                         }
-                    }
+                        .padding(.top, 12)
 
-                    if upcoming.count > 1 {
-                        section("Schedule") {
-                            VStack(spacing: 10) {
-                                ForEach(upcoming.dropFirst(liveGame == nil ? 1 : 0).prefix(12)) { gameRow($0) }
+                        if loading && profile == nil {
+                            HStack {
+                                Spacer()
+                                CustomSpinner(color: .white.opacity(0.5), lineWidth: 2, size: 22)
+                                Spacer()
                             }
-                            .padding(.horizontal, 16)
+                            .padding(.vertical, 30)
                         }
-                    }
 
-                    if !squad.isEmpty {
-                        section("Squad") { squadShelf }
+                        Color.clear.frame(height: 60)
                     }
-
-                    if profile?.venueName != nil || profile?.location != nil {
-                        section("Club Info") { infoCard }
-                    }
-
-                    if loading && profile == nil {
-                        HStack {
-                            Spacer()
-                            CustomSpinner(color: .white.opacity(0.5), lineWidth: 2, size: 22)
-                            Spacer()
-                        }
-                        .padding(.vertical, 30)
-                    }
-
-                    Color.clear.frame(height: 60)
                 }
             }
             // The hero bleeds behind the status bar, exactly like home's.
             .ignoresSafeArea(.container, edges: .top)
+            .coordinateSpace(name: "teamScroll")
+            // Frozen for the duration of a horizontal swipe, so a sideways
+            // gesture travels purely sideways.
+            .scrollLocked(scrollLock)
+            .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
+                guard let y = offsets["team"] else { return }
+                // `y` is the chip header's distance below the top of the visible
+                // scroll frame, so it hits 0 exactly when the header pins. The
+                // handover runs over the last 90pt of that travel, so the big
+                // title fades out as the compact one in the chrome row fades in.
+                let span: CGFloat = 90
+                titleProgress.set(min(max((span - y) / span, 0), 1))
+            }
             .onScrollGeometryChange(for: CGFloat.self) { geo in
                 geo.contentOffset.y + geo.contentInsets.top
             } action: { _, scrolled in
                 heroPull.set(max(0, -scrolled))
                 heroScroll.set(min(max(0, scrolled), heroHeight))
             }
+            // Sideways swipe anywhere on the content turns the page, the same
+            // gesture the Sports hub and Favorites use. Drags starting on the
+            // chip row scroll the chips instead, and the left screen edge stays
+            // reserved for back navigation.
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 10, coordinateSpace: .global)
+                    .onChanged { value in
+                        let dx = value.translation.width
+                        let dy = value.translation.height
+                        if abs(dx) > abs(dy) * 1.4 { SwipeTapGuard.suppress() }
+                        if value.startLocation.x > 44, !chipBarFrame.contains(value.startLocation) {
+                            if abs(dx) > abs(dy) * 1.4 {
+                                scrollLock.set(true)
+                            } else if !swipeConsumed, abs(dy) > abs(dx) * 1.4 {
+                                // A drag that turns decisively vertical releases
+                                // the lock, so this can never strand the page.
+                                scrollLock.set(false)
+                            }
+                        }
+                        guard !swipeConsumed, !isSliding,
+                              value.startLocation.x > 44,
+                              !chipBarFrame.contains(value.startLocation),
+                              abs(dx) > 38, abs(dx) > abs(dy) * 1.4 else { return }
+                        swipeConsumed = true
+                        advanceTab(dx < 0 ? 1 : -1)
+                    }
+                    .onEnded { _ in
+                        swipeConsumed = false
+                        scrollLock.set(false)
+                    }
+            )
 
-            // Static chrome — the catalog page's circular back chevron.
-            HStack {
+            // Static chrome — the catalog page's circular back chevron, with
+            // the compact team name fading in as the big one scrolls off.
+            HStack(spacing: 10) {
                 NuvioCircleButton(systemName: "chevron.left") {
                     viewModel.triggerSelectionHaptic()
                     dismiss()
                 }
-                Spacer()
+                Spacer(minLength: 0)
+                Text(displayName)
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .scrollProgressOpacity(titleProgress) { Double($0) }
+                Spacer(minLength: 0)
+                // Balances the chevron so the title sits centred.
+                Color.clear.frame(width: 38, height: 38)
             }
             .padding(.horizontal, 16)
             .padding(.top, 4)
         }
         .preferredColorScheme(.dark)
-        .sheet(isPresented: $showFullTable) {
-            if let group = standingsGroup {
-                FullTableSheet(group: group, highlightTeamID: team.id)
-            }
+        .onAppear {
+            // No swipe can be in flight on arrival, so never inherit a frozen
+            // scroll from a gesture cancelled on the way out.
+            scrollLock.set(false)
         }
         .task(id: team.id) {
             loading = true
@@ -232,12 +346,68 @@ struct TeamDetailPage: View {
                 return await LeagueDetailService.fetchStandings(sport: sport, leagueLabel: leagueLabel)
             }()
             async let r = TeamDetailService.fetchRoster(sport: sport, leagueLabel: leagueLabel, teamID: team.id)
+            async let st = TeamDetailService.fetchSeasonStats(sport: sport, leagueLabel: leagueLabel, teamID: team.id)
             profile = await p
             schedule = await s
             standings = await t
             squad = await r
+            seasonStats = await st
             loading = false
+
+            // These depend on the roster/schedule/profile above, so they run
+            // after rather than alongside — and none blocks the page appearing.
+            await resolveSquadPhotos()
+            clubInfo = await TeamDetailService.fetchClubInfo(
+                names: [displayName, team.shortDisplayName].compactMap { $0 },
+                sport: sport
+            )
+            await loadLastLineup()
         }
+        // A tab whose data never arrived would strand the page on a blank
+        // panel; drop back to Overview, which always has something.
+        .onChange(of: availableTabs.map(\.rawValue)) { _, tabs in
+            if !tabs.contains(tab.rawValue) { tab = .overview }
+        }
+    }
+
+    // MARK: Loading
+
+    /// Football rosters carry a photo for roughly one player in ten, so the
+    /// rest are resolved by name in a single batched lookup.
+    private func resolveSquadPhotos() async {
+        let missing = squad.filter { ($0.headshot ?? "").isEmpty }.map(\.name)
+        guard !missing.isEmpty else { return }
+        squadPhotos = await PlayerPhotoService.shared.photos(for: missing, sport: sport)
+    }
+
+    /// The XI that started this team's most recent finished game — the
+    /// reference app's "Last starting XI". Only football summaries carry
+    /// formations, so this simply stays nil everywhere else and the section
+    /// doesn't appear.
+    private func loadLastLineup() async {
+        guard let game = recentResults.first else { return }
+        let gameSport = scoreViewModel.sportType(for: game)
+        let request = scoreViewModel.makeDetailRequest(for: game, sport: gameSport)
+        guard let url = GameDetailViewModel.summaryURL(for: request),
+              let summary = try? await GameDetailViewModel.prefetchSummary(url: url),
+              let roster = summary.rosters?.first(where: { $0.team?.id == team.id })
+        else { return }
+
+        let names = (roster.roster ?? []).compactMap { $0.athlete?.displayName }
+        let photos = await PlayerPhotoService.shared.photos(for: names, sport: sport)
+
+        lastLineup = GameDetailViewModel.buildLineup(
+            roster: roster,
+            ratingsAvailable: true,
+            headshot: { athlete in
+                if let href = athlete?.headshot?.href, !href.isEmpty { return href }
+                guard let name = athlete?.displayName else { return nil }
+                return photos[name]
+            },
+            age: { _ in nil }
+        )
+        let opponent = game.allCompetitions.first?.competitors?.first { $0.team?.id != team.id }
+        lastLineupOpponent = opponent?.team?.shortDisplayName ?? opponent?.team?.displayName
     }
 
     // MARK: Hero
@@ -281,6 +451,10 @@ struct TeamDetailPage: View {
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
 
+                // Name, competition and record sit under the crest, inside the
+                // hero. The chip row directly below is the page's only other
+                // fixed furniture, and the compact copy of the name lives in the
+                // chrome row for when this has scrolled away.
                 VStack(spacing: 13) {
                     Text(displayName)
                         .font(.system(size: 30, weight: .heavy))
@@ -313,7 +487,354 @@ struct TeamDetailPage: View {
         .clipped()
     }
 
-    // MARK: Sections
+    // MARK: Pinned chips
+
+    /// Sticky section header: the tab chips.
+    ///
+    /// All five share the width evenly rather than scrolling sideways — a row
+    /// you had to scroll to reach the last chip made the tabs feel hidden. The
+    /// labels shrink to fit inside their share instead.
+    private var pinnedChipHeader: some View {
+        HStack(spacing: 6) {
+            ForEach(availableTabs) { t in
+                Button(action: {
+                    guard SwipeTapGuard.tapsAllowed else { return }
+                    viewModel.triggerSelectionHaptic()
+                    selectTab(t)
+                }) {
+                    Text(t.rawValue)
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(tab == t ? .black : .white.opacity(0.85))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 9)
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            Capsule().fill(tab == t ? Color.white : Color(white: 0.15))
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        // Pushes the chips clear of the status bar and back chevron once the
+        // header pins; the title block above cancels it out beforehand.
+        .padding(.top, pinnedInset)
+        .captureGlobalFrame { chipBarFrame = $0 }
+        // Dims the content passing underneath, and only once the header is
+        // actually pinned — at the top of the page it would otherwise wash over
+        // the title block sitting inside its padding.
+        .background(alignment: .top) {
+            CompactHeaderScrim(height: pinnedInset + 120, fadeStart: 0.55)
+                .scrollProgressOpacity(titleProgress) { Double($0 * $0) }
+        }
+    }
+
+    /// Switches tab with the app's directional slide. Nothing moves vertically:
+    /// the page stays exactly where it is unless the chips haven't pinned yet.
+    private func selectTab(_ newTab: Tab) {
+        guard newTab != tab, !isSliding else { return }
+        let tabs = availableTabs
+        let oldIndex = tabs.firstIndex(of: tab) ?? 0
+        let newIndex = tabs.firstIndex(of: newTab) ?? 0
+        slideFromTrailing = newIndex > oldIndex
+        isSliding = true
+        withAnimation(.easeOut(duration: 0.25)) { tab = newTab }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { isSliding = false }
+    }
+
+    /// Steps to the previous/next chip — what the sideways swipe drives. No
+    /// haptic: a buzz on every page swipe breaks the feel.
+    private func advanceTab(_ delta: Int) {
+        let tabs = availableTabs
+        guard let index = tabs.firstIndex(of: tab) else { return }
+        let next = index + delta
+        guard tabs.indices.contains(next) else { return }
+        selectTab(tabs[next])
+    }
+
+    // MARK: Overview
+
+    @ViewBuilder
+    private var overviewTab: some View {
+        VStack(alignment: .leading, spacing: 26) {
+            if let game = liveGame ?? nextGame {
+                section(liveGame != nil ? "Ongoing" : "Next Match") {
+                    nextMatchCard(game)
+                }
+            }
+
+            if recentResults.count >= 2 {
+                section("Team Form") { formStrip }
+            }
+
+            if let lineup = lastLineup, !lineup.rows.isEmpty {
+                section(lastLineupOpponent.map { "Last Starting XI · vs \($0)" } ?? "Last Starting XI") {
+                    FormationPitchView(
+                        rows: lineup.rows,
+                        teamColor: brand,
+                        // All-or-nothing, same rule as the match page: a pitch
+                        // with three photos and eight initials looks broken.
+                        showPhotos: lineup.rows.allSatisfy { row in
+                            row.allSatisfy { !($0.headshot ?? "").isEmpty }
+                        }
+                    )
+                    .padding(.horizontal, 20)
+                }
+            }
+
+            if !tableSlice.isEmpty {
+                section(leagueName, chevron: standingsGroup != nil) {
+                    tab = .table
+                } content: {
+                    tableSliceCard
+                }
+            }
+
+            if hasStadiumInfo {
+                section("Stadium") { infoCard }
+            }
+
+            if let about = clubInfo?.about {
+                section("About") { aboutCard(about) }
+            }
+
+            // Everything above is conditional, so say so rather than leaving a
+            // hero floating over blank canvas.
+            if !loading && liveGame == nil && nextGame == nil && recentResults.count < 2
+                && tableSlice.isEmpty && !hasStadiumInfo && clubInfo?.about == nil {
+                emptyNote("No details available for this team yet")
+            }
+        }
+    }
+
+    // MARK: Matches
+
+    @ViewBuilder
+    private var matchesTab: some View {
+        VStack(alignment: .leading, spacing: 26) {
+            if let game = liveGame {
+                section("Ongoing") { nextMatchCard(game) }
+            }
+
+            if !upcoming.isEmpty {
+                section("Upcoming Matches") {
+                    VStack(spacing: 10) {
+                        ForEach(upcoming.prefix(30)) { gameRow($0) }
+                    }
+                    .padding(.horizontal, 16)
+                }
+            }
+
+            if !recentResults.isEmpty {
+                section("Past Matches") {
+                    VStack(spacing: 10) {
+                        ForEach(recentResults.prefix(30)) { gameRow($0) }
+                    }
+                    .padding(.horizontal, 16)
+                }
+            }
+
+            if allGames.isEmpty { emptyNote("No fixtures for this team yet") }
+        }
+    }
+
+    // MARK: Table
+
+    @ViewBuilder
+    private var tableTab: some View {
+        if let group = standingsGroup {
+            VStack(alignment: .leading, spacing: 16) {
+                if standings.count > 1, !group.name.isEmpty {
+                    NuvioSectionHeader(title: group.name, inset: 20)
+                }
+                StandingsBoard(group: group, highlightTeamID: team.id)
+                StandingsLegend(rows: group.rows)
+            }
+        } else {
+            emptyNote("No table for this competition")
+        }
+    }
+
+    // MARK: Stats
+
+    @ViewBuilder
+    private var statsTab: some View {
+        VStack(alignment: .leading, spacing: 26) {
+            if let records = profile?.records, !records.isEmpty {
+                section(profile?.standingSummary ?? "Record") { recordGrid(records) }
+            }
+
+            if let stats = seasonStats {
+                ForEach(stats.categories) { category in
+                    section(category.name) { statCard(category) }
+                }
+            } else if profile?.records.isEmpty ?? true {
+                emptyNote("No season stats yet")
+            }
+
+            if let label = seasonStats?.seasonLabel {
+                Text(label)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .padding(.horizontal, 22)
+            }
+        }
+    }
+
+    private func statCard(_ category: TeamDetailService.StatCategory) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(category.stats.enumerated()), id: \.element.id) { index, stat in
+                HStack(spacing: 12) {
+                    Text(stat.label)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .lineLimit(2)
+                    Spacer(minLength: 8)
+                    Text(stat.value)
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(.white)
+                        .monospacedDigit()
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                if index < category.stats.count - 1 {
+                    Rectangle()
+                        .fill(Color.white.opacity(0.06))
+                        .frame(height: 0.5)
+                        .padding(.leading, 14)
+                }
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(NuvioTheme.card)
+        )
+        .padding(.horizontal, 20)
+    }
+
+    // MARK: Squad
+
+    @ViewBuilder
+    private var squadTab: some View {
+        LazyVStack(alignment: .leading, spacing: 26) {
+            ForEach(squadSections, id: \.title) { squadSection in
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack {
+                        NuvioSectionHeader(title: squadSection.title, inset: 20)
+                        Spacer(minLength: 8)
+                        // Only label the age column when there are ages behind
+                        // it — the NFL roster feed carries none.
+                        if squadSection.players.contains(where: { $0.age != nil }) {
+                            Text("Age")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.45))
+                                .padding(.trailing, 34)
+                        }
+                    }
+                    VStack(spacing: 0) {
+                        ForEach(Array(squadSection.players.enumerated()), id: \.element.id) { index, player in
+                            squadRow(player)
+                            if index < squadSection.players.count - 1 {
+                                Rectangle()
+                                    .fill(Color.white.opacity(0.06))
+                                    .frame(height: 0.5)
+                                    .padding(.leading, 68)
+                            }
+                        }
+                    }
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(NuvioTheme.card)
+                    )
+                    .padding(.horizontal, 20)
+                }
+            }
+        }
+    }
+
+    private func squadRow(_ player: TeamDetailService.Player) -> some View {
+        let photo = (player.headshot?.isEmpty == false) ? player.headshot! : (squadPhotos[player.name] ?? "")
+        return HStack(spacing: 12) {
+            ZStack {
+                Circle().fill(Color(white: 0.15))
+                if photo.isEmpty {
+                    Text(initials(of: player.name))
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.6))
+                } else {
+                    // `size:` on CachedAsyncImage IS the frame, not a decode
+                    // hint — passing 88 drew an 88pt photo inside a 44pt row,
+                    // and a ZStack doesn't clip its children, so every headshot
+                    // spilled over the rows above and below. The decode stays at
+                    // 2× for retina via `decodeSize`.
+                    CachedAsyncImage(
+                        urlString: photo,
+                        size: CGSize(width: 44, height: 44),
+                        contentMode: .fill,
+                        decodeSize: CGSize(width: 132, height: 132)
+                    )
+                    .clipShape(Circle())
+                }
+            }
+            .frame(width: 44, height: 44)
+            .clipShape(Circle())
+            .overlay(Circle().stroke(Color.white.opacity(0.10), lineWidth: 0.5))
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 7) {
+                    if let jersey = player.jersey, !jersey.isEmpty {
+                        Text(jersey)
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.55))
+                            .monospacedDigit()
+                    }
+                    Text(player.name)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+                HStack(spacing: 6) {
+                    if let flag = player.flag, !flag.isEmpty {
+                        CachedAsyncImage(urlString: flag,
+                                         size: CGSize(width: 16, height: 16),
+                                         decodeSize: CGSize(width: 48, height: 48))
+                            .clipShape(Circle())
+                    }
+                    // Football gives a nationality, the US leagues a birth
+                    // country; whichever came back is "where they're from".
+                    // With neither, the position label carries the row.
+                    Text(player.country ?? player.position ?? "")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 8)
+
+            if let age = player.age {
+                Text("\(age)")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .monospacedDigit()
+                    .frame(width: 26, alignment: .trailing)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private func initials(of name: String) -> String {
+        let parts = name.split(separator: " ")
+        let letters = parts.prefix(2).compactMap { $0.first }
+        return String(letters).uppercased()
+    }
+
+    // MARK: Shared pieces
 
     @ViewBuilder
     private func section<Content: View>(
@@ -326,6 +847,14 @@ struct TeamDetailPage: View {
             NuvioSectionHeader(title: title, showsChevron: chevron, inset: 20, action: action)
             content()
         }
+    }
+
+    private func emptyNote(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(.white.opacity(0.5))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 36)
     }
 
     /// The reference app's "Next match" card: date on the left, competition on
@@ -422,12 +951,19 @@ struct TeamDetailPage: View {
                     openGameCard(game)
                 }) {
                     VStack(spacing: 8) {
-                        Text("\(ourScore) - \(theirScore)")
-                            .font(.system(size: 13, weight: .bold))
+                        // Basketball scores are three digits a side, which wrapped
+                        // "134 - 136" onto two lines inside the chip. One line
+                        // always, shrinking to fit, and the chip fills its column
+                        // so all five stay the same width.
+                        Text("\(ourScore)-\(theirScore)")
+                            .font(.system(size: 12, weight: .bold))
                             .foregroundStyle(.white)
                             .monospacedDigit()
-                            .padding(.horizontal, 9)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                            .padding(.horizontal, 5)
                             .padding(.vertical, 5)
+                            .frame(maxWidth: .infinity)
                             .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(tint))
                         CachedAsyncImage(urlString: them?.team?.logo ?? "",
                                          size: CGSize(width: 26, height: 26))
@@ -499,61 +1035,66 @@ struct TeamDetailPage: View {
         .padding(.horizontal, 20)
     }
 
-    /// The current squad — headshot, shirt number and position, in a shelf that
-    /// scrolls sideways like the rest of the app's rows.
-    private var squadShelf: some View {
-        TouchPassingHorizontalScroll {
-            HStack(alignment: .top, spacing: 14) {
-                ForEach(squad) { player in
-                    VStack(spacing: 8) {
-                        ZStack(alignment: .bottomTrailing) {
-                            CachedAsyncImage(urlString: player.headshot ?? "", size: nil)
-                                .padding(player.headshot == nil ? 16 : 0)
-                                .frame(width: 66, height: 66)
-                                .background(Circle().fill(Color(white: 0.15)))
-                                .clipShape(Circle())
-                                .overlay(Circle().stroke(Color.white.opacity(0.12), lineWidth: 0.5))
-                            if let jersey = player.jersey, !jersey.isEmpty {
-                                Text(jersey)
-                                    .font(.system(size: 10, weight: .black))
-                                    .foregroundStyle(.black)
-                                    .frame(width: 20, height: 20)
-                                    .background(Circle().fill(.white))
-                            }
-                        }
-                        VStack(spacing: 1) {
-                            Text(player.name)
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.9))
-                                .lineLimit(2)
-                                .multilineTextAlignment(.center)
-                            if let pos = player.position, !pos.isEmpty {
-                                Text(pos)
-                                    .font(.system(size: 10, weight: .medium))
-                                    .foregroundStyle(.white.opacity(0.5))
-                                    .lineLimit(1)
-                            }
-                        }
-                        .frame(width: 78)
-                    }
-                }
-            }
-            .padding(.horizontal, 20)
-        }
-        .frame(height: 66 + 8 + 44)
+    /// ESPN returns a completely empty venue object for football clubs, so the
+    /// stadium name and city come from the club lookup for those and from ESPN
+    /// for the US leagues, whichever answered.
+    private var stadiumName: String? { profile?.venueName ?? clubInfo?.stadium }
+    private var stadiumLocation: String? {
+        profile?.venueCity ?? clubInfo?.location ?? profile?.location
+    }
+    private var hasStadiumInfo: Bool {
+        stadiumName != nil || stadiumLocation != nil
+            || profile?.venueSurface != nil || clubInfo?.founded != nil
     }
 
     private var infoCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if let venue = profile?.venueName {
+            if let venue = stadiumName {
                 infoRow(icon: "sportscourt.fill", label: "Venue", value: venue)
             }
-            if let city = profile?.venueCity ?? profile?.location {
+            if let city = stadiumLocation {
                 infoRow(icon: "mappin.and.ellipse", label: "Location", value: city)
+            }
+            if let surface = profile?.venueSurface {
+                infoRow(icon: "leaf.fill", label: "Surface", value: surface)
+            }
+            if let founded = clubInfo?.founded {
+                infoRow(icon: "calendar", label: "Founded", value: founded)
             }
             if let abbr = profile?.abbreviation ?? team.abbreviation {
                 infoRow(icon: "tag.fill", label: "Abbreviation", value: abbr)
             }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(NuvioTheme.card)
+        )
+        .padding(.horizontal, 20)
+    }
+
+    /// Club history, collapsed to four lines with a Read more toggle — these
+    /// run to several paragraphs and would otherwise own the whole tab.
+    private func aboutCard(_ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(text)
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(.white.opacity(0.78))
+                .lineSpacing(3)
+                .lineLimit(aboutExpanded ? nil : 4)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button(action: {
+                guard SwipeTapGuard.tapsAllowed else { return }
+                viewModel.triggerSelectionHaptic()
+                withAnimation(.easeInOut(duration: 0.22)) { aboutExpanded.toggle() }
+            }) {
+                Text(aboutExpanded ? "Show less" : "Read more")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            .buttonStyle(.plain)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -610,31 +1151,5 @@ struct TeamDetailPage: View {
         let sport = scoreViewModel.sportType(for: game)
         scoreViewModel.deepLinkRequest = scoreViewModel.makeDetailRequest(for: game, sport: sport)
         dismiss()
-    }
-}
-
-/// The whole group's table, opened from the team page's section chevron with
-/// the team's own row still highlighted.
-struct FullTableSheet: View {
-    let group: LeagueDetailService.StandingsGroup
-    let highlightTeamID: String?
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        ZStack {
-            AppBackground().ignoresSafeArea()
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 14) {
-                    NuvioSectionHeader(title: group.name.isEmpty ? "Standings" : group.name, inset: 20)
-                        .padding(.top, 18)
-                    StandingsBoard(group: group, highlightTeamID: highlightTeamID)
-                    StandingsLegend(rows: group.rows)
-                    Color.clear.frame(height: 40)
-                }
-            }
-        }
-        .preferredColorScheme(.dark)
-        .presentationDetents([.large])
-        .presentationDragIndicator(.visible)
     }
 }

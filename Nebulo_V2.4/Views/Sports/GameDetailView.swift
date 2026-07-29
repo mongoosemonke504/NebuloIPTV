@@ -645,6 +645,11 @@ struct GameDetailContentView: View {
     /// Owned by the presenter — a tapped player publishes its stats carousel
     /// here so it renders full-screen above the whole detail.
     @EnvironmentObject private var playerHost: PlayerSheetHost
+    /// Feeds the Formula 1 / golf tabs. Idle (and never loaded) for every
+    /// other sport — see `FieldEventModel`.
+    @StateObject private var fieldModel = FieldEventModel()
+    /// Which session the race Results tab is showing.
+    @State private var raceSession: String?
     @State private var lineupSide = "home"
     @State private var boxSide = "home"
     @State private var scrolledTab: GDTab? = .overview
@@ -688,6 +693,15 @@ struct GameDetailContentView: View {
         case overview = "Overview"
         case stats = "Stats"
         case table = "Table"
+        // Field-sport tabs. A race weekend and a golf tournament have no two
+        // sides, so they replace Stats/Table rather than sitting beside them —
+        // see `availableTabs`.
+        case results = "Results"
+        case leaderboard = "Leaderboard"
+        case drivers = "Drivers"
+        case standings = "Standings"
+        case course = "Course"
+        case info = "Info"
     }
 
     init(request: GameDetailRequest, viewModel: ChannelViewModel, scoreViewModel: ScoreViewModel, accentColor: Color, onPageGame: @escaping (Int) -> Void = { _ in }) {
@@ -727,7 +741,40 @@ struct GameDetailContentView: View {
         !detail.boxGroups(homeAway: "home").isEmpty || !detail.boxGroups(homeAway: "away").isEmpty
     }
 
+    /// A race weekend or a golf tournament: a field of individual entrants on a
+    /// leaderboard, with no `summary` endpoint behind it. Those get their own
+    /// tabs and header inside this same card.
+    private var isRace: Bool { request.game.isRaceEvent }
+    private var isFieldEvent: Bool { request.game.isFieldEvent }
+
+    /// A field event never runs `detail.refreshLoop()` — there's no summary
+    /// endpoint to run it against — so `detail.isLoading` stays true forever
+    /// and would have parked the card on a spinner that never cleared. Its
+    /// spinner tracks the field loader instead.
+    private var showsLoadingSpinner: Bool {
+        if isFieldEvent {
+            return fieldModel.loading && fieldModel.tournament == nil && fieldModel.season == nil
+        }
+        return detail.isLoading && detail.summary == nil
+    }
+
     private var availableTabs: [GDTab] {
+        if isRace {
+            var tabs: [GDTab] = [.overview]
+            if request.game.raceSessions.contains(where: { !$0.order.isEmpty && $0.state != "pre" }) {
+                tabs.append(.results)
+            }
+            if !fieldModel.feeds.isEmpty { tabs.append(.drivers) }
+            if !(fieldModel.season?.standings.isEmpty ?? true) { tabs.append(.standings) }
+            // No Circuit tab — the track sits at the bottom of Overview.
+            return tabs
+        }
+        if isFieldEvent {
+            var tabs: [GDTab] = [.leaderboard]
+            if fieldModel.tournament?.course != nil { tabs.append(.course) }
+            if fieldModel.tournament != nil { tabs.append(.info) }
+            return tabs
+        }
         var tabs: [GDTab] = [.overview]
         if !detail.allStats.isEmpty || (!isSoccer && hasBoxScore) { tabs.append(.stats) }
         if !detail.standingsGroups.isEmpty { tabs.append(.table) }
@@ -769,11 +816,11 @@ struct GameDetailContentView: View {
 
                     watchButton
 
-                    if detail.isLoading && detail.summary == nil {
+                    if showsLoadingSpinner {
                         CustomSpinner(color: .white, lineWidth: 4, size: 36)
                             .frame(maxWidth: .infinity)
                             .padding(.top, 60)
-                    } else if detail.failed && detail.summary == nil {
+                    } else if !isFieldEvent && detail.failed && detail.summary == nil {
                         EmptyStateView(
                             title: "No Match Data",
                             systemImage: "chart.bar.xaxis",
@@ -899,7 +946,18 @@ struct GameDetailContentView: View {
         }
         .preferredColorScheme(.dark)
         .task(id: request.id) {
+            // Racing and golf have no summary endpoint, so the usual refresh
+            // loop has nothing to fetch — they load through FieldEventModel.
+            guard !isFieldEvent else { return }
             await detail.refreshLoop()
+        }
+        .task(id: request.id) {
+            guard isFieldEvent else { return }
+            // Open the field card on the tab that actually exists for it —
+            // `scrolledTab` starts on .overview, which golf doesn't have.
+            if let first = availableTabs.first, scrolledTab != first { scrolledTab = first }
+            await fieldModel.load(event: request.game, isRace: isRace, viewModel: viewModel)
+            if let first = availableTabs.first, !availableTabs.contains(tab) { scrolledTab = first }
         }
     }
 
@@ -965,7 +1023,43 @@ struct GameDetailContentView: View {
     /// team's score sits beside its logo, the status in the middle (with
     /// the mini base diamond while baseball is live). The tab chips aren't
     /// part of the bar — they're sticky content that docks just beneath it.
+    @ViewBuilder
     private var compactHeader: some View {
+        if isFieldEvent { fieldCompactHeader } else { matchupCompactHeader }
+    }
+
+    /// The collapsed bar for a field event: the series mark, the event name,
+    /// and the session or round — no scoreline to shrink down.
+    private var fieldCompactHeader: some View {
+        let session = isRace ? request.game.currentRaceSession : nil
+        let statusText = session.map { "\(ScoreRow.sessionName($0.label)) · \($0.detail)" }
+            ?? request.game.status.type.detail
+        let live = session.map { $0.state == "in" } ?? (request.game.status.type.state == "in")
+        return HStack(spacing: 10) {
+            CachedAsyncImage(urlString: isRace ? Self.f1Mark : Self.pgaMark,
+                             size: nil, contentMode: .fit)
+                .frame(width: 34, height: 26)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(request.game.shortName)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Text(statusText)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(live ? .red : .secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 22)
+        .padding(.bottom, 10)
+        .background(PinnedHeaderGradient())
+    }
+
+    private var matchupCompactHeader: some View {
         VStack(spacing: 10) {
             HStack(spacing: 10) {
                 CachedAsyncImage(urlString: detail.awaySide.logo ?? "", size: CGSize(width: 34, height: 34))
@@ -1132,9 +1226,42 @@ struct GameDetailContentView: View {
     @ViewBuilder
     private func tabContent(for candidate: GDTab) -> some View {
         switch candidate {
-        case .overview: overviewTab
+        case .overview:
+            if isRace {
+                // The circuit reads as part of the weekend, not a tab of its
+                // own — schedule, last result, then the track it's all on.
+                VStack(spacing: 14) {
+                    RaceWeekendPanel(race: request.game, model: fieldModel) { label in
+                        raceSession = label
+                        switchTab(to: .results)
+                        Task { await fieldModel.loadSession(label, eventID: request.game.id) }
+                    }
+                    if fieldModel.circuit != nil {
+                        RaceCircuitPanel(model: fieldModel)
+                    }
+                }
+            } else {
+                overviewTab
+            }
         case .stats: statsTab
         case .table: tableTab
+        case .results:
+            RaceResultsPanel(race: request.game, model: fieldModel, selectedSession: $raceSession) { label in
+                Task { await fieldModel.loadSession(label, eventID: request.game.id) }
+            }
+        case .drivers:
+            RaceDriversPanel(model: fieldModel) { channel in
+                // The app-wide play hook MainView listens on — the same one the
+                // smart search hands its winner to.
+                ChannelViewModel.shared.triggerSelectionHaptic()
+                dismiss()
+                withAnimation(.easeInOut(duration: 0.4)) { viewModel.channelToAutoPlay = channel }
+            }
+        case .standings: RaceStandingsPanel(model: fieldModel)
+        case .leaderboard:
+            GolfLeaderboardPanel(model: fieldModel, highlightPlayer: request.highlightPlayer)
+        case .course: GolfCoursePanel(model: fieldModel)
+        case .info: GolfInfoPanel(model: fieldModel, event: request.game)
         }
     }
 
@@ -1204,16 +1331,16 @@ struct GameDetailContentView: View {
         ZStack {
             // Same card base as the player-stats pages.
             Color(white: 0.10).ignoresSafeArea()
-            // Strong team-color wash, Apple Sports-style: away team floods
-            // in from the top-left, home from the top-right, both fading
-            // into the dark base toward the bottom.
+            // Strong colour wash, Apple Sports-style. Two team colours for a
+            // fixture; the series' own colour for a field event, which has no
+            // two sides to draw from.
             LinearGradient(
-                colors: [detail.awaySide.color.opacity(0.65), .clear],
+                colors: [(isFieldEvent ? fieldTint : detail.awaySide.color).opacity(0.65), .clear],
                 startPoint: .topLeading,
                 endPoint: UnitPoint(x: 0.65, y: 0.75)
             )
             LinearGradient(
-                colors: [detail.homeSide.color.opacity(0.55), .clear],
+                colors: [(isFieldEvent ? fieldTint : detail.homeSide.color).opacity(0.55), .clear],
                 startPoint: .topTrailing,
                 endPoint: UnitPoint(x: 0.35, y: 0.75)
             )
@@ -1221,9 +1348,73 @@ struct GameDetailContentView: View {
         .ignoresSafeArea()
     }
 
+    /// Formula 1's red, the PGA TOUR's navy.
+    private var fieldTint: Color {
+        isRace ? Color(red: 0.88, green: 0.02, blue: 0.02)
+               : Color(red: 0.06, green: 0.20, blue: 0.44)
+    }
+
     // MARK: Header
 
+    @ViewBuilder
     private var headerCard: some View {
+        if isFieldEvent { fieldHeaderCard } else { matchupHeaderCard }
+    }
+
+    /// The header for a race weekend or a golf tournament: the series mark, the
+    /// event, where it's being held, and the session/round with its clock —
+    /// what a scoreline says for a fixture.
+    private var fieldHeaderCard: some View {
+        let session = isRace ? request.game.currentRaceSession : nil
+        let statusText = session.map { "\(ScoreRow.sessionName($0.label)) · \($0.detail)" }
+            ?? request.game.status.type.detail
+        let live = session.map { $0.state == "in" } ?? (request.game.status.type.state == "in")
+        return VStack(spacing: 10) {
+            Text((isRace ? "Formula 1" : "PGA Tour").uppercased())
+                .font(.system(size: 12, weight: .black))
+                .foregroundStyle(.secondary)
+
+            CachedAsyncImage(urlString: isRace ? Self.f1Mark : Self.pgaMark,
+                             size: nil, contentMode: .fit)
+                .frame(maxWidth: isRace ? 150 : 84, maxHeight: isRace ? 74 : 88)
+
+            Text(request.game.shortName)
+                .font(.system(size: 22, weight: .heavy))
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.6)
+
+            if let venue = fieldVenue {
+                Text(venue)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Text(statusText)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(live ? .red : .secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 4)
+    }
+
+    private var fieldVenue: String? {
+        if isRace {
+            return fieldModel.circuit?.name ?? request.game.circuit?.fullName
+        }
+        return fieldModel.tournament?.course?.name
+    }
+
+    private static let f1Mark =
+        "https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500-dark/f1.png&w=800&h=800"
+    private static let pgaMark =
+        "https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500-dark/pgatour.png&w=800&h=800"
+
+    private var matchupHeaderCard: some View {
         VStack(spacing: 10) {
             if let league = detail.leagueName {
                 Text(league.uppercased())
@@ -1291,24 +1482,34 @@ struct GameDetailContentView: View {
 
     // MARK: Watch
 
+    /// Racing's live state lives on its sessions, not the event — see
+    /// `ESPNEvent.isLiveNow`.
+    private var watchButtonTitle: String {
+        if isFieldEvent { return request.game.isLiveNow ? "Watch Live" : "Find Stream" }
+        return detail.statusState == "in" ? "Watch Live" : "Find Stream"
+    }
+
     private var watchButton: some View {
         HStack(spacing: 10) {
             Button {
                 ChannelViewModel.shared.triggerHaptic(.medium)
-                let home = detail.homeSide.name
-                let away = detail.awaySide.name
+                // A field event has no two sides to search on — the event's own
+                // name is the term that matches a channel (see searchTerms).
+                let terms = isFieldEvent
+                    ? request.game.searchTerms
+                    : (home: detail.homeSide.name, away: detail.awaySide.name)
                 dismiss()
                 viewModel.runSmartSearch(
                     gameID: request.game.id,
-                    home: home,
-                    away: away,
+                    home: terms.home,
+                    away: terms.away,
                     sport: request.sport,
                     network: request.game.broadcastName
                 )
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "play.fill")
-                    Text(detail.statusState == "in" ? "Watch Live" : "Find Stream")
+                    Text(watchButtonTitle)
                     if let network = request.game.broadcastName {
                         Text(network)
                             .font(.system(size: 11, weight: .black))

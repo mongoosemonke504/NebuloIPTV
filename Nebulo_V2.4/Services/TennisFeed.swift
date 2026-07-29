@@ -240,6 +240,12 @@ extension ESPNEvent {
     /// the playlist, and channel/EPG rows never carry the initial anyway).
     nonisolated var searchTerms: (home: String, away: String) {
         if tennisPath != nil { return TennisFeed.searchTerms(for: self) }
+        // A race weekend or a golf tournament is a FIELD event: dozens of
+        // individual entrants and no two sides. Taking the top two names got a
+        // stream search hunting for "Verstappen" and "Hamilton" when the channel
+        // is called "SKY SPORTS F1" — the event's own name is the term that
+        // matches, with the broadcast network doing the rest.
+        if isFieldEvent { return (shortName, "") }
         let home = homeCompetitor?.team?.shortDisplayName ?? homeCompetitor?.athlete?.shortName ?? ""
         let away = awayCompetitor?.team?.shortDisplayName ?? awayCompetitor?.athlete?.shortName ?? ""
         return (home, away)

@@ -54,7 +54,7 @@ struct FavoritesView: View {
     /// doesn't re-render this whole screen's content every frame.
     @State private var titleProgress = ScrollProgress()
 
-    /// Lightweight envelope used to drive `.sheet(item:)` on team taps. Carries
+    /// Lightweight envelope used to drive the team page on team taps. Carries
     /// the team plus its league context (needed to look up the right logo).
     struct TeamDetailSelection: Identifiable {
         let team: ESPNTeam
@@ -63,8 +63,8 @@ struct FavoritesView: View {
         var id: String { ScoreViewModel.teamKey(sport: sport, teamID: team.id) }
     }
 
-    /// Drives `.sheet(item:)` on league taps. Carries the sport + league
-    /// label so the sheet can pull the right games list.
+    /// Drives the league page on league taps. Carries the sport + league
+    /// label so the page can pull the right table and fixtures.
     struct LeagueDetailSelection: Identifiable {
         let sport: SportType
         let leagueLabel: String?
@@ -270,25 +270,38 @@ struct FavoritesView: View {
         .sheet(isPresented: $showSearchSheet) {
             AddFavoriteSheet(viewModel: viewModel, scoreViewModel: scoreViewModel)
         }
-        .sheet(item: $detailTeam) { selection in
-            TeamNextGamesSheet(
-                team: selection.team,
-                leagueLabel: selection.leagueLabel,
-                sport: selection.sport,
-                viewModel: viewModel,
-                scoreViewModel: scoreViewModel
-            )
-            .presentationDetents([.large])
+        // The same pages the home screen's Favorites shelf opens — a tap on a
+        // team here and a tap on the same team there now land in exactly one
+        // place. Previously this presented a games-only sheet while home
+        // presented the full page.
+        .fullScreenCover(item: $detailTeam) { selection in
+            // An F1 favourite is a driver, and ESPN's team endpoints 404 for
+            // racing, so the team page came up blank. Drivers get their own.
+            if selection.sport == .f1 {
+                DriverDetailPage(
+                    driver: selection.team,
+                    viewModel: viewModel,
+                    scoreViewModel: scoreViewModel,
+                    playAction: playAction
+                )
+            } else {
+                TeamDetailPage(
+                    team: selection.team,
+                    leagueLabel: selection.leagueLabel,
+                    sport: selection.sport,
+                    viewModel: viewModel,
+                    scoreViewModel: scoreViewModel
+                )
+            }
         }
-        .sheet(item: $detailLeague) { selection in
-            LeagueGamesSheet(
+        .fullScreenCover(item: $detailLeague) { selection in
+            LeagueDetailPage(
                 sport: selection.sport,
                 leagueLabel: selection.leagueLabel,
                 displayName: selection.displayName,
                 viewModel: viewModel,
                 scoreViewModel: scoreViewModel
             )
-            .presentationDetents([.large])
         }
     }
 
@@ -460,10 +473,10 @@ struct FavoritesView: View {
             FavoritesSectionHeader(
                 title: "Teams & Leagues",
                 count: favoriteTeams.count + favoriteLeagues.count,
-                // Chevron opens the full Teams & Leagues editor (see-all /
-                // reorder / delete); "+" adds more. Both render as the same
-                // neutral circular buttons — no accent-colored text.
-                trailingIcon: (favoriteTeams.count + favoriteLeagues.count) > 3 ? "chevron.right" : nil,
+                // Chevron opens the Teams & Leagues editor (reorder / delete);
+                // "+" adds more. Both render as the same neutral circular
+                // buttons — no accent-colored text.
+                trailingIcon: (favoriteTeams.isEmpty && favoriteLeagues.isEmpty) ? nil : "chevron.right",
                 accentColor: accentColor,
                 onTrailingTap: { guard SwipeTapGuard.tapsAllowed else { return }; showSeeAllTeams = true },
                 onAddTap: { guard SwipeTapGuard.tapsAllowed else { return }; showAddSheet = true }
@@ -482,15 +495,31 @@ struct FavoritesView: View {
                 .padding(.horizontal, 20)
             } else {
                 VStack(spacing: 10) {
+                    // Every favourite, not a preview of them: hiding half the
+                    // list behind a "see all" button meant six favourites
+                    // showed as four. The chevron still opens the editor for
+                    // reordering and deleting.
                     // Positional ids — team ids alone can repeat across sports.
-                    ForEach(Array(favoriteTeams.prefix(3).enumerated()), id: \.offset) { _, item in
+                    ForEach(Array(favoriteTeams.enumerated()), id: \.offset) { _, item in
                         FavoriteTeamRow(
                             team: item.team,
                             sport: item.sport,
                             leagueLabel: item.leagueLabel,
                             scoreViewModel: scoreViewModel,
                             onTap: {
-                                detailTeam = TeamDetailSelection(team: item.team, leagueLabel: item.leagueLabel, sport: item.sport)
+                                // A golfer's page IS the leaderboard, with their
+                                // row highlighted — there's no per-player feed
+                                // to build a separate page from.
+                                if item.sport == .golf,
+                                   let tournament = scoreViewModel.liveOrNextGame(
+                                       forTeamID: ScoreViewModel.teamKey(sport: .golf, teamID: item.team.id)) {
+                                    scoreViewModel.presentGolfCard(
+                                        tournament,
+                                        highlightPlayer: item.team.displayName
+                                    )
+                                } else {
+                                    detailTeam = TeamDetailSelection(team: item.team, leagueLabel: item.leagueLabel, sport: item.sport)
+                                }
                             },
                             onWatch: { game in
                                 playFromGame(game, sport: item.sport)
@@ -500,13 +529,16 @@ struct FavoritesView: View {
                             }
                         )
                     }
-                    ForEach(Array(favoriteLeagues.prefix(2).enumerated()), id: \.element.displayName) { _, item in
+                    ForEach(Array(favoriteLeagues.enumerated()), id: \.element.displayName) { _, item in
                         FavoriteLeagueRow(
                             sport: item.sport,
                             leagueLabel: item.leagueLabel,
                             displayName: item.displayName,
                             scoreViewModel: scoreViewModel,
                             onTap: {
+                                // Every favourited series opens its own page —
+                                // Formula 1 and golf get the season (calendar
+                                // and championships) there, not a single race.
                                 detailLeague = LeagueDetailSelection(
                                     sport: item.sport,
                                     leagueLabel: item.leagueLabel,
@@ -871,7 +903,9 @@ struct FavoriteTeamRow: View {
                             .font(.system(size: 16, weight: .bold))
                             .foregroundStyle(.white)
                             .lineLimit(1)
-                        Text("TEAM")
+                        // An F1 favourite is a driver and a golf favourite is a
+                        // player, not a club.
+                        Text(sport == .f1 ? "DRIVER" : (sport == .golf ? "GOLFER" : "TEAM"))
                             .font(.system(size: 9, weight: .black))
                             .kerning(0.6)
                             .foregroundStyle(.white.opacity(0.75))
@@ -879,7 +913,13 @@ struct FavoriteTeamRow: View {
                             .padding(.vertical, 2)
                             .background(Capsule().fill(Color.white.opacity(0.12)))
                     }
-                    liveStatusLine
+                    if sport == .f1 {
+                        raceStatusLines
+                    } else if sport == .golf {
+                        golfStatusLines
+                    } else {
+                        liveStatusLine
+                    }
                 }
 
                 Spacer()
@@ -959,6 +999,109 @@ struct FavoriteTeamRow: View {
         }
     }
 
+    /// A driver's row can't say "Live · 2nd Quarter". It says which Grand Prix
+    /// is next, at which circuit, which session is up and when — and, once a
+    /// session has run, where this driver finished in it.
+    @ViewBuilder private var raceStatusLines: some View {
+        if let race = liveGame {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(race.shortName)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.8))
+                        .lineLimit(1)
+                    if let circuit = race.circuit?.fullName {
+                        Text("· \(circuit)")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.55))
+                            .lineLimit(1)
+                    }
+                }
+                if let session = race.currentRaceSession {
+                    let live = session.state == "in"
+                    HStack(spacing: 5) {
+                        if live { Circle().fill(Color.red).frame(width: 6, height: 6) }
+                        Text("\(ScoreRow.sessionName(session.label)) · \(session.detail)")
+                            .font(.system(size: 12, weight: live ? .bold : .medium))
+                            .foregroundStyle(live ? .red : .white.opacity(0.6))
+                            .lineLimit(1)
+                    }
+                }
+                if let placing = driverPlacing(in: race) {
+                    Text(placing)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .lineLimit(1)
+                }
+            }
+        } else {
+            Text("No upcoming race")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.5))
+        }
+    }
+
+    /// "P3 in Qualifying" — where this driver came in the most recent session
+    /// that has a result. Matches on name, since the favourite carries a
+    /// catalog id and the scoreboard identifies drivers by athlete.
+    private func driverPlacing(in race: ESPNEvent) -> String? {
+        guard let session = race.latestFinishedRaceSession else { return nil }
+        let wanted = (team.displayName ?? team.shortDisplayName ?? "")
+            .folding(options: .diacriticInsensitive, locale: nil).lowercased()
+        guard !wanted.isEmpty else { return nil }
+        let index = session.order.firstIndex { competitor in
+            let name = (competitor.athlete?.displayName ?? competitor.athlete?.fullName ?? "")
+                .folding(options: .diacriticInsensitive, locale: nil).lowercased()
+            guard !name.isEmpty else { return false }
+            return name == wanted || name.hasSuffix(wanted) || wanted.hasSuffix(name)
+        }
+        guard let index else { return nil }
+        return "P\(index + 1) in \(ScoreRow.sessionName(session.label))"
+    }
+
+    /// A golfer's row: which tournament is on, and where they stand in it. The
+    /// scoreboard's competitor id is the athlete id, so their line comes
+    /// straight out of the event already in memory — no extra request.
+    @ViewBuilder private var golfStatusLines: some View {
+        if let tournament = liveGame {
+            let entry = (tournament.allCompetitions.first?.competitors ?? [])
+                .first { $0.id == team.id }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(tournament.shortName)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.8))
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    if tournament.status.type.state == "in" {
+                        Circle().fill(Color.red).frame(width: 6, height: 6)
+                    }
+                    if let entry, let order = entry.order {
+                        Text("\(order)")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .monospacedDigit()
+                        Text("·")
+                            .foregroundStyle(.white.opacity(0.4))
+                        Text(entry.score ?? "–")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(ScoreRow.golfParColor(entry.score))
+                            .monospacedDigit()
+                        Text("·")
+                            .foregroundStyle(.white.opacity(0.4))
+                    }
+                    Text(tournament.status.type.detail)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(tournament.status.type.state == "in" ? .red : .white.opacity(0.6))
+                        .lineLimit(1)
+                }
+            }
+        } else {
+            Text("No tournament this week")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.5))
+        }
+    }
+
     @ViewBuilder private var liveStatusLine: some View {
         if let game = liveGame, game.status.type.state == "in" {
             HStack(spacing: 6) {
@@ -1014,6 +1157,24 @@ struct FavoriteLeagueRow: View {
         return pool.filter { $0.status.type.state == "in" }.count
     }
 
+    /// Formula 1 and golf run one event at a time — the weekend or tournament
+    /// that's on, else the next one due.
+    private var fieldEvent: ESPNEvent? {
+        guard sport == .f1 || sport == .golf else { return nil }
+        let pool = scoreViewModel.filteredGames[sport] ?? []
+        if let live = pool.first(where: { $0.isLiveNow }) { return live }
+        return pool.filter { $0.status.type.state == "pre" }
+            .min { $0.gameDate < $1.gameDate } ?? pool.max { $0.gameDate < $1.gameDate }
+    }
+
+    /// The session for a race weekend, the round for a tournament.
+    private func fieldStatus(_ event: ESPNEvent) -> String {
+        if let session = event.currentRaceSession {
+            return "\(ScoreRow.sessionName(session.label)) · \(session.detail)"
+        }
+        return event.status.type.detail
+    }
+
     var body: some View {
         Button(action: { guard SwipeTapGuard.tapsAllowed else { return }; onTap() }) {
             HStack(spacing: 12) {
@@ -1037,7 +1198,25 @@ struct FavoriteLeagueRow: View {
                             .padding(.vertical, 2)
                             .background(Capsule().fill(Color.white.opacity(0.12)))
                     }
-                    if liveCount > 0 {
+                    // A field series runs ONE event at a time, so "0 live now"
+                    // says nothing useful — name the event and where it is.
+                    if let event = fieldEvent {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(event.shortName)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.8))
+                                .lineLimit(1)
+                            HStack(spacing: 5) {
+                                if event.isLiveNow {
+                                    Circle().fill(Color.red).frame(width: 6, height: 6)
+                                }
+                                Text(fieldStatus(event))
+                                    .font(.system(size: 12, weight: event.isLiveNow ? .bold : .medium))
+                                    .foregroundStyle(event.isLiveNow ? .red : .white.opacity(0.6))
+                                    .lineLimit(1)
+                            }
+                        }
+                    } else if liveCount > 0 {
                         HStack(spacing: 6) {
                             Circle().fill(Color.red).frame(width: 6, height: 6)
                             Text("\(liveCount) live now")

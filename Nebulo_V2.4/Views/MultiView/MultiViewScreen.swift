@@ -1436,7 +1436,7 @@ struct LiveScoresStrip: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 14) {
                         ForEach(scoreViewModel.allLiveGames) { game in
-                            LiveGameCard(game: game, accentColor: .blue)
+                            LiveEventCard(game: game, accentColor: .blue)
                                 .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                                 .onTapGesture { onTap(game) }
                         }
@@ -1467,7 +1467,7 @@ struct AllLiveScoresSheet: View {
             ScrollView {
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
                     ForEach(games) { game in
-                        LiveGameCard(game: game, accentColor: .blue)
+                        LiveEventCard(game: game, accentColor: .blue)
                             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                             .onTapGesture { onTap(game) }
                     }

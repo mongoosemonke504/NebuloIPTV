@@ -703,9 +703,14 @@ struct StandardLayout: SwiftUI.View {
     /// game card, a plain channel to the channel preview popup.
     private func openFeatured(_ item: FeaturedItem) {
         if let game = item.game {
-            scoreViewModel.deepLinkRequest = scoreViewModel.makeDetailRequest(
-                for: game, sport: scoreViewModel.sportType(for: game)
-            )
+            let sport = scoreViewModel.sportType(for: game)
+            if sport == .f1 {
+                scoreViewModel.presentRaceCard(game)
+            } else if sport == .golf {
+                scoreViewModel.presentGolfCard(game)
+            } else {
+                scoreViewModel.deepLinkRequest = scoreViewModel.makeDetailRequest(for: game, sport: sport)
+            }
         } else {
             homePreviewChannel = item.channel
         }
@@ -1322,13 +1327,23 @@ struct StandardLayout: SwiftUI.View {
         // My Teams — a full-screen page, not a sheet: it's a destination with
         // its own hero, the same as a category catalog page.
         .fullScreenCover(item: $openedTeam) { sel in
-            TeamDetailPage(
-                team: sel.team,
-                leagueLabel: sel.leagueLabel,
-                sport: sel.sport,
-                viewModel: viewModel,
-                scoreViewModel: scoreViewModel
-            )
+            // Drivers aren't teams — see DriverDetailPage.
+            if sel.sport == .f1 {
+                DriverDetailPage(
+                    driver: sel.team,
+                    viewModel: viewModel,
+                    scoreViewModel: scoreViewModel,
+                    playAction: playAction
+                )
+            } else {
+                TeamDetailPage(
+                    team: sel.team,
+                    leagueLabel: sel.leagueLabel,
+                    sport: sel.sport,
+                    viewModel: viewModel,
+                    scoreViewModel: scoreViewModel
+                )
+            }
         }
         .fullScreenCover(item: $openedLeague) { sel in
             LeagueDetailPage(
@@ -1339,6 +1354,11 @@ struct StandardLayout: SwiftUI.View {
                 scoreViewModel: scoreViewModel
             )
         }
+        // Racing's game card, presented here rather than inside the Sports hub
+        // so a race opens the same page from the hub, the home Live Now shelf
+        // and the hero. A full-screen page rather than the overlay the team
+        // sports use: a weekend is five sessions with their own tabs, closer to
+        // a team page than to a scoreline sheet.
         // NO implicit animation on `selectedCategory` — deliberately.
         //
         // Nuvio's tab host is a bare `when (selectedTab)` switch: the outgoing
@@ -2753,7 +2773,7 @@ struct LiveGamesPreviewList: View {
         TouchPassingHorizontalScroll {
             HStack(spacing: 12) {
                 ForEach(games) { game in
-                    LiveGameCard(game: game, accentColor: accentColor)
+                    LiveEventCard(game: game, accentColor: accentColor)
                         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .onTapGesture {
                             // Opens the game card first — the stream starts
@@ -2762,7 +2782,13 @@ struct LiveGamesPreviewList: View {
                             guard SwipeTapGuard.tapsAllowed else { return }
                             viewModel.triggerSelectionHaptic()
                             let sport = scoreViewModel.sportType(for: game)
-                            scoreViewModel.deepLinkRequest = scoreViewModel.makeDetailRequest(for: game, sport: sport)
+                            if sport == .f1 {
+                                scoreViewModel.presentRaceCard(game)
+                            } else if sport == .golf {
+                                scoreViewModel.presentGolfCard(game)
+                            } else {
+                                scoreViewModel.deepLinkRequest = scoreViewModel.makeDetailRequest(for: game, sport: sport)
+                            }
                         }
                         .liveGameContextMenu(game: game, viewModel: viewModel, scoreViewModel: scoreViewModel)
                 }
@@ -2808,7 +2834,21 @@ struct LiveGameContextMenuModifier: ViewModifier {
             let isPinned = scoreViewModel.pinnedGameIDs.contains(game.id)
             let isScoreHidden = scoreViewModel.hiddenScoreGameIDs.contains(game.id)
 
-            if sport != .f1 {
+            if sport == .f1 {
+                Button {
+                    beforeNavigate?()
+                    scoreViewModel.presentRaceCard(game)
+                } label: {
+                    Label("Race Card", systemImage: "flag.checkered")
+                }
+            } else if sport == .golf {
+                Button {
+                    beforeNavigate?()
+                    scoreViewModel.presentGolfCard(game)
+                } label: {
+                    Label("Leaderboard", systemImage: "list.number")
+                }
+            } else {
                 Button {
                     beforeNavigate?()
                     // The root-level deep-link sheet — presents the stats
@@ -3041,6 +3081,241 @@ struct LiveGameCard: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(Color.white.opacity(0.10), lineWidth: 0.5)
         )
+    }
+}
+
+/// Picks the Live Now card that fits the event.
+///
+/// A race weekend and a golf tournament have no two sides, so the matchup card
+/// drew them as a grey diagonal captioned "Norris vs. Hamilton". The choice is
+/// made from the event's own shape rather than a sport enum, so every Live Now
+/// surface gets it without plumbing a view model through.
+struct LiveEventCard: View {
+    let game: ESPNEvent
+    let accentColor: Color
+
+    var body: some View {
+        if game.isRaceEvent {
+            LiveRaceCard(game: game)
+        } else if game.isFieldEvent {
+            LiveGolfCard(game: game)
+        } else {
+            LiveGameCard(game: game, accentColor: accentColor)
+        }
+    }
+}
+
+/// The Live Now card for a race weekend.
+///
+/// A Grand Prix has no two sides to split a card between, so the team card's
+/// diagonal was two shades of grey and the caption read "Norris vs. Hamilton",
+/// which is nonsense. This is the weekend on its own terms: the F1 red, the
+/// session that's running with its clock, the circuit, and whoever's leading.
+struct LiveRaceCard: View {
+    let game: ESPNEvent
+
+    private static let f1Red = Color(red: 0.88, green: 0.02, blue: 0.02)
+    private static let timeFmt: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "h:mm a"; return f
+    }()
+
+    /// The session that's running, or the next one due.
+    private var session: ESPNEvent.RaceSession? { game.currentRaceSession }
+    private var isLive: Bool { session?.state == "in" }
+    /// Whoever's on top of the session that has a result — the leader while a
+    /// session runs, the winner once it's done.
+    private var leader: ESPNCompetitor? {
+        (session?.state == "in" ? session : game.latestFinishedRaceSession)?.order.first
+    }
+
+    private var circuitName: String? {
+        game.circuit?.fullName ?? game.circuit?.address?.city
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            // Red on the left falling away to near-black on the right, so the
+            // caption at the bottom still reads.
+            LinearGradient(
+                colors: [Self.f1Red, Color(red: 0.42, green: 0.02, blue: 0.04),
+                         Color(red: 0.10, green: 0.02, blue: 0.03)],
+                startPoint: .topLeading, endPoint: .bottomTrailing
+            )
+
+            Image(systemName: "flag.checkered")
+                .font(.system(size: 92, weight: .bold))
+                .foregroundStyle(.white.opacity(0.10))
+                .frame(width: LiveGameCard.cardWidth, height: LiveGameCard.cardHeight,
+                       alignment: .trailing)
+                .offset(x: 26, y: -10)
+
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0.40),
+                    .init(color: .black.opacity(0.7), location: 1.0)
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+
+            // Which session, and its clock.
+            HStack(spacing: 5) {
+                if isLive {
+                    Circle().fill(.white).frame(width: 6, height: 6)
+                }
+                Text(session.map { ScoreRow.sessionName($0.label).uppercased() } ?? "F1")
+                    .font(.system(size: 10, weight: .black))
+                    .kerning(0.5)
+                    .foregroundStyle(.white)
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(isLive ? Color.red : Color.black.opacity(0.55)))
+            .padding(11)
+
+            VStack(alignment: .leading, spacing: 3) {
+                if let circuitName {
+                    Text(circuitName.uppercased())
+                        .font(.system(size: 10, weight: .semibold))
+                        .kerning(0.4)
+                        .foregroundStyle(.white.opacity(0.7))
+                        .lineLimit(1)
+                }
+                Text(game.shortName)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                HStack(spacing: 6) {
+                    if let leader, let name = leader.athlete?.shortName ?? leader.athlete?.displayName {
+                        Image(systemName: "trophy.fill")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.75))
+                        Text(name)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.9))
+                            .lineLimit(1)
+                    } else if let session, session.state == "pre", let date = session.date {
+                        Text(Self.timeFmt.string(from: date))
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.85))
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 11)
+            .frame(width: LiveGameCard.cardWidth, height: LiveGameCard.cardHeight,
+                   alignment: .bottomLeading)
+        }
+        .frame(width: LiveGameCard.cardWidth, height: LiveGameCard.cardHeight)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(0.10), lineWidth: 0.5)
+        )
+    }
+}
+
+/// The Live Now card for a golf tournament — the leader and their score, on the
+/// tour's navy, rather than a two-man matchup that doesn't exist.
+struct LiveGolfCard: View {
+    let game: ESPNEvent
+
+    private static let tourNavy = Color(red: 0.06, green: 0.20, blue: 0.44)
+
+    private var isLive: Bool { game.status.type.state == "in" }
+
+    private var board: [ESPNCompetitor] {
+        (game.allCompetitions.first?.competitors ?? [])
+            .sorted { ($0.order ?? 999) < ($1.order ?? 999) }
+    }
+
+    /// Under par green, over par red — golf's own convention.
+    private static func parColor(_ total: String?) -> Color {
+        guard let total, !total.isEmpty else { return .white }
+        if total.hasPrefix("-") { return Color(red: 0.45, green: 0.95, blue: 0.55) }
+        if total.hasPrefix("+") { return Color(red: 1.0, green: 0.55, blue: 0.5) }
+        return .white
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            LinearGradient(
+                colors: [Self.tourNavy, Color(red: 0.03, green: 0.10, blue: 0.24),
+                         Color(red: 0.02, green: 0.05, blue: 0.12)],
+                startPoint: .topLeading, endPoint: .bottomTrailing
+            )
+
+            Image(systemName: "figure.golf")
+                .font(.system(size: 84, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.10))
+                .frame(width: LiveGameCard.cardWidth, height: LiveGameCard.cardHeight,
+                       alignment: .trailing)
+                .offset(x: 20, y: -8)
+
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0.36),
+                    .init(color: .black.opacity(0.7), location: 1.0)
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+
+            // The round, which is golf's equivalent of a period.
+            HStack(spacing: 5) {
+                if isLive { Circle().fill(.white).frame(width: 6, height: 6) }
+                Text(roundLabel.uppercased())
+                    .font(.system(size: 10, weight: .black))
+                    .kerning(0.5)
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(isLive ? Color.red : Color.black.opacity(0.55)))
+            .padding(11)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(game.shortName)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                // Top two, which is the story of a leaderboard at a glance.
+                ForEach(Array(board.prefix(2).enumerated()), id: \.offset) { index, player in
+                    HStack(spacing: 6) {
+                        Text("\(index + 1)")
+                            .font(.system(size: 10, weight: .black))
+                            .foregroundStyle(.white.opacity(0.5))
+                        Text(player.athlete?.shortName ?? player.athlete?.displayName ?? "—")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.9))
+                            .lineLimit(1)
+                        Spacer(minLength: 2)
+                        Text(player.score ?? "–")
+                            .font(.system(size: 12, weight: .heavy))
+                            .foregroundStyle(Self.parColor(player.score))
+                            .monospacedDigit()
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 11)
+            .frame(width: LiveGameCard.cardWidth, height: LiveGameCard.cardHeight,
+                   alignment: .bottomLeading)
+        }
+        .frame(width: LiveGameCard.cardWidth, height: LiveGameCard.cardHeight)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(0.10), lineWidth: 0.5)
+        )
+    }
+
+    /// "Round 4 - In Progress" → "Round 4"; anything else passes through.
+    private var roundLabel: String {
+        let detail = game.status.type.detail
+        if let cut = detail.range(of: " - ") { return String(detail[detail.startIndex..<cut.lowerBound]) }
+        return detail.isEmpty ? "PGA Tour" : detail
     }
 }
 

@@ -9,6 +9,9 @@ struct GameDetailRequest: Identifiable, Equatable {
     let game: ESPNEvent
     let sport: SportType
     let leagueCode: String?
+    /// A golfer to highlight on the leaderboard — set when the card is opened
+    /// from a favourited player rather than from the tournament itself.
+    var highlightPlayer: String? = nil
     var id: String { game.id }
 
     static func == (lhs: GameDetailRequest, rhs: GameDetailRequest) -> Bool { lhs.id == rhs.id }
@@ -853,8 +856,29 @@ final class GameDetailViewModel: ObservableObject {
     }
 
     func lineup(homeAway: String) -> GDLineup? {
-        guard let roster = summary?.rosters?.first(where: { $0.homeAway == homeAway }),
-              let players = roster.roster, !players.isEmpty else { return nil }
+        Self.buildLineup(
+            roster: summary?.rosters?.first { $0.homeAway == homeAway },
+            ratingsAvailable: ratingsAvailable,
+            headshot: { [self] athlete in
+                headshotURL(athlete) ?? resolvedHeadshots[athlete?.id ?? ""]
+            },
+            age: { [self] id in resolvedAges[id] }
+        )
+    }
+
+    /// The lineup laid out from one team's roster entry.
+    ///
+    /// Static and dependency-free so the team page can draw a club's last
+    /// starting XI from a fetched summary without standing up a whole game
+    /// view model — the photo and age lookups differ there, so both arrive as
+    /// closures rather than being read off `self`.
+    nonisolated static func buildLineup(
+        roster: GSRoster?,
+        ratingsAvailable: Bool,
+        headshot: (GSAthlete?) -> String?,
+        age: (String) -> Int?
+    ) -> GDLineup? {
+        guard let roster, let players = roster.roster, !players.isEmpty else { return nil }
 
         func convert(_ p: GSRosterPlayer) -> GDLineupPlayer {
             var goals = 0, yellow = false, red = false
@@ -885,8 +909,8 @@ final class GameDetailViewModel: ObservableObject {
                 subbedOffClock: (p.subbedOut?.didSub == true) ? (p.subbedOut?.clock ?? "") : nil,
                 subbedOnClock: (p.subbedIn?.didSub == true) ? (p.subbedIn?.clock ?? "") : nil,
                 positionAbbrev: p.position?.abbreviation,
-                headshot: headshotURL(p.athlete) ?? resolvedHeadshots[p.athlete?.id ?? ""],
-                age: resolvedAges[p.athlete?.id ?? ""],
+                headshot: headshot(p.athlete),
+                age: age(p.athlete?.id ?? ""),
                 stats: statLines
             )
         }

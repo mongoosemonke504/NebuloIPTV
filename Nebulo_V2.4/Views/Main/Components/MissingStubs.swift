@@ -416,7 +416,7 @@ struct SearchView: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         LazyHStack(spacing: 14) {
                             ForEach(games) { game in
-                                LiveGameCard(game: game, accentColor: accentColor)
+                                LiveEventCard(game: game, accentColor: accentColor)
                                     .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                                     .onTapGesture {
                                         viewModel.triggerSelectionHaptic()

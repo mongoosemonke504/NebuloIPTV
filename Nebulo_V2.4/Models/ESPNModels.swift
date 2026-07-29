@@ -26,22 +26,40 @@ struct ESPNEvent: Codable, Identifiable, Hashable, Sendable {
 
     private let _dateParsed: Date?
 
+    /// Racing only: the track this weekend is at.
+    var circuit: ESPNCircuit? = nil
+
     enum CodingKeys: String, CodingKey {
-        case id, shortName, status, competitions, date, groupings, season, leagueLabel, tennisRound, tennisPath
+        case id, shortName, status, competitions, date, groupings, season, leagueLabel, tennisRound, tennisPath, circuit
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try container.decode(String.self, forKey: .id)
         self.shortName = try container.decode(String.self, forKey: .shortName)
-        self.status = try container.decode(ESPNStatus.self, forKey: .status)
         self.competitions = try container.decode([ESPNCompetition].self, forKey: .competitions)
+        // The scoreboard feed carries `status` on the event. The team-schedule
+        // feed does NOT — it only hangs one off the competition. Requiring the
+        // event-level key meant every schedule payload threw mid-array and
+        // `fetchSchedule` returned nothing at all, so a team page only ever
+        // showed the handful of games the scoreboard pool happened to hold.
+        if let eventStatus = try? container.decode(ESPNStatus.self, forKey: .status) {
+            self.status = eventStatus
+        } else if let competitionStatus = self.competitions.first?.status {
+            self.status = competitionStatus
+        } else {
+            throw DecodingError.keyNotFound(CodingKeys.status, DecodingError.Context(
+                codingPath: container.codingPath,
+                debugDescription: "No status on the event or its first competition"
+            ))
+        }
         self.date = try container.decode(String.self, forKey: .date)
         self.groupings = try container.decodeIfPresent([ESPNGrouping].self, forKey: .groupings)
         self.season = try? container.decodeIfPresent(ESPNEventSeason.self, forKey: .season)
         self.leagueLabel = try container.decodeIfPresent(String.self, forKey: .leagueLabel)
         self.tennisRound = try container.decodeIfPresent(String.self, forKey: .tennisRound)
         self.tennisPath = try container.decodeIfPresent(String.self, forKey: .tennisPath)
+        self.circuit = try? container.decodeIfPresent(ESPNCircuit.self, forKey: .circuit)
 
         self._dateParsed = ESPNEvent.parseDate(self.date)
     }
@@ -70,7 +88,7 @@ struct ESPNEvent: Codable, Identifiable, Hashable, Sendable {
     /// home-screen smart header used to read `gameDate` as `Date()` and tell
     /// the user every unparseable game was starting "in 1 minute". Now we hand
     /// back nil and the consumer uses `.distantFuture` as a safe sentinel.
-    private static func parseDate(_ raw: String) -> Date? {
+    nonisolated static func parseDate(_ raw: String) -> Date? {
         // 1. ISO-8601 with fractional seconds: 2024-03-15T19:00:00.123Z
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -126,8 +144,81 @@ struct ESPNEvent: Codable, Identifiable, Hashable, Sendable {
         ?? allCompetitions.first?.competitors?.first(where: { $0.order == 1 })
         ?? allCompetitions.first?.competitors?.first
     }
-    var broadcastName: String? { allCompetitions.first?.broadcasts?.first?.names.first }
-    
+    var broadcastName: String? {
+        allCompetitions.first?.broadcasts?.compactMap(\.displayName).first
+    }
+
+    // MARK: Racing
+    //
+    // A Grand Prix is one event holding five sessions — FP1, FP2, FP3,
+    // qualifying and the race — each with its own clock and finishing order.
+    // The event's own `status` is no use for the card: ESPN reports "Final" for
+    // a weekend whose race hasn't been run, because a practice session has.
+
+    /// One session of a race weekend.
+    nonisolated struct RaceSession: Identifiable, Sendable {
+        /// "FP1", "Qual", "Race".
+        let label: String
+        let state: String
+        let detail: String
+        let date: Date?
+        /// Finishing order, first to last.
+        let order: [ESPNCompetitor]
+        var id: String { label }
+        var isRace: Bool { label.lowercased().hasPrefix("race") }
+    }
+
+    nonisolated var raceSessions: [RaceSession] {
+        competitions.enumerated().map { index, competition in
+            let type = competition.type?.abbreviation ?? competition.type?.text ?? "Session \(index + 1)"
+            let status = competition.status ?? status
+            return RaceSession(
+                label: type,
+                state: status.type.state,
+                detail: status.type.detail,
+                date: competition.date.flatMap(ESPNEvent.parseDate),
+                order: (competition.competitors ?? []).sorted { ($0.order ?? 99) < ($1.order ?? 99) }
+            )
+        }
+    }
+
+    /// The session to lead the card with: the one running now, else the next one
+    /// due, else the race itself once the weekend is over.
+    nonisolated var currentRaceSession: RaceSession? {
+        let sessions = raceSessions
+        return sessions.first { $0.state == "in" }
+            ?? sessions.first { $0.state == "pre" }
+            ?? sessions.last { $0.isRace }
+            ?? sessions.last
+    }
+
+    /// The most recent session with a result to show.
+    nonisolated var latestFinishedRaceSession: RaceSession? {
+        raceSessions.last { $0.state == "post" && !$0.order.isEmpty }
+    }
+
+    /// A race weekend. Only racing events carry a circuit, so this needs no
+    /// sport enum threaded through the view layer.
+    nonisolated var isRaceEvent: Bool { circuit != nil }
+
+    /// A FIELD event: dozens of individual entrants on a leaderboard rather
+    /// than two sides on a scoreline — a golf tournament, a race weekend.
+    nonisolated var isFieldEvent: Bool {
+        let competitors = allCompetitions.first?.competitors ?? []
+        return competitors.count > 4 && competitors.allSatisfy { $0.team == nil }
+    }
+
+    /// Whether this event should count as live right now.
+    ///
+    /// For most sports that's simply the event's own state. A race weekend is
+    /// not: ESPN marks the EVENT "Final" as soon as a practice session ends, so
+    /// a Grand Prix that was actually being run read as finished and never
+    /// reached Live Now. Its sessions are the source of truth.
+    nonisolated var isLiveNow: Bool {
+        if status.type.state == "in" { return true }
+        return competitions.contains { $0.status?.type.state == "in" }
+    }
+
     nonisolated var gameDate: Date {
         // Use .distantFuture as a safe sentinel when the date string couldn't
         // be parsed at all. Falling back to `Date()` would make the home-screen
@@ -177,10 +268,45 @@ struct ESPNCompetition: Codable, Hashable, Sendable {
     let competitors: [ESPNCompetitor]?
     let broadcasts: [ESPNBroadcast]?
     let leaders: [ESPNLeader]?
+    /// The scoreboard feed repeats the event's status here; the team-schedule
+    /// feed puts it ONLY here. See `ESPNEvent.init(from:)`.
+    var status: ESPNStatus? = nil
+    /// Which session this is, for racing: a Grand Prix event carries five
+    /// competitions — FP1, FP2, FP3, Qual and Race — each with its own start
+    /// time, status and finishing order.
+    var type: ESPNCompetitionType? = nil
+    var date: String? = nil
     /// Live in-game situation from the scoreboard feed — bases/count/outs
     /// for baseball, down & distance for football. Nil for other sports
     /// and finished games.
     var situation: ESPNSituation? = nil
+}
+
+nonisolated struct ESPNCompetitionType: Codable, Hashable, Sendable {
+    /// "FP1", "Qual", "Race".
+    let abbreviation: String?
+    let text: String?
+}
+
+/// Racing venue — the only place ESPN names the track. Team sports use
+/// `venue` on the competition instead.
+nonisolated struct ESPNCircuit: Codable, Hashable, Sendable {
+    /// Core-API circuit id — the key to the layout diagram, lap count and lap
+    /// record, none of which the scoreboard carries.
+    let id: String?
+    let fullName: String?
+    let address: Address?
+    nonisolated struct Address: Codable, Hashable, Sendable {
+        let city: String?
+        let country: String?
+    }
+
+    /// "Hungaroring · Budapest, Hungary"
+    var summary: String? {
+        let place = [address?.city, address?.country].compactMap { $0 }.joined(separator: ", ")
+        let parts = [fullName, place.isEmpty ? nil : place].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
 }
 
 /// Only the fields the Live Activity's situation line uses.
@@ -195,7 +321,22 @@ nonisolated struct ESPNSituation: Codable, Hashable, Sendable {
     let shortDownDistanceText: String?
     let possessionText: String?
 }
-struct ESPNBroadcast: Codable, Hashable, Sendable { let names: [String] }
+/// The scoreboard feed says `{"names": ["FOX"]}`; the team-schedule feed says
+/// `{"media": {"shortName": "MLB.TV"}, …}` with no `names` at all. Both shapes
+/// have to decode — a required `names` threw on every schedule payload.
+struct ESPNBroadcast: Codable, Hashable, Sendable {
+    let names: [String]?
+    let media: Media?
+
+    nonisolated struct Media: Codable, Hashable, Sendable { let shortName: String? }
+
+    /// The network to show, from whichever shape arrived.
+    var displayName: String? {
+        if let name = names?.first, !name.isEmpty { return name }
+        if let short = media?.shortName, !short.isEmpty { return short }
+        return nil
+    }
+}
 struct ESPNCompetitor: Codable, Identifiable, Hashable, Sendable {
     private let _id: String?
     let homeAway: String?
@@ -225,6 +366,42 @@ struct ESPNCompetitor: Codable, Identifiable, Hashable, Sendable {
 
     var id: String { _id ?? team?.id ?? athlete?.displayName ?? UUID().uuidString }
 
+    /// `score` is a bare string on the scoreboard ("6") but an object on the
+    /// team-schedule feed (`{"value": 6.0, "displayValue": "6"}`), and an
+    /// upcoming game has none at all. Decoding it as a String threw on every
+    /// schedule payload, taking the whole fixture list with it.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self._id = try c.decodeIfPresent(String.self, forKey: ._id)
+        self.homeAway = try c.decodeIfPresent(String.self, forKey: .homeAway)
+        if let text = try? c.decode(String.self, forKey: .score) {
+            self.score = text
+        } else if let object = try? c.decode(ScoreObject.self, forKey: .score) {
+            self.score = object.text
+        } else {
+            self.score = nil
+        }
+        self.team = try c.decodeIfPresent(ESPNTeam.self, forKey: .team)
+        self.athlete = try c.decodeIfPresent(ESPNAthlete.self, forKey: .athlete)
+        self.order = try c.decodeIfPresent(Int.self, forKey: .order)
+        self.winner = try c.decodeIfPresent(Bool.self, forKey: .winner)
+        self.linescores = try c.decodeIfPresent([ESPNLinescore].self, forKey: .linescores)
+        self.possession = try c.decodeIfPresent(Bool.self, forKey: .possession)
+        self.roster = try c.decodeIfPresent(ESPNRoster.self, forKey: .roster)
+        self.curatedRank = try c.decodeIfPresent(ESPNCuratedRank.self, forKey: .curatedRank)
+        self.records = try c.decodeIfPresent([ESPNRecordEntry].self, forKey: .records)
+    }
+
+    private struct ScoreObject: Codable {
+        let value: Double?
+        let displayValue: String?
+        var text: String? {
+            if let displayValue, !displayValue.isEmpty { return displayValue }
+            guard let value else { return nil }
+            return value == value.rounded() ? String(Int(value)) : String(value)
+        }
+    }
+
     nonisolated init(id: String?, homeAway: String?, score: String?, team: ESPNTeam?, athlete: ESPNAthlete?, order: Int?, winner: Bool?, linescores: [ESPNLinescore]?, possession: Bool? = nil, roster: ESPNRoster? = nil, curatedRank: ESPNCuratedRank? = nil, records: [ESPNRecordEntry]? = nil) {
         self._id = id
         self.homeAway = homeAway
@@ -248,7 +425,60 @@ nonisolated struct ESPNRoster: Codable, Hashable, Sendable {
     let shortDisplayName: String?
     let athletes: [ESPNAthlete]?
 }
-nonisolated struct ESPNTeam: Codable, Hashable, Sendable { let id: String; let abbreviation: String?; let displayName: String?; let shortDisplayName: String?; let logo: String?; let color: String? }
+nonisolated struct ESPNTeam: Codable, Hashable, Sendable {
+    let id: String
+    let abbreviation: String?
+    let displayName: String?
+    let shortDisplayName: String?
+    let logo: String?
+    let color: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, abbreviation, displayName, shortDisplayName, logo, color, logos
+    }
+
+    nonisolated struct Logo: Codable, Hashable, Sendable { let href: String? }
+
+    /// The scoreboard feed gives a flat `logo` string; the team-schedule feed
+    /// gives a `logos` array instead. Without the second shape every crest in a
+    /// fixture list came out blank.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(String.self, forKey: .id)
+        self.abbreviation = try c.decodeIfPresent(String.self, forKey: .abbreviation)
+        self.displayName = try c.decodeIfPresent(String.self, forKey: .displayName)
+        self.shortDisplayName = try c.decodeIfPresent(String.self, forKey: .shortDisplayName)
+        self.color = try c.decodeIfPresent(String.self, forKey: .color)
+        if let flat = try c.decodeIfPresent(String.self, forKey: .logo), !flat.isEmpty {
+            self.logo = flat
+        } else {
+            self.logo = (try? c.decodeIfPresent([Logo].self, forKey: .logos))?
+                .flatMap { $0.compactMap(\.href).first }
+        }
+    }
+
+    nonisolated init(id: String, abbreviation: String?, displayName: String?,
+                     shortDisplayName: String?, logo: String?, color: String?) {
+        self.id = id
+        self.abbreviation = abbreviation
+        self.displayName = displayName
+        self.shortDisplayName = shortDisplayName
+        self.logo = logo
+        self.color = color
+    }
+
+    /// Written out in the scoreboard's flat shape — this is what the persisted
+    /// scheduled recordings and Live Activity payloads read back.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encodeIfPresent(abbreviation, forKey: .abbreviation)
+        try c.encodeIfPresent(displayName, forKey: .displayName)
+        try c.encodeIfPresent(shortDisplayName, forKey: .shortDisplayName)
+        try c.encodeIfPresent(logo, forKey: .logo)
+        try c.encodeIfPresent(color, forKey: .color)
+    }
+}
 struct ESPNLeader: Codable, Hashable, Sendable { let name: String?; let displayName: String?; let leaders: [ESPNLeaderEntry]? }
 struct ESPNLeaderEntry: Codable, Hashable, Sendable { let displayValue: String?; let athlete: ESPNAthlete? }
 struct ESPNAthlete: Codable, Hashable, Sendable {

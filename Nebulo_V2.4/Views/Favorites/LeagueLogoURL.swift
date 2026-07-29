@@ -28,6 +28,8 @@ enum LeagueLogoURL {
         "NCAA M-Volleyball": "https://a.espncdn.com/combiner/i?img=/redesign/assets/img/icons/sports-volleyball-solid.png",
         "NCAA W-Volleyball": "https://a.espncdn.com/combiner/i?img=/redesign/assets/img/icons/sports-volleyball-solid.png",
         "Formula 1": "https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500/f1.png",
+        // Slug is "pgatour" — "pga" 404s.
+        "Golf": "https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500/pgatour.png",
         "MMA": "https://a.espncdn.com/i/teamlogos/leagues/500/ufc.png",
 
         // Domestic soccer leagues

@@ -62,7 +62,7 @@ nonisolated enum TeamCatalogService {
         let leagueLabel: String?
         let url: URL
         let kind: Kind
-        enum Kind { case teamList, f1Drivers }
+        enum Kind { case teamList, f1Drivers, golfPlayers }
     }
 
     private static func makeUnits() -> [Unit] {
@@ -74,6 +74,16 @@ nonisolated enum TeamCatalogService {
                 // covers the whole grid, updated as the season evolves).
                 if let url = URL(string: "https://site.api.espn.com/apis/v2/sports/racing/f1/standings") {
                     units.append(Unit(sport: .f1, leagueLabel: nil, url: url, kind: .f1Drivers))
+                }
+                continue
+            }
+            if sport == .golf {
+                // Golf has no team list and no athlete index — ESPN publishes
+                // neither. The tournament field is the population you'd want to
+                // favourite from anyway, and the scoreboard carries all 144 of
+                // them, refreshed as the tour moves week to week.
+                if let url = URL(string: sport.endpoint) {
+                    units.append(Unit(sport: .golf, leagueLabel: nil, url: url, kind: .golfPlayers))
                 }
                 continue
             }
@@ -192,6 +202,27 @@ nonisolated enum TeamCatalogService {
                     leagueLabel: nil
                 )
             }
+        case .golfPlayers:
+            // The scoreboard's competitor id IS the athlete id (the nested
+            // `athlete` object omits it), and headshots live at a stable path
+            // keyed by that id.
+            let res = try JSONDecoder().decode(GolfFieldResponse.self, from: data)
+            let field = res.events?.flatMap { $0.competitions?.first?.competitors ?? [] } ?? []
+            return field.compactMap { competitor in
+                guard let id = competitor.id,
+                      let name = competitor.athlete?.displayName ?? competitor.athlete?.shortName
+                else { return nil }
+                return Entry(
+                    team: ESPNTeam(id: id,
+                                   abbreviation: nil,
+                                   displayName: name,
+                                   shortDisplayName: competitor.athlete?.shortName,
+                                   logo: "https://a.espncdn.com/i/headshots/golf/players/full/\(id).png",
+                                   color: nil),
+                    sportRaw: SportType.golf.rawValue,
+                    leagueLabel: nil
+                )
+            }
         }
     }
 
@@ -225,5 +256,20 @@ nonisolated enum TeamCatalogService {
             let shortName: String?
         }
         let children: [Child]?
+    }
+
+    /// The golf scoreboard, read only for the names in the field.
+    private struct GolfFieldResponse: Decodable {
+        struct Event: Decodable { let competitions: [Competition]? }
+        struct Competition: Decodable { let competitors: [Competitor]? }
+        struct Competitor: Decodable {
+            let id: String?
+            let athlete: Athlete?
+        }
+        struct Athlete: Decodable {
+            let displayName: String?
+            let shortName: String?
+        }
+        let events: [Event]?
     }
 }

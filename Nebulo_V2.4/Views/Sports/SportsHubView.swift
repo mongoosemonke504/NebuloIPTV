@@ -381,6 +381,8 @@ struct SportsHubView: View {
             triggerPreResolution()
         }
         .sheet(isPresented: $viewModel.showSelectionSheet) { ManualSelectionSheet(viewModel: viewModel, accentColor: accentColor, playAction: playAction) }
+        // The race card itself is presented one level up, in MainView, so the
+        // same request opens it from the hub, the home shelves and the hero.
         // The game detail is presented as a custom overlay from ContentView
         // (see GameDetailPresenter) — driven by the same detailRequest
         // binding a game tap sets here — so the hub renders live behind it.
@@ -802,11 +804,14 @@ private struct GameScoreButton: View {
         Button(action: {
             guard SwipeTapGuard.tapsAllowed else { return }
             ChannelViewModel.shared.triggerSelectionHaptic()
-            // Stats-first: tapping a game opens the match detail sheet,
-            // and the stream is one more tap (Watch Live) from there.
-            // F1 has no detail page, so it plays directly.
+            // Stats-first: tapping a game opens the match detail sheet, and the
+            // stream is one more tap from there. Racing gets its own card —
+            // a weekend of sessions, not a fixture — rather than skipping
+            // straight to the stream the way it used to.
             if sport == .f1 {
-                viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.broadcastName)
+                scoreViewModel.presentRaceCard(game)
+            } else if sport == .golf {
+                scoreViewModel.presentGolfCard(game)
             } else {
                 scoreViewModel.presentGameDetails(game, sport: sport)
             }
@@ -875,7 +880,19 @@ private struct GameScoreButton: View {
                 }
             }
 
-            if sport != .f1 {
+            if sport == .f1 {
+                Button {
+                    scoreViewModel.presentRaceCard(game)
+                } label: {
+                    Label("Race Card", systemImage: "flag.checkered")
+                }
+            } else if sport == .golf {
+                Button {
+                    scoreViewModel.presentGolfCard(game)
+                } label: {
+                    Label("Leaderboard", systemImage: "list.number")
+                }
+            } else {
                 Button {
                     scoreViewModel.presentGameDetails(game, sport: sport)
                 } label: {
@@ -1277,6 +1294,8 @@ struct ScoreRow: View {
             VStack(spacing: 0) {
                 if sport == .f1 {
                     raceLayout
+                } else if sport == .golf {
+                    golfLayout
                 } else if sport == .tennis {
                     tennisLayout
                 } else {
@@ -1303,7 +1322,7 @@ struct ScoreRow: View {
     /// sports: F1 and tennis have no two clubs to colour.
     @ViewBuilder
     private var teamColorBackdrop: some View {
-        if sport == .f1 || sport == .tennis {
+        if sport == .f1 || sport == .tennis || sport == .golf {
             Color.black.opacity(0.4)
         } else {
             ZStack {
@@ -1452,20 +1471,168 @@ struct ScoreRow: View {
         return String(Int(value))
     }
 
+    /// A race weekend, not a fixture. The old card was the event name plus the
+    /// event's own status — which reads "Final" all Saturday because a practice
+    /// session finished — and nothing else: no track, no session times, no
+    /// result. This one leads with the session that matters right now and shows
+    /// the podium of the last one that ran.
     private var raceLayout: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(game.shortName).font(.system(size: 16, weight: .semibold)).foregroundStyle(.primary).lineLimit(1)
-                HStack(spacing: 8) {
-                    Text(game.status.type.detail).font(.system(size: 13)).foregroundStyle(game.status.type.state == "in" ? .red : .secondary)
-                    if let cn = game.broadcastName {
-                        Text(cn).font(.system(size: 10, weight: .black)).foregroundStyle(.primary).padding(.horizontal, 5).padding(.vertical, 1).background(Color.white.opacity(0.15)).cornerRadius(3)
+        let session = game.currentRaceSession
+        let finished = game.latestFinishedRaceSession
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(game.shortName)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if let circuit = game.circuit?.summary {
+                        Text(circuit)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+                if let cn = game.broadcastName {
+                    Text(cn)
+                        .font(.system(size: 10, weight: .black))
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Color.white.opacity(0.15))
+                        .cornerRadius(3)
+                }
+            }
+
+            if let session {
+                HStack(spacing: 6) {
+                    Text(Self.sessionName(session.label).uppercased())
+                        .font(.system(size: 10, weight: .black))
+                        .kerning(0.4)
+                        .foregroundStyle(.white.opacity(0.85))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Capsule().fill(Color.white.opacity(0.14)))
+                    Text(session.detail)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(session.state == "in" ? .red : .secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            if let finished, session?.state != "in" || finished.label != session?.label {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("\(Self.sessionName(finished.label)) result")
+                        .font(.system(size: 10, weight: .black))
+                        .kerning(0.4)
+                        .foregroundStyle(.white.opacity(0.4))
+                    ForEach(Array(finished.order.prefix(3).enumerated()), id: \.offset) { index, driver in
+                        HStack(spacing: 8) {
+                            Text("\(index + 1)")
+                                .font(.system(size: 12, weight: .black))
+                                .foregroundStyle(.white.opacity(0.55))
+                                .frame(width: 12, alignment: .leading)
+                            if let flag = driver.athlete?.flag?.href, !flag.isEmpty {
+                                CachedAsyncImage(urlString: flag,
+                                                 size: CGSize(width: 16, height: 16),
+                                                 decodeSize: CGSize(width: 48, height: 48))
+                                    .clipShape(RoundedRectangle(cornerRadius: 2))
+                            }
+                            Text(driver.athlete?.displayName ?? driver.athlete?.shortName ?? "—")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
                     }
                 }
             }
-            Spacer()
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 4)
+    }
+
+    /// A golf tournament: the event, where it's being played, the round, and
+    /// the top of the leaderboard. The scoreboard hands over the whole 144-man
+    /// field ordered by position, so the top three come free.
+    private var golfLayout: some View {
+        let leaders = (game.allCompetitions.first?.competitors ?? [])
+            .sorted { ($0.order ?? 999) < ($1.order ?? 999) }
+            .prefix(3)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(game.shortName)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(game.status.type.detail)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(game.status.type.state == "in" ? .red : .secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                if let cn = game.broadcastName {
+                    Text(cn)
+                        .font(.system(size: 10, weight: .black))
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Color.white.opacity(0.15))
+                        .cornerRadius(3)
+                }
+            }
+
+            if !leaders.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(Array(leaders.enumerated()), id: \.offset) { index, player in
+                        HStack(spacing: 8) {
+                            Text("\(index + 1)")
+                                .font(.system(size: 12, weight: .black))
+                                .foregroundStyle(.white.opacity(0.55))
+                                .frame(width: 12, alignment: .leading)
+                            if let flag = player.athlete?.flag?.href, !flag.isEmpty {
+                                CachedAsyncImage(urlString: flag,
+                                                 size: CGSize(width: 16, height: 16),
+                                                 decodeSize: CGSize(width: 48, height: 48))
+                                    .clipShape(RoundedRectangle(cornerRadius: 2))
+                            }
+                            Text(player.athlete?.displayName ?? player.athlete?.shortName ?? "—")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                            Spacer(minLength: 4)
+                            Text(player.score ?? "–")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(Self.golfParColor(player.score))
+                                .monospacedDigit()
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 4)
+    }
+
+    /// Under par green, over par red — the same convention as the game card.
+    static func golfParColor(_ total: String?) -> Color {
+        guard let total, !total.isEmpty else { return .white }
+        if total.hasPrefix("-") { return Color(red: 0.35, green: 0.85, blue: 0.45) }
+        if total.hasPrefix("+") { return Color(red: 1.0, green: 0.45, blue: 0.42) }
+        return .white
+    }
+
+    /// ESPN's session abbreviations spelled out.
+    static func sessionName(_ abbreviation: String) -> String {
+        switch abbreviation.lowercased() {
+        case "fp1": return "Practice 1"
+        case "fp2": return "Practice 2"
+        case "fp3": return "Practice 3"
+        case "qual", "q": return "Qualifying"
+        case "sprint": return "Sprint"
+        case "sq", "sprintqual": return "Sprint Qualifying"
+        case "race": return "Race"
+        default: return abbreviation
+        }
     }
 }
 

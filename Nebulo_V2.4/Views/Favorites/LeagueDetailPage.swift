@@ -214,6 +214,9 @@ struct LeagueDetailPage: View {
 
     enum Tab: String, CaseIterable, Identifiable {
         case table = "Table", fixtures = "Fixtures", results = "Results"
+        // Series tabs — Formula 1 and golf have a season of one-off events
+        // rather than a table and a fixture list. See `isSeries`.
+        case schedule = "Schedule", drivers = "Drivers", constructors = "Constructors"
         var id: String { rawValue }
     }
 
@@ -221,6 +224,9 @@ struct LeagueDetailPage: View {
     @State private var standings: [LeagueDetailService.StandingsGroup] = []
     @State private var schedule: [ESPNEvent] = []
     @State private var loading = true
+    /// Season calendar + championships, for the series sports only.
+    @State private var calendar: [SeriesCalendarService.Entry] = []
+    @State private var season: F1DetailService.Season?
 
     @State private var heroPull = ScrollProgress()
     @State private var heroScroll = ScrollProgress()
@@ -272,7 +278,7 @@ struct LeagueDetailPage: View {
                     // Tab chips — the reference's Table / Fixtures / News row,
                     // minus the tabs this app has no feed for.
                     HStack(spacing: 9) {
-                        ForEach(Tab.allCases) { t in
+                        ForEach(availableTabs) { t in
                             Button(action: {
                                 guard SwipeTapGuard.tapsAllowed else { return }
                                 viewModel.triggerSelectionHaptic()
@@ -297,6 +303,9 @@ struct LeagueDetailPage: View {
                     case .table:   tableTab
                     case .fixtures: fixtureList(upcoming, empty: "No fixtures scheduled")
                     case .results:  fixtureList(results, empty: "No results yet", newestFirst: true)
+                    case .schedule: seasonScheduleTab
+                    case .drivers: seriesStandingsTab
+                    case .constructors: seriesConstructorsTab
                     }
 
                     if loading && standings.isEmpty && schedule.isEmpty {
@@ -336,6 +345,20 @@ struct LeagueDetailPage: View {
             async let f = LeagueDetailService.fetchSchedule(sport: sport, leagueLabel: leagueLabel)
             standings = await s
             schedule = await f
+
+            if isSeries {
+                // The season calendar, plus the championships F1 keeps. Golf
+                // publishes no standings, so it gets the schedule alone.
+                async let c = SeriesCalendarService.fetch(sport: sport)
+                async let season: F1DetailService.Season? = sport == .f1
+                    ? await F1DetailService.fetchSeason() : nil
+                calendar = await c
+                self.season = await season
+                tab = .schedule
+                loading = false
+                return
+            }
+
             loading = false
             // Nothing to show a table for — open on the fixtures instead of a
             // blank tab.
@@ -407,6 +430,217 @@ struct LeagueDetailPage: View {
         if !liveGames.isEmpty { parts.append("\(liveGames.count) live") }
         if let group = standings.first, !group.rows.isEmpty { parts.append("\(group.rows.count) teams") }
         return parts
+    }
+
+    // MARK: Series (Formula 1, golf)
+
+    /// One event at a time over a season, with no table and no fixture list —
+    /// so this page shows the season instead: the calendar, and the
+    /// championships where the series keeps one.
+    private var isSeries: Bool { sport == .f1 || sport == .golf }
+
+    private var availableTabs: [Tab] {
+        guard isSeries else { return [.table, .fixtures, .results] }
+        var tabs: [Tab] = [.schedule]
+        if !(season?.standings.isEmpty ?? true) { tabs.append(.drivers) }
+        if !(season?.constructors.isEmpty ?? true) { tabs.append(.constructors) }
+        return tabs
+    }
+
+    private static let seriesDayFmt: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "MMM d"; return f
+    }()
+
+    /// The whole season: every Grand Prix or tour stop, with the one that's on
+    /// marked live and everything already run dimmed.
+    @ViewBuilder
+    private var seasonScheduleTab: some View {
+        if calendar.isEmpty {
+            emptyNote("No schedule published yet")
+        } else {
+            VStack(spacing: 0) {
+                ForEach(Array(calendar.enumerated()), id: \.element.id) { index, entry in
+                    let current = entry.isCurrent()
+                    let past = entry.isPast()
+                    Button(action: {
+                        guard SwipeTapGuard.tapsAllowed else { return }
+                        // Only the event ESPN is currently serving has a card
+                        // behind it; the rest of the calendar is reference.
+                        guard let game = scheduleEvent(for: entry.id) else { return }
+                        viewModel.triggerSelectionHaptic()
+                        dismiss()
+                        if sport == .f1 {
+                            scoreViewModel.presentRaceCard(game)
+                        } else {
+                            scoreViewModel.presentGolfCard(game)
+                        }
+                    }) {
+                        HStack(spacing: 12) {
+                            Text("\(index + 1)")
+                                .font(.system(size: 12, weight: .black))
+                                .foregroundStyle(.white.opacity(0.4))
+                                .monospacedDigit()
+                                .frame(width: 22, alignment: .leading)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(entry.label)
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(past && !current ? 0.6 : 1))
+                                    .lineLimit(1)
+                                if current {
+                                    HStack(spacing: 5) {
+                                        Circle().fill(Color.red).frame(width: 6, height: 6)
+                                        Text("This week")
+                                            .font(.system(size: 11, weight: .bold))
+                                            .foregroundStyle(.red)
+                                    }
+                                }
+                            }
+
+                            Spacer(minLength: 8)
+
+                            Text(dateRange(entry))
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.55))
+                                .lineLimit(1)
+
+                            if scheduleEvent(for: entry.id) != nil {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.35))
+                            }
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 11)
+                        .background(current ? Color.white.opacity(0.07) : Color.clear)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    if index < calendar.count - 1 {
+                        Rectangle()
+                            .fill(Color.white.opacity(0.06))
+                            .frame(height: 0.5)
+                            .padding(.leading, 14)
+                    }
+                }
+            }
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(NuvioTheme.card)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .padding(.horizontal, 20)
+        }
+    }
+
+    private func dateRange(_ entry: SeriesCalendarService.Entry) -> String {
+        guard let start = entry.start else { return "" }
+        let startText = Self.seriesDayFmt.string(from: start)
+        guard let end = entry.end,
+              !Calendar.current.isDate(start, inSameDayAs: end) else { return startText }
+        return "\(startText) – \(Self.seriesDayFmt.string(from: end))"
+    }
+
+    /// The calendar row's event, when it's one the scoreboard is serving.
+    private func scheduleEvent(for id: String) -> ESPNEvent? {
+        schedule.first { $0.id == id }
+    }
+
+    @ViewBuilder
+    private var seriesStandingsTab: some View {
+        if let drivers = season?.standings, !drivers.isEmpty {
+            VStack(spacing: 0) {
+                ForEach(Array(drivers.enumerated()), id: \.element.id) { index, row in
+                    HStack(spacing: 10) {
+                        Text(row.rank.map(String.init) ?? String(index + 1))
+                            .foregroundStyle(.white.opacity(0.5))
+                            .frame(width: 24, alignment: .leading)
+                        if let flag = row.flag, !flag.isEmpty {
+                            CachedAsyncImage(urlString: flag,
+                                             size: CGSize(width: 20, height: 20),
+                                             decodeSize: CGSize(width: 60, height: 60))
+                                .clipShape(RoundedRectangle(cornerRadius: 2))
+                        }
+                        Text(row.name)
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(row.points ?? "–")
+                            .fontWeight(.bold)
+                            .foregroundStyle(.white)
+                            .monospacedDigit()
+                            .frame(width: 48, alignment: .trailing)
+                    }
+                    .font(.system(size: 13, weight: .medium))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    if index < drivers.count - 1 {
+                        Rectangle()
+                            .fill(Color.white.opacity(0.06))
+                            .frame(height: 0.5)
+                            .padding(.leading, 14)
+                    }
+                }
+            }
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(NuvioTheme.card)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .padding(.horizontal, 20)
+        } else {
+            emptyNote("No championship standings yet")
+        }
+    }
+
+    @ViewBuilder
+    private var seriesConstructorsTab: some View {
+        if let teams = season?.constructors, !teams.isEmpty {
+            VStack(spacing: 0) {
+                ForEach(Array(teams.enumerated()), id: \.element.id) { index, row in
+                    HStack(spacing: 10) {
+                        Text(row.rank.map(String.init) ?? String(index + 1))
+                            .foregroundStyle(.white.opacity(0.5))
+                            .frame(width: 24, alignment: .leading)
+                        Text(row.name)
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(row.points ?? "–")
+                            .fontWeight(.bold)
+                            .foregroundStyle(.white)
+                            .monospacedDigit()
+                            .frame(width: 48, alignment: .trailing)
+                    }
+                    .font(.system(size: 13, weight: .medium))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .overlay(alignment: .leading) {
+                        if let hex = row.color,
+                           let color = Color(hex: hex.hasPrefix("#") ? hex : "#\(hex)") {
+                            Rectangle().fill(color).frame(width: 3)
+                        }
+                    }
+                    if index < teams.count - 1 {
+                        Rectangle()
+                            .fill(Color.white.opacity(0.06))
+                            .frame(height: 0.5)
+                            .padding(.leading, 14)
+                    }
+                }
+            }
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(NuvioTheme.card)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .padding(.horizontal, 20)
+        } else {
+            emptyNote("No constructors' championship")
+        }
     }
 
     // MARK: Tabs

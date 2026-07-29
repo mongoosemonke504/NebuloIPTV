@@ -20,6 +20,7 @@ enum SportType: String, CaseIterable, Identifiable, Sendable {
     case cbb = "NCAAB", cfb = "NCAAF", nfl = "NFL", nba = "NBA", wnba = "WNBA", nhl = "NHL", mlb = "MLB"
     case f1 = "Formula 1"
     case tennis = "Tennis"
+    case golf = "Golf"
     case collegeHockey = "NCAA Hockey"
     case softball = "NCAA Softball"
     case mLacrosse = "NCAA M-Lacrosse"
@@ -57,6 +58,9 @@ enum SportType: String, CaseIterable, Identifiable, Sendable {
         // (see ScoreViewModel.fetchTennisInternal), so no single endpoint.
         case .tennis: return ""
         case .f1: return "https://site.api.espn.com/apis/site/v2/sports/racing/f1/scoreboard"
+        // One event with the whole field inside it, same shape as a race
+        // weekend rather than a fixture.
+        case .golf: return "https://site.api.espn.com/apis/site/v2/sports/golf/pga/scoreboard"
         case .mma: return "https://site.api.espn.com/apis/site/v2/sports/mma/ufc/scoreboard"
         }
     }

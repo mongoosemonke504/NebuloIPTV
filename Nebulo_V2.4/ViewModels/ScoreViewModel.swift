@@ -102,6 +102,26 @@ class ScoreViewModel: ObservableObject {
         detailRequest = makeDetailRequest(for: game, sport: sport)
     }
 
+    /// Racing and golf open the SAME game card as every other sport — the card
+    /// swaps in its own header and tabs for a field event (see
+    /// `GameDetailContentView`). These stay as named entry points so a call
+    /// site doesn't have to know which sport it's holding.
+    ///
+    /// Both use `deepLinkRequest` rather than `detailRequest` because they're
+    /// opened from the home shelves and Favorites as well as the hub, and that
+    /// slot presents over any screen.
+    func presentRaceCard(_ game: ESPNEvent) {
+        deepLinkRequest = makeDetailRequest(for: game, sport: .f1)
+    }
+
+    /// `highlightPlayer` marks a golfer's row on the leaderboard — set when the
+    /// card is opened from a favourited player rather than the tournament.
+    func presentGolfCard(_ game: ESPNEvent, highlightPlayer: String? = nil) {
+        var request = makeDetailRequest(for: game, sport: .golf)
+        request.highlightPlayer = highlightPlayer
+        deepLinkRequest = request
+    }
+
     func makeDetailRequest(for game: ESPNEvent, sport: SportType) -> GameDetailRequest {
         var resolved = sport
         if sport == .pinned { resolved = sportType(for: game) }
@@ -152,7 +172,10 @@ class ScoreViewModel: ObservableObject {
         var events: [(game: ESPNEvent, sport: SportType)] = []
         for game in windowed {
             let sport = sportType(for: game)
-            guard sport != .f1 else { continue }
+            // Field events don't belong in the paging carousel: swiping from a
+            // 144-man leaderboard into a baseball scoreline is nonsense, and
+            // neither has a summary to prefetch.
+            guard !game.isFieldEvent else { continue }
             guard seen.insert(game.id).inserted else { continue }
             events.append((game, sport))
         }
@@ -701,7 +724,10 @@ class ScoreViewModel: ObservableObject {
 
         var seen = Set<String>()
         var result: [ESPNEvent] = []
-        for game in pool where game.status.type.state == "in" {
+        // `isLiveNow`, not the raw state: ESPN marks a Grand Prix event "Final"
+        // the moment a practice session ends, so a race that was actually
+        // running never reached Live Now. See ESPNEvent.isLiveNow.
+        for game in pool where game.isLiveNow {
             if seen.insert(game.id).inserted {
                 result.append(game)
             }
@@ -733,7 +759,9 @@ class ScoreViewModel: ObservableObject {
     private func warmTopGameSummaries(limit: Int = 6) {
         for game in allLiveGames.prefix(limit) {
             let sport = sportType(for: game)
-            guard sport != .f1 else { continue }
+            // No summary endpoint exists for racing or golf — prefetching one
+            // is a guaranteed 404.
+            guard !game.isFieldEvent else { continue }
             GameSummaryStore.shared.prefetch(makeDetailRequest(for: game, sport: sport))
         }
     }
