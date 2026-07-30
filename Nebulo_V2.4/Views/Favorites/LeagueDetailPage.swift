@@ -231,6 +231,13 @@ struct LeagueDetailPage: View {
     @State private var heroPull = ScrollProgress()
     @State private var heroScroll = ScrollProgress()
 
+    /// Horizontal-swipe plumbing, the same as the team and driver pages.
+    @State private var scrollLock = FlagBox()
+    @State private var swipeConsumed = false
+    @State private var isSliding = false
+    @State private var slideFromTrailing = true
+    @State private var chipBarFrame: CGRect = .zero
+
     private static let dateFmt: DateFormatter = {
         let f = DateFormatter(); f.dateStyle = .medium; f.timeStyle = .short; return f
     }()
@@ -282,7 +289,7 @@ struct LeagueDetailPage: View {
                             Button(action: {
                                 guard SwipeTapGuard.tapsAllowed else { return }
                                 viewModel.triggerSelectionHaptic()
-                                tab = t
+                                selectTab(t)
                             }) {
                                 Text(t.rawValue)
                                     .font(.system(size: 14, weight: .bold))
@@ -298,15 +305,28 @@ struct LeagueDetailPage: View {
                         Spacer(minLength: 0)
                     }
                     .padding(.horizontal, 20)
+                    .captureGlobalFrame { chipBarFrame = $0 }
 
-                    switch tab {
-                    case .table:   tableTab
-                    case .fixtures: fixtureList(upcoming, empty: "No fixtures scheduled")
-                    case .results:  fixtureList(results, empty: "No results yet", newestFirst: true)
-                    case .schedule: seasonScheduleTab
-                    case .drivers: seriesStandingsTab
-                    case .constructors: seriesConstructorsTab
+                    // ZStack so the outgoing and incoming tab overlap during the
+                    // directional slide instead of stacking vertically.
+                    ZStack(alignment: .top) {
+                        Group {
+                            switch tab {
+                            case .table:   tableTab
+                            case .fixtures: fixtureList(upcoming, empty: "No fixtures scheduled")
+                            case .results:  fixtureList(results, empty: "No results yet", newestFirst: true)
+                            case .schedule: seasonScheduleTab
+                            case .drivers: seriesStandingsTab
+                            case .constructors: seriesConstructorsTab
+                            }
+                        }
+                        .id(tab)
+                        .transition(.asymmetric(
+                            insertion: .move(edge: slideFromTrailing ? .trailing : .leading).combined(with: .opacity),
+                            removal: .move(edge: slideFromTrailing ? .leading : .trailing).combined(with: .opacity)
+                        ))
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
                     if loading && standings.isEmpty && schedule.isEmpty {
                         HStack {
@@ -321,12 +341,46 @@ struct LeagueDetailPage: View {
                 }
             }
             .ignoresSafeArea(.container, edges: .top)
+            // Frozen for the duration of a horizontal swipe, so a sideways
+            // gesture travels purely sideways.
+            .scrollLocked(scrollLock)
             .onScrollGeometryChange(for: CGFloat.self) { geo in
                 geo.contentOffset.y + geo.contentInsets.top
             } action: { _, scrolled in
                 heroPull.set(max(0, -scrolled))
                 heroScroll.set(min(max(0, scrolled), heroHeight))
             }
+            // Sideways swipe turns the page, the same gesture the team, driver
+            // and Sports pages use. Drags starting on the chip row are left
+            // alone, and the left screen edge stays reserved for back
+            // navigation.
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 10, coordinateSpace: .global)
+                    .onChanged { value in
+                        let dx = value.translation.width
+                        let dy = value.translation.height
+                        if abs(dx) > abs(dy) * 1.4 { SwipeTapGuard.suppress() }
+                        if value.startLocation.x > 44, !chipBarFrame.contains(value.startLocation) {
+                            if abs(dx) > abs(dy) * 1.4 {
+                                scrollLock.set(true)
+                            } else if !swipeConsumed, abs(dy) > abs(dx) * 1.4 {
+                                // A drag that turns decisively vertical releases
+                                // the lock, so this can never strand the page.
+                                scrollLock.set(false)
+                            }
+                        }
+                        guard !swipeConsumed, !isSliding,
+                              value.startLocation.x > 44,
+                              !chipBarFrame.contains(value.startLocation),
+                              abs(dx) > 38, abs(dx) > abs(dy) * 1.4 else { return }
+                        swipeConsumed = true
+                        advanceTab(dx < 0 ? 1 : -1)
+                    }
+                    .onEnded { _ in
+                        swipeConsumed = false
+                        scrollLock.set(false)
+                    }
+            )
 
             HStack {
                 NuvioCircleButton(systemName: "chevron.left") {
@@ -339,6 +393,11 @@ struct LeagueDetailPage: View {
             .padding(.top, 4)
         }
         .preferredColorScheme(.dark)
+        .onAppear {
+            // No swipe can be in flight on arrival, so never inherit a frozen
+            // scroll from a gesture cancelled on the way out.
+            scrollLock.set(false)
+        }
         .task(id: "\(sport.rawValue)|\(leagueLabel ?? "")") {
             loading = true
             async let s = LeagueDetailService.fetchStandings(sport: sport, leagueLabel: leagueLabel)
@@ -366,6 +425,31 @@ struct LeagueDetailPage: View {
         }
     }
 
+    // MARK: Tab switching
+
+    /// Switches tab with the app's directional slide — the chips and the swipe
+    /// both come through here so a tap and a swipe animate identically.
+    private func selectTab(_ newTab: Tab) {
+        guard newTab != tab, !isSliding else { return }
+        let tabs = availableTabs
+        let oldIndex = tabs.firstIndex(of: tab) ?? 0
+        let newIndex = tabs.firstIndex(of: newTab) ?? 0
+        slideFromTrailing = newIndex > oldIndex
+        isSliding = true
+        withAnimation(.easeOut(duration: 0.25)) { tab = newTab }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { isSliding = false }
+    }
+
+    /// Steps to the previous/next chip — what the sideways swipe drives. No
+    /// haptic: a buzz on every page swipe breaks the feel.
+    private func advanceTab(_ delta: Int) {
+        let tabs = availableTabs
+        guard let index = tabs.firstIndex(of: tab) else { return }
+        let next = index + delta
+        guard tabs.indices.contains(next) else { return }
+        selectTab(tabs[next])
+    }
+
     // MARK: Hero
 
     private var hero: some View {
@@ -389,13 +473,16 @@ struct LeagueDetailPage: View {
             .frame(maxWidth: .infinity)
             .modifier(HeroScrollParallax(scroll: heroScroll, baseScale: 1.14))
 
+            // One continuous ramp to black — see the team page for why the old
+            // clear-then-dive stops left a line and a flat black band.
             LinearGradient(
                 stops: [
-                    .init(color: .clear, location: 0.0),
-                    .init(color: .clear, location: 0.40),
-                    .init(color: .black.opacity(0.55), location: 0.70),
-                    .init(color: .black.opacity(0.96), location: 0.93),
-                    .init(color: .black, location: 1.0)
+                    .init(color: .clear, location: 0.00),
+                    .init(color: .black.opacity(0.05), location: 0.30),
+                    .init(color: .black.opacity(0.30), location: 0.55),
+                    .init(color: .black.opacity(0.62), location: 0.75),
+                    .init(color: .black.opacity(0.86), location: 0.90),
+                    .init(color: .black, location: 1.00)
                 ],
                 startPoint: .top, endPoint: .bottom
             )

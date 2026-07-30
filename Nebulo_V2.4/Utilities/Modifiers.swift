@@ -343,8 +343,27 @@ struct CompactHeaderScrim: View {
     /// The canvas is pure black since the redesign, so the vignette is a
     /// plain black wash unless a caller overrides it.
     private var tint: Color { tintOverride ?? .black }
+    /// Length in points of a soft ramp at the scrim's TOP edge.
+    ///
+    /// Zero — the default, and right for every scrim that sits flush with the
+    /// top of the screen — keeps the hard edge, which is invisible there because
+    /// it's at the screen boundary.
+    ///
+    /// A scrim that can sit MID-screen needs one. The team and driver pages pin
+    /// a header whose frame reaches `pinnedInset` ABOVE its chips, so that frame
+    /// top only arrives at the top of the screen at the very end of the
+    /// collapse: for the whole scroll before it, a hard-edged 82% wash plus
+    /// blur was drawing a line straight across the hero with a flat dark bar
+    /// beneath it. The ramp is added ON TOP of `height` and offset back out, so
+    /// the scrim still covers exactly what it used to and the ramp is simply
+    /// off-screen once the header is pinned — the pinned look is unchanged.
+    var topFade: CGFloat = 0
 
     var body: some View {
+        let total = height + topFade
+        // Where the ramp finishes, as a fraction of the taller scrim; the
+        // bottom fade then starts `fadeStart` of the way through what remains.
+        let rampEnd = total > 0 ? topFade / total : 0
         ZStack {
             Rectangle().fill(.regularMaterial)
             LinearGradient(
@@ -352,17 +371,19 @@ struct CompactHeaderScrim: View {
                 startPoint: .top, endPoint: .bottom
             )
         }
-        .frame(height: height)
+        .frame(height: total)
         .mask(
             LinearGradient(
                 stops: [
-                    .init(color: .black, location: 0),
-                    .init(color: .black, location: fadeStart),
+                    .init(color: .clear, location: 0),
+                    .init(color: .black, location: rampEnd),
+                    .init(color: .black, location: rampEnd + (1 - rampEnd) * fadeStart),
                     .init(color: .clear, location: 1)
                 ],
                 startPoint: .top, endPoint: .bottom
             )
         )
+        .offset(y: -topFade)
         .allowsHitTesting(false)
     }
 }

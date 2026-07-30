@@ -56,6 +56,10 @@ struct TeamDetailPage: View {
     @State private var slideFromTrailing = true
     @State private var chipBarFrame: CGRect = .zero
 
+    /// Points of scroll over which the header collapses: the big title hands
+    /// over to the compact one, and the chip row's scrim ramps in.
+    private static let handoverSpan: CGFloat = 90
+
     private static let dateFmt: DateFormatter = {
         let f = DateFormatter(); f.dateStyle = .medium; f.timeStyle = .short; return f
     }()
@@ -269,7 +273,7 @@ struct TeamDetailPage: View {
                 // scroll frame, so it hits 0 exactly when the header pins. The
                 // handover runs over the last 90pt of that travel, so the big
                 // title fades out as the compact one in the chrome row fades in.
-                let span: CGFloat = 90
+                let span = Self.handoverSpan
                 titleProgress.set(min(max((span - y) / span, 0), 1))
             }
             .onScrollGeometryChange(for: CGFloat.self) { geo in
@@ -323,7 +327,9 @@ struct TeamDetailPage: View {
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
-                    .scrollProgressOpacity(titleProgress) { Double($0) }
+                    // Starts only once the hero's copy of the name has finished
+                    // fading (see the hero's matching modifier).
+                    .scrollProgressOpacity(titleProgress) { Double(max(($0 - 0.55) / 0.45, 0)) }
                 Spacer(minLength: 0)
                 // Balances the chevron so the title sits centred.
                 Color.clear.frame(width: 38, height: 38)
@@ -436,13 +442,26 @@ struct TeamDetailPage: View {
 
             // Dissolve into the canvas so the name and pill stay legible over
             // any brand colour, pale ones included.
+            //
+            // One CONTINUOUS ramp, and it reaches pure black only at the very
+            // last pixel. The earlier version was clear to 0.40, then dove to
+            // 96% black by 0.93 — which put two artefacts on screen at once:
+            // the dive read as a hard line where the colour crossed into
+            // visually-black, and everything past it was a flat black band
+            // filling the hero's bottom quarter (~100pt of dead space between
+            // the colour and the chips). A monotonic ramp has no crossing point
+            // to see and no plateau to sit in, so any slice of the hero the
+            // scroll happens to leave on screen reads as a gradient. Ending on
+            // black exactly at the bottom edge is what keeps that edge
+            // invisible — there is no colour left at it to cut off.
             LinearGradient(
                 stops: [
-                    .init(color: .clear, location: 0.0),
-                    .init(color: .clear, location: 0.40),
-                    .init(color: .black.opacity(0.55), location: 0.70),
-                    .init(color: .black.opacity(0.96), location: 0.93),
-                    .init(color: .black, location: 1.0)
+                    .init(color: .clear, location: 0.00),
+                    .init(color: .black.opacity(0.05), location: 0.30),
+                    .init(color: .black.opacity(0.30), location: 0.55),
+                    .init(color: .black.opacity(0.62), location: 0.75),
+                    .init(color: .black.opacity(0.86), location: 0.90),
+                    .init(color: .black, location: 1.00)
                 ],
                 startPoint: .top, endPoint: .bottom
             )
@@ -481,6 +500,12 @@ struct TeamDetailPage: View {
                 }
             }
             .padding(.bottom, 34)
+            // Hands the name over to the compact copy in the chrome row instead
+            // of leaving both on screen at once. The two fades are deliberately
+            // sequential — this block is gone by 0.5, the compact one only
+            // starts at 0.55 — because they sit barely 100pt apart, so a
+            // straight cross-fade read as the team name printed twice.
+            .scrollProgressOpacity(titleProgress) { 1 - Double(min($0 / 0.5, 1)) }
         }
         .frame(height: heroHeight)
         .frame(maxWidth: .infinity)
@@ -527,7 +552,12 @@ struct TeamDetailPage: View {
         // actually pinned — at the top of the page it would otherwise wash over
         // the title block sitting inside its padding.
         .background(alignment: .top) {
-            CompactHeaderScrim(height: pinnedInset + 120, fadeStart: 0.55)
+            // `topFade` matches the handover span, so the scrim's top edge is
+            // soft over exactly the stretch of scroll where it's still mid-screen
+            // and hard-edged once it's flush with the top.
+            CompactHeaderScrim(height: pinnedInset + 120,
+                               fadeStart: 0.55,
+                               topFade: Self.handoverSpan)
                 .scrollProgressOpacity(titleProgress) { Double($0 * $0) }
         }
     }

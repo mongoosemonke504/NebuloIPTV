@@ -40,6 +40,9 @@ struct DriverDetailPage: View {
     @State private var slideFromTrailing = true
     @State private var chipBarFrame: CGRect = .zero
 
+    /// Points of scroll the header collapse runs over — see the team page.
+    private static let handoverSpan: CGFloat = 90
+
     private var heroHeight: CGFloat { UIScreen.main.bounds.height * 0.47 }
 
     private var pinnedInset: CGFloat {
@@ -141,7 +144,7 @@ struct DriverDetailPage: View {
             .scrollLocked(scrollLock)
             .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
                 guard let y = offsets["driver"] else { return }
-                let span: CGFloat = 90
+                let span = Self.handoverSpan
                 titleProgress.set(min(max((span - y) / span, 0), 1))
             }
             .onScrollGeometryChange(for: CGFloat.self) { geo in
@@ -187,7 +190,7 @@ struct DriverDetailPage: View {
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
-                    .scrollProgressOpacity(titleProgress) { Double($0) }
+                    .scrollProgressOpacity(titleProgress) { Double(max(($0 - 0.55) / 0.45, 0)) }
                 Spacer(minLength: 0)
                 Color.clear.frame(width: 38, height: 38)
             }
@@ -230,13 +233,16 @@ struct DriverDetailPage: View {
             .frame(maxWidth: .infinity)
             .modifier(HeroScrollParallax(scroll: heroScroll, baseScale: 1.14))
 
+            // One continuous ramp to black — see the team page for why the old
+            // clear-then-dive stops left a line and a flat black band.
             LinearGradient(
                 stops: [
-                    .init(color: .clear, location: 0.0),
-                    .init(color: .clear, location: 0.40),
-                    .init(color: .black.opacity(0.55), location: 0.70),
-                    .init(color: .black.opacity(0.96), location: 0.93),
-                    .init(color: .black, location: 1.0)
+                    .init(color: .clear, location: 0.00),
+                    .init(color: .black.opacity(0.05), location: 0.30),
+                    .init(color: .black.opacity(0.30), location: 0.55),
+                    .init(color: .black.opacity(0.62), location: 0.75),
+                    .init(color: .black.opacity(0.86), location: 0.90),
+                    .init(color: .black, location: 1.00)
                 ],
                 startPoint: .top, endPoint: .bottom
             )
@@ -276,6 +282,9 @@ struct DriverDetailPage: View {
                 }
             }
             .padding(.bottom, 30)
+            // Sequential handover to the compact name in the chrome row — see
+            // the team page for why the two fades must not overlap.
+            .scrollProgressOpacity(titleProgress) { 1 - Double(min($0 / 0.5, 1)) }
         }
         .frame(height: heroHeight)
         .frame(maxWidth: .infinity)
@@ -310,7 +319,11 @@ struct DriverDetailPage: View {
         .padding(.top, pinnedInset)
         .captureGlobalFrame { chipBarFrame = $0 }
         .background(alignment: .top) {
-            CompactHeaderScrim(height: pinnedInset + 120, fadeStart: 0.55)
+            // Soft top edge while the scrim is still mid-screen — see the team
+            // page.
+            CompactHeaderScrim(height: pinnedInset + 120,
+                               fadeStart: 0.55,
+                               topFade: Self.handoverSpan)
                 .scrollProgressOpacity(titleProgress) { Double($0 * $0) }
         }
     }
