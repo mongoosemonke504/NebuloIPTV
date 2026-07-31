@@ -298,7 +298,6 @@ struct DriverDetailPage: View {
             ForEach(availableTabs) { t in
                 Button(action: {
                     guard SwipeTapGuard.tapsAllowed else { return }
-                    viewModel.triggerSelectionHaptic()
                     selectTab(t)
                 }) {
                     Text(t.rawValue)

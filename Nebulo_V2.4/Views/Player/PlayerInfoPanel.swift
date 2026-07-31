@@ -192,7 +192,6 @@ struct PlayerInfoPanel: View {
         guard newTab != selectedTab, !isSliding else { return }
         slideFromTrailing = newTab.rawValue > selectedTab.rawValue
         isSliding = true
-        ChannelViewModel.shared.triggerSelectionHaptic()
 
         let keepCollapsed = panelCollapse > 0.5
         carriedCollapse = keepCollapsed

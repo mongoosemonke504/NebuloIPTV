@@ -700,7 +700,6 @@ struct FavoritesFilterPills: View {
                 HStack(spacing: 8) {
                     ForEach(FavoritesFilter.allCases) { f in
                         Button(action: {
-                            UISelectionFeedbackGenerator().selectionChanged()
                             withAnimation(.easeOut(duration: 0.2)) {
                                 selected = f
                             }

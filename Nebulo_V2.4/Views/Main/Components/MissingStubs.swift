@@ -76,7 +76,8 @@ struct SearchView: View {
     var showsCloseButton: Bool = false
 
     private enum Scope: String, CaseIterable {
-        case all = "All", channels = "Channels", epg = "EPG", recordings = "Recordings"
+        case all = "All", channels = "Channels", epg = "EPG",
+             categories = "Categories", recordings = "Recordings"
     }
 
     @State private var scope: Scope = .all
@@ -162,14 +163,14 @@ struct SearchView: View {
         setScope(all[next])
     }
 
-    /// Switches the active scope with a directional slide + haptic, shared by
-    /// the chip taps and the horizontal swipe so both animate identically.
+    /// Switches the active scope with a directional slide, shared by the chip
+    /// taps and the horizontal swipe so both animate identically. Silent — no
+    /// tab or chip row in the app buzzes.
     private func setScope(_ target: Scope) {
         guard target != scope,
               let cur = Scope.allCases.firstIndex(of: scope),
               let dst = Scope.allCases.firstIndex(of: target) else { return }
         scopeSlideFromTrailing = dst > cur
-        viewModel.triggerHaptic(.light)
         withAnimation(.easeOut(duration: 0.25)) { scope = target }
     }
 
@@ -266,15 +267,19 @@ struct SearchView: View {
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 25)
                         .onChanged { value in
-                            guard !query.isEmpty else { return }
                             let h = value.translation.width
                             let v = value.translation.height
                             // As soon as the drag reads as horizontal, open the
-                            // tap-suppression window so the channel row under the
-                            // finger doesn't ALSO fire on release.
+                            // tap-suppression window so whatever is under the
+                            // finger doesn't ALSO fire on release. Deliberately
+                            // BEFORE the empty-query check below: the browse
+                            // screen has no scopes to switch between, but its
+                            // shelves and grid are just as tappable, and a
+                            // sideways drag across them was landing as a tap.
                             if abs(h) > abs(v) * 1.4 {
                                 SwipeTapGuard.suppress()
                             }
+                            guard !query.isEmpty else { return }
                             guard !scopeSwipeConsumed,
                                   abs(h) > 50, abs(h) > abs(v) * 1.5,
                                   !HorizontalScrollActivity.isActive else { return }
@@ -419,6 +424,7 @@ struct SearchView: View {
                                 LiveEventCard(game: game, accentColor: accentColor)
                                     .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                                     .onTapGesture {
+                                        guard SwipeTapGuard.tapsAllowed else { return }
                                         viewModel.triggerSelectionHaptic()
                                         let h = game.homeCompetitor?.team?.shortDisplayName ?? game.homeCompetitor?.athlete?.shortName ?? ""
                                         let a = game.awayCompetitor?.team?.shortDisplayName ?? game.awayCompetitor?.athlete?.shortName ?? ""
@@ -457,6 +463,7 @@ struct SearchView: View {
                     LazyHStack(spacing: 10) {
                         ForEach(recents) { channel in
                             Button {
+                                guard SwipeTapGuard.tapsAllowed else { return }
                                 viewModel.triggerSelectionHaptic()
                                 hideKeyboard()
                                 playAction(channel)
@@ -494,6 +501,7 @@ struct SearchView: View {
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
                 ForEach(viewModel.categories.filter { !$0.isHidden }) { cat in
                     Button {
+                        guard SwipeTapGuard.tapsAllowed else { return }
                         viewModel.triggerSelectionHaptic()
                         onCategorySelect(cat)
                     } label: {
@@ -548,10 +556,27 @@ struct SearchView: View {
         .padding(.top, 8)
     }
 
+    private var noResults: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.largeTitle)
+                .foregroundStyle(.secondary)
+            Text("No Results")
+                .font(.headline)
+                .foregroundStyle(.white)
+            Text("Try a different search term.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 60)
+    }
+
     @ViewBuilder
     private var resultsList: some View {
         VStack(alignment: .leading, spacing: 22) {
-            if scope != .recordings, let top = topResult {
+            // A channel isn't a result in either of these scopes.
+            if scope != .recordings, scope != .categories, let top = topResult {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("TOP RESULT")
                         .font(.caption.weight(.semibold))
@@ -607,29 +632,22 @@ struct SearchView: View {
                 }
             }
 
-            if topResult == nil && recordingMatches.isEmpty && viewModel.filteredCategories.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.largeTitle)
-                        .foregroundStyle(.secondary)
-                    Text("No Results")
-                        .font(.headline)
-                        .foregroundStyle(.white)
-                    Text("Try a different search term.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.top, 60)
+            // The Categories scope answers for itself: it can be empty while
+            // channels matched, and full while nothing else did.
+            if scope == .categories {
+                if viewModel.filteredCategories.isEmpty { noResults }
+            } else if topResult == nil && recordingMatches.isEmpty && viewModel.filteredCategories.isEmpty {
+                noResults
             }
 
-            if scope == .all && !viewModel.filteredCategories.isEmpty {
+            if (scope == .all || scope == .categories) && !viewModel.filteredCategories.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Categories")
                         .font(.title3.weight(.bold))
                         .foregroundStyle(.white)
                     ForEach(viewModel.filteredCategories) { cat in
                         Button {
+                            guard SwipeTapGuard.tapsAllowed else { return }
                             viewModel.triggerSelectionHaptic()
                             onCategorySelect(cat)
                         } label: {
@@ -766,6 +784,7 @@ struct SearchView: View {
     private func favoriteButton(_ channel: StreamChannel) -> some View {
         let isFav = viewModel.favoriteIDs.contains(channel.id)
         return Button {
+            guard SwipeTapGuard.tapsAllowed else { return }
             viewModel.triggerSelectionHaptic()
             viewModel.toggleFavorite(channel.id)
         } label: {

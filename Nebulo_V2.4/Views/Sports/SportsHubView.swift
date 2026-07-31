@@ -319,11 +319,24 @@ struct SportsHubView: View {
         .task {
             await scoreViewModel.fetchScores()
             scoreViewModel.applyFilter(text: viewModel.searchText)
-            triggerPreResolution()
             recomputeStats()
-            // Proactively warm the soccer-leagues crests (the busiest tab —
-            // many league sections of logos) so they're cached before the
-            // user swipes there, instead of streaming in on arrival.
+
+            // Everything below is WARMING — nothing on screen waits for it —
+            // so it must not land on the frame the tab switch is animating.
+            //
+            // It was doing exactly that. `fetchScores` returns immediately
+            // whenever its five-minute freshness guard holds, and an async
+            // function that returns without ever suspending doesn't yield: the
+            // whole body ran in one main-actor turn, right behind the hub's
+            // first render. So every visit to this tab paid for a full
+            // stream pre-resolution pass and a walk of every soccer section's
+            // crests at precisely the worst moment.
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled else { return }
+            triggerPreResolution()
+            // The busiest tab — many league sections of logos — so its crests
+            // are cached before the user can swipe there, rather than
+            // streaming in on arrival.
             scoreViewModel.prefetchLogos(for: .soccerLeagues)
         }
         // Recompute header stats whenever the live game set changes.
@@ -1666,7 +1679,6 @@ struct SportSelectorView: View {
                 HStack(spacing: 12) {
                     if let allMode = allMode {
                         Button(action: {
-                            ChannelViewModel.shared.triggerSelectionHaptic()
                             withAnimation(.easeOut(duration: 0.2)) {
                                 allMode.wrappedValue = true
                             }
@@ -1682,7 +1694,6 @@ struct SportSelectorView: View {
                     }
                     ForEach(orderedSports) { s in
                         Button(action: {
-                            ChannelViewModel.shared.triggerSelectionHaptic()
                             withAnimation(.easeOut(duration: 0.2)) {
                                 allMode?.wrappedValue = false
                                 selectedSport = s

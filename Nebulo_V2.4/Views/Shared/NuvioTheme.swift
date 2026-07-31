@@ -299,6 +299,9 @@ struct NuvioBottomBar: View {
     /// True for a beat after a tab switch — swells the glass selection blob
     /// and the landing glyph, the system bar's magnifying-lens hop.
     @State private var pillBoost = false
+    /// Generation counter for the lens hop, so a tap that lands mid-hop takes
+    /// the motion over instead of the previous hop's settle firing on top of it.
+    @State private var hopToken = 0
 
     private static let mainTabs: [NuvioTab] = [.home, .sports, .favorites, .profile]
 
@@ -433,69 +436,121 @@ struct NuvioBottomBar: View {
     /// The four main tabs with the gliding Liquid Glass selection blob.
     /// Switching tabs swells the blob (and the landing tab's glyph) for a
     /// beat — the system bar's magnifying-lens hop.
+    /// The lens hop: swell on the landing tab, then settle.
+    ///
+    /// The settle is scheduled, NOT hung off the swell's completion handler.
+    /// That looks like the tidier way to write it and it does not work here: the
+    /// same tap calls `onSelect`, so `active` changes in the same update pass,
+    /// and the `.animation(_:value: active)` on this row re-animates the very
+    /// subtree the swell is animating. The explicit transaction is taken over
+    /// and its completion never arrives — leaving `pillBoost` stuck `true`, the
+    /// lens frozen mid-swell with the magnified label overlapping its
+    /// neighbour. A scheduled hand-off always fires.
+    ///
+    /// What WAS wrong with the original timing is the hand-off point, not the
+    /// timer. A spring's `response` is not its duration: at 0.68 damping the
+    /// swell was still travelling — past its overshoot — when a 0.2s timer
+    /// fired, so the settle always began mid-flight carrying whatever velocity
+    /// was left, which is what read as loose. At 0.78 damping the swell is
+    /// near critically damped and visually done by ~0.25s, so 0.26 hands over
+    /// just as it comes to rest.
+    ///
+    /// The token means an overlapping tap owns the hop outright: the earlier
+    /// timer finds a stale token and does nothing, and the new one clears the
+    /// boost on its own schedule. Every path that sets `pillBoost` true
+    /// schedules exactly one of these, so it can never be stranded.
+    private func startHop() {
+        hopToken += 1
+        let token = hopToken
+        withAnimation(.spring(response: 0.22, dampingFraction: 0.78)) {
+            pillBoost = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.26) {
+            guard hopToken == token else { return }
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.9)) {
+                pillBoost = false
+            }
+        }
+    }
+
     private var tabsRow: some View {
         HStack(spacing: 0) {
             ForEach(Self.mainTabs, id: \.self) { tab in
                 Button {
-                    ChannelViewModel.shared.triggerSelectionHaptic()
-                    if tab != active {
-                        withAnimation(.spring(response: 0.2, dampingFraction: 0.68)) {
-                            pillBoost = true
-                        }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                            withAnimation(.spring(response: 0.34, dampingFraction: 0.78)) {
-                                pillBoost = false
-                            }
-                        }
-                    }
+                    // No haptic on a tab switch, by request — the whole app's
+                    // tab and chip rows are silent.
+                    if tab != active { startHop() }
                     onSelect(tab)
                 } label: {
                     VStack(spacing: 3) {
                         Image(systemName: tab.icon)
                             .font(.system(size: 23, weight: .bold))
                             .frame(height: 25)
+                            // Under the lens the GLYPH is genuinely magnified —
+                            // measured ~1.45x at the peak of the hop in the
+                            // reference recording.
+                            .scaleEffect(tab == active && pillBoost ? 1.45 : 1.0)
                         Text(tab.rawValue)
                             .font(.system(size: 11, weight: .semibold))
                             .lineLimit(1)
                             .minimumScaleFactor(0.8)
+                            // The label only breathes. It used to be magnified
+                            // with the glyph, and at 1.45x an 11pt "Favorites"
+                            // is wider than its slot — every hop visibly ran the
+                            // landing tab's label over its neighbour's.
+                            .scaleEffect(tab == active && pillBoost ? 1.08 : 1.0)
                     }
                     // Active tab reads in the accent tint (blue), idle tabs
                     // stay white — exactly like the reference bar.
                     .foregroundStyle(tab == active ? tint : Color.white.opacity(0.82))
-                    // Under the lens the glyph and label are genuinely
-                    // MAGNIFIED — measured ~1.45x at the peak of the hop in
-                    // the reference recording.
-                    .scaleEffect(tab == active && pillBoost ? 1.45 : 1.0)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 4)
-                    .background {
-                        // The selection lens glides between tabs. It always
-                        // keeps the reference's rounded-RECT shape — during
-                        // the hop it simply swells past the bar's edges,
-                        // magnifying the landing tab, then settles back.
-                        if tab == active {
-                            // Reference capsule: 74x52pt in a 58pt slab, so
-                            // it is slightly WIDER than the tab slot and
-                            // inset ~3pt top and bottom.
-                            DockPillBlob(boosted: pillBoost)
-                                .padding(.horizontal, -2)
-                                .padding(.vertical, -2)
-                                .matchedGeometryEffect(id: "dockPill", in: ns)
-                                // At the peak of the hop the lens swells past
-                                // the bar's edges — the bulging glass droplet
-                                // in the reference.
-                                .scaleEffect(x: pillBoost ? 1.30 : 1.0,
-                                             y: pillBoost ? 1.35 : 1.0)
-                        }
-                    }
                     .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
             }
         }
+        // ── The selection lens: ONE view for the whole row, behind the tabs.
+        //
+        // It used to live in each tab's own `.background`, moved between them by
+        // `matchedGeometryEffect`. That is an insert plus a remove every switch —
+        // SwiftUI destroys the pill in the outgoing branch, builds it in the
+        // incoming one, and reconciles the two frames to fake continuity, which
+        // is layout work on every frame of the glide.
+        //
+        // The tabs are equal-width by construction (`maxWidth: .infinity`, no
+        // spacing), so the lens's position is just `index x slot` — no measuring
+        // and nothing to match. One persistent layer sliding on a pure
+        // translation: no insert, no remove, no per-frame layout, and no way for
+        // the two halves to disagree for a frame.
+        .background {
+            GeometryReader { geo in
+                let slot = geo.size.width / CGFloat(Self.mainTabs.count)
+                let index = CGFloat(Self.mainTabs.firstIndex(of: active) ?? 0)
+                // Reference capsule: slightly wider than the tab slot and
+                // proud of it top and bottom — hence the 2pt bleed each way.
+                DockPillBlob(boosted: pillBoost)
+                    .frame(width: slot + 4, height: geo.size.height + 4)
+                    // At the peak of the hop the lens swells past the bar's
+                    // edges — the bulging glass droplet in the reference.
+                    // Scale BEFORE the offset so it swells about its own centre
+                    // rather than being pushed along by it.
+                    .scaleEffect(x: pillBoost ? 1.30 : 1.0,
+                                 y: pillBoost ? 1.35 : 1.0)
+                    .offset(x: index * slot - 2, y: -2)
+            }
+        }
         .padding(5)
-        // Slight overshoot — the system pill's springy glide.
-        .animation(.spring(response: 0.4, dampingFraction: 0.75), value: active)
+        // The lens GLIDE between tabs, and the tint swap that rides with it.
+        //
+        // Tightened from response 0.4 / damping 0.75. At 0.75 the pill visibly
+        // overshot its target and swung back — and because that swing outlasted
+        // the hop above it, the lens was still correcting its position while it
+        // was also settling its swell. Two overlapping corrections on the same
+        // shape is what stops a glide reading as precise. 0.86 keeps a trace of
+        // spring in the landing without the bounce, and finishes closer to when
+        // the hop does, so the whole thing lands as one gesture.
+        .animation(.spring(response: 0.34, dampingFraction: 0.86), value: active)
     }
 }
 
@@ -567,8 +622,12 @@ private struct DockPillBlob: View {
         Capsule()
             .fill(Color.white.opacity(boosted ? 0.20 : 0.16))
             .overlay(
-                Capsule().stroke(Color.white.opacity(boosted ? 0.42 : 0.14),
-                                 lineWidth: boosted ? 1.2 : 0.5)
+                // Constant line WIDTH, brightening opacity. Animating the width
+                // re-tessellated the stroked path on every frame of the hop; a
+                // colour change is a shader uniform. 0.8pt reads the same as the
+                // old 0.5→1.2 sweep once the opacity is doing the work.
+                Capsule().stroke(Color.white.opacity(boosted ? 0.42 : 0.16),
+                                 lineWidth: 0.8)
             )
     }
 }

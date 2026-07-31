@@ -1134,10 +1134,10 @@ struct GameDetailContentView: View {
     }
 
     /// Single path for every tab change: picks the slide direction from the
-    /// chip order, fires the haptic, and animates the content push.
+    /// chip order and animates the content push. Silent — no tab or chip row in
+    /// the app buzzes.
     private func switchTab(to newTab: GDTab) {
         guard scrolledTab != newTab else { return }
-        ChannelViewModel.shared.triggerSelectionHaptic()
         withAnimation(.easeOut(duration: 0.3)) { scrolledTab = newTab }
     }
 

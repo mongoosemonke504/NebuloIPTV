@@ -351,6 +351,14 @@ struct ContentManagementCard: View {
                     .foregroundStyle(.primary)
                 }
 
+                NavigationLink(destination: HomeLayoutSettingsView(viewModel: viewModel, accentColor: accentColor)) {
+                    SettingsRow(icon: "square.stack.3d.up.fill",
+                                title: "Home Layout",
+                                subtitle: viewModel.homeRowOrder.isEmpty ? "Default" : "Custom",
+                                iconColor: .pink)
+                }
+                .foregroundStyle(.primary)
+
                 NavigationLink(destination: HeroChannelsSettingsView(viewModel: viewModel, accentColor: accentColor)) {
                     SettingsRow(icon: "rectangle.on.rectangle.angled",
                                 title: "Hero Channels",
@@ -771,6 +779,95 @@ struct SportTabsManagerView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
+    }
+}
+
+/// Drag-to-reorder for the home page's sections — the rows of big cards and the
+/// category shelves, in one list.
+///
+/// The list is exactly what the home page renders, in the order it renders it,
+/// because both read `ChannelViewModel.orderedHomeSections()`. Ships in the
+/// natural order (three category shelves, then a row of big cards, repeating);
+/// dragging stores an explicit order, and Reset clears it back to nothing so a
+/// fresh install and a reset user are the same state.
+struct HomeLayoutSettingsView: View {
+    @ObservedObject var viewModel: ChannelViewModel
+    let accentColor: Color
+
+    @AppStorage("nebColor1") private var nebColor1 = "#1A2538"
+    @AppStorage("nebColor2") private var nebColor2 = "#11101A"
+    @AppStorage("nebColor3") private var nebColor3 = "#1F1A24"
+    @AppStorage("nebX1") private var nebX1 = 0.5
+    @AppStorage("nebY1") private var nebY1 = 0.0
+    @AppStorage("nebX2") private var nebX2 = 0.5
+    @AppStorage("nebY2") private var nebY2 = 0.5
+    @AppStorage("nebX3") private var nebX3 = 0.5
+    @AppStorage("nebY3") private var nebY3 = 1.0
+
+    private var sections: [ChannelViewModel.HomeSection] { viewModel.orderedHomeSections() }
+
+    var body: some View {
+        ZStack {
+            NebulaBackgroundView(
+                color1: Color(hex: nebColor1) ?? .purple,
+                color2: Color(hex: nebColor2) ?? .blue,
+                color3: Color(hex: nebColor3) ?? .pink,
+                point1: UnitPoint(x: nebX1, y: nebY1),
+                point2: UnitPoint(x: nebX2, y: nebY2),
+                point3: UnitPoint(x: nebX3, y: nebY3)
+            )
+
+            List {
+                Section {
+                    ForEach(sections) { section in
+                        HStack(spacing: 12) {
+                            Image(systemName: section.isSpotlight
+                                  ? "rectangle.portrait.on.rectangle.portrait.fill"
+                                  : "rectangle.grid.1x2.fill")
+                                .foregroundStyle(section.isSpotlight ? accentColor : .white.opacity(0.55))
+                                .frame(width: 26)
+
+                            Text(section.title)
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+
+                            Spacer(minLength: 8)
+
+                            Text(section.isSpotlight ? "Big Cards" : "Category")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(.white.opacity(0.5))
+                        }
+                        .listRowBackground(Color.black.opacity(0.35))
+                    }
+                    .onMove { src, dst in
+                        viewModel.moveHomeSection(from: src, to: dst)
+                    }
+                } header: {
+                    Text("Drag to Reorder")
+                        .foregroundStyle(.white.opacity(0.65))
+                } footer: {
+                    Text("The order of the home screen below the featured card. Drag every row of big cards to the top to group them together, or spread them out however you like.")
+                        .foregroundStyle(.white.opacity(0.55))
+                }
+
+                if !viewModel.homeRowOrder.isEmpty {
+                    Section {
+                        Button(role: .destructive) {
+                            withAnimation { viewModel.resetHomeSectionOrder() }
+                        } label: {
+                            Text("Reset to Default Order")
+                        }
+                        .listRowBackground(Color.black.opacity(0.35))
+                    }
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .environment(\.editMode, .constant(.active))
+        }
+        .navigationTitle("Home Layout")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .tint(.white)
     }
 }
 

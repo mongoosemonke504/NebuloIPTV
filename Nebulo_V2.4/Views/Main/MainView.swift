@@ -581,6 +581,8 @@ struct StandardLayout: SwiftUI.View {
     /// transition) can't block taps on the Quick Access buttons beneath it.
     /// Automatically reset to `true` whenever a new category is selected.
     @State private var isDetailInteractive: Bool = true
+    /// Home is the visible screen: no section open and not showing results.
+    private var homeVisible: Bool { searchText.isEmpty && selectedCategory == nil }
 
     // groupedCategories is cheap (O(categories) ≈ few hundred) but still
     // cached so the ForEach never re-evaluates on every viewModel publish.
@@ -1029,7 +1031,7 @@ struct StandardLayout: SwiftUI.View {
                                 // keeps covering the screen instead of
                                 // revealing black above it.
                                 .modifier(HeroStretch(pull: heroPull,
-                                                      height: UIScreen.main.bounds.height * 0.60))
+                                                      height: FeaturedCarousel.heroHeight))
                             } else {
                                 // No featured content — clear the (ignored)
                                 // top safe area so the chips don't sit under
@@ -1239,6 +1241,11 @@ struct StandardLayout: SwiftUI.View {
                     .task(id: "\(viewModel.spotlightGroups.count)-\(shelfCategories.count)") {
                         homeRows = computeHomeRows()
                     }
+                    // Reordering the sections in Settings has to show up here
+                    // without a relaunch.
+                    .task(id: viewModel.homeRowOrder) {
+                        homeRows = computeHomeRows()
+                    }
                     .task(id: categoryShelfCacheKey) {
                         channelsByCategory = computeChannelsByCategory()
                     }
@@ -1291,8 +1298,7 @@ struct StandardLayout: SwiftUI.View {
                         // Downward distance → the artwork's scroll parallax.
                         // Clamped at the hero's height, exactly as Nuvio stops
                         // tracking once the hero has left the viewport.
-                        let heroHeight = UIScreen.main.bounds.height * 0.60
-                        heroScroll.set(min(max(0, scrolled), heroHeight))
+                        heroScroll.set(min(max(0, scrolled), FeaturedCarousel.heroHeight))
                     }
                     // Status-bar scrim — fades in once the hero has scrolled
                     // away so the clock/battery stay legible over passing
@@ -1309,8 +1315,8 @@ struct StandardLayout: SwiftUI.View {
                         .allowsHitTesting(false)
                         .scrollProgressOpacity(homeHeaderProgress) { Double($0) }
                     }
-                    .opacity(searchText.isEmpty && selectedCategory == nil ? 1 : 0)
-                    .allowsHitTesting(searchText.isEmpty && selectedCategory == nil)
+                    .opacity(homeVisible ? 1 : 0)
+                    .allowsHitTesting(homeVisible)
                     .zIndex(0)
             }
         }
@@ -1583,25 +1589,29 @@ struct StandardLayout: SwiftUI.View {
     /// The page body: three category shelves, then a themed row of big cards,
     /// repeating until the themed rows are used up — after which the remaining
     /// categories simply carry on.
+    /// The page body, in the order the user has chosen — which by default is the
+    /// natural interleave (category shelves in threes with a row of big cards
+    /// between them). The order itself lives on the view model, because the Home
+    /// Layout settings screen has to list exactly what this renders; both walk
+    /// the same `HomeSection` list so the two can't disagree.
     func computeHomeRows() -> [HomeRow] {
-        var rows: [HomeRow] = []
-        var groups = viewModel.spotlightGroups[...]
-        var sinceSpotlight = 0
+        var catByID: [String: StreamCategory] = [:]
         for cat in shelfCategories {
-            rows.append(HomeRow(id: "c\(cat.id)", kind: .category(cat)))
-            sinceSpotlight += 1
-            if sinceSpotlight == 3, let group = groups.first {
-                groups = groups.dropFirst()
-                rows.append(HomeRow(id: "s\(group.id)", kind: .spotlight(group)))
-                sinceSpotlight = 0
+            catByID[ChannelViewModel.homeSectionID(categoryID: cat.id)] = cat
+        }
+        var groupByID: [String: ChannelViewModel.SpotlightGroup] = [:]
+        for group in viewModel.spotlightGroups {
+            groupByID[ChannelViewModel.homeSectionID(spotlightID: group.id)] = group
+        }
+        return viewModel.orderedHomeSections().compactMap { section in
+            if let cat = catByID[section.id] {
+                return HomeRow(id: section.id, kind: .category(cat))
             }
+            if let group = groupByID[section.id] {
+                return HomeRow(id: section.id, kind: .spotlight(group))
+            }
+            return nil
         }
-        // Fewer than three categories left over? The themed rows still owed
-        // still go on the end rather than being dropped.
-        for group in groups {
-            rows.append(HomeRow(id: "s\(group.id)", kind: .spotlight(group)))
-        }
-        return rows
     }
 
     /// Stores the grouping and the shelf order together, so the two can never
@@ -3367,6 +3377,10 @@ struct FeaturedCarousel: View {
     /// Bumped whenever a drag takes over, so an auto-advance that was already
     /// sliding abandons its page commit instead of fighting the finger.
     @State private var advanceToken = 0
+    /// Direction of an auto-advance that has been PRE-MOUNTED but hasn't begun
+    /// travelling. It exists only so `layers` puts the incoming page in the view
+    /// tree one pass before the slide starts — see `autoAdvance`.
+    @State private var autoDirection: Int?
 
     // ── Nuvio's constants ────────────────────────────────────────────────
     private static let backgroundParallax: CGFloat = 0.055
@@ -3383,7 +3397,18 @@ struct FeaturedCarousel: View {
     private static let contentBlockHeight: CGFloat = 104
 
     private var screenWidth: CGFloat { UIScreen.main.bounds.width }
-    private var heroHeight: CGFloat { UIScreen.main.bounds.height * 0.60 }
+
+    /// Fraction of the screen the hero fills. Static because the home screen
+    /// measures it too — for the overscroll stretch and the scroll-parallax
+    /// clamp — and three copies of the same literal would drift apart.
+    ///
+    /// Measured against Nuvio side by side in the app switcher: its page dots
+    /// land at ~0.54 of the screen and its first shelf heading at ~0.60, which
+    /// puts its hero between 0.56 and 0.60 depending on where you call the
+    /// bottom edge. 0.58 is the middle of that. (A scaled screenshot is worth
+    /// about ±0.02, so this is the dial if it still reads tall or short.)
+    static var heroHeight: CGFloat { UIScreen.main.bounds.height * 0.58 }
+    private var heroHeight: CGFloat { Self.heroHeight }
 
     /// The pages worth drawing: the current one, plus the neighbour being
     /// dragged toward. Sorted least-visible first so the more visible card
@@ -3391,16 +3416,27 @@ struct FeaturedCarousel: View {
     private var layers: [(index: Int, visibility: CGFloat, offset: CGFloat)] {
         let n = items.count
         guard n > 0 else { return [] }
-        var result: [(Int, CGFloat, CGFloat)] = []
         // rel 0 is the current page; offset = -rel + fraction.
-        for rel in [0, offsetFraction > 0 ? 1 : -1] {
-            if rel != 0 && (n < 2 || offsetFraction == 0) { continue }
-            let offset = CGFloat(-rel) + offsetFraction
-            let visibility = max(0, min(1, 1 - abs(offset)))
-            guard visibility > 0 else { continue }
-            result.append((((page + rel) % n + n) % n, visibility, offset))
+        var rels: [Int] = [0]
+        if n > 1 {
+            if offsetFraction != 0 {
+                rels.append(offsetFraction > 0 ? 1 : -1)
+            } else if let dir = autoDirection {
+                // Pre-mounted for an auto-advance: sits a full page out at
+                // visibility 0, so it's invisible but already in the tree.
+                rels.append(dir)
+            }
         }
-        return result.sorted { $0.1 < $1.1 }
+        // Deliberately NOT culled at visibility 0 — a page that is mounted but
+        // invisible is what lets the slide animate its offset instead of the
+        // view being inserted at its destination.
+        return rels.map { rel in
+            let offset = CGFloat(-rel) + offsetFraction
+            return (index: ((page + rel) % n + n) % n,
+                    visibility: max(0, min(1, 1 - abs(offset))),
+                    offset: offset)
+        }
+        .sorted { $0.visibility < $1.visibility }
     }
 
     /// The card the static pill belongs to: the most visible layer, which is
@@ -3434,35 +3470,75 @@ struct FeaturedCarousel: View {
         withTransaction(t) {
             page = ((page + delta) % n + n) % n
             offsetFraction -= CGFloat(delta)
+            autoDirection = nil
+            // Zero the countdown in the SAME unanimated pass as the page. Left
+            // to the `.task` below, it lands a frame or more later, so the dots
+            // draw at least once with the OUTGOING page's nearly-finished
+            // progress — which is the white flash before the dot settles back
+            // to grey.
+            progress = 0
         }
         withAnimation(.easeOut(duration: duration)) { offsetFraction = 0 }
     }
 
     /// The AUTO-advance, which has to travel the whole page to read as a slide.
     ///
-    /// `step` can't do this: from a resting `offsetFraction` of 0 it rebases to
-    /// -1 and eases back to 0, and SwiftUI folds those two writes in the same
-    /// update pass into "0 → 0" — no travel to animate, so the card simply
-    /// dissolved in place. (After a swipe it works, because the finger had
-    /// already moved the fraction somewhere non-zero.) So here the fraction is
-    /// animated OUTWARD to a full page first — exactly the path a finger takes
-    /// when it drags all the way across — and the page index is rebased only
-    /// once that animation has landed.
+    /// It animates the fraction OUTWARD to a full page — exactly the path a
+    /// finger takes when it drags all the way across — and rebases the page
+    /// index only once that animation has landed.
+    ///
+    /// The catch, and why this dissolved rather than slid: at rest the incoming
+    /// page ISN'T IN THE VIEW TREE. `layers` only carries a neighbour while the
+    /// fraction is non-zero, so animating 0 → 1 in one pass hands SwiftUI a tree
+    /// where the outgoing page has vanished and the incoming one has appeared at
+    /// its final offset. There are no matching identities to interpolate between,
+    /// so it applies the default transition to each — an opacity fade. A drag
+    /// looks right for exactly the opposite reason: the finger has already put
+    /// the fraction somewhere non-zero, so both pages are mounted before
+    /// anything animates.
+    ///
+    /// So the travel is split across two update passes: mount the neighbour
+    /// off-screen first, then animate. Both pages are then present throughout
+    /// and SwiftUI interpolates their offsets — the same slide a swipe gives.
     private func autoAdvance() {
         guard items.count > 1 else { return }
         let token = advanceToken
-        withAnimation(.easeInOut(duration: 0.7)) {
-            offsetFraction = 1
-        } completion: {
-            // A drag that interrupted the slide bumped the token; the gesture
-            // owns the fraction from that point, so don't yank the page out
-            // from under the finger.
-            guard advanceToken == token else { return }
-            var t = Transaction()
-            t.disablesAnimations = true
-            withTransaction(t) {
-                page = (page + 1) % items.count
-                offsetFraction = 0
+
+        // Pass 1: put the incoming page in the tree at its off-screen resting
+        // place. Unanimated, and nothing moves — at visibility 0 it can't be
+        // seen.
+        var mount = Transaction()
+        mount.disablesAnimations = true
+        withTransaction(mount) { autoDirection = 1 }
+
+        // Pass 2, next frame: now that both pages exist, the fraction can be
+        // animated and their offsets interpolate. The delay only has to outlast
+        // the current update; a frame is 16ms.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+            // A drag that arrived in between bumped the token and owns the
+            // fraction now; drop the pre-mount and leave the finger alone.
+            guard advanceToken == token else {
+                autoDirection = nil
+                return
+            }
+            withAnimation(.easeInOut(duration: 0.7)) {
+                offsetFraction = 1
+            } completion: {
+                // `items` can shrink while the slide is in flight (a live game
+                // ends and its channel drops out), and an empty list would make
+                // the modulo below divide by zero.
+                guard advanceToken == token, items.count > 1 else {
+                    autoDirection = nil
+                    return
+                }
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) {
+                    page = (page + 1) % items.count
+                    offsetFraction = 0
+                    progress = 0
+                    autoDirection = nil
+                }
             }
         }
     }
@@ -3472,7 +3548,9 @@ struct FeaturedCarousel: View {
             // ── Artwork, barely shifting, scaled so the shift never bares an
             //    edge. Alpha is the page's visibility.
             ForEach(layers, id: \.index) { layer in
-                NuvioHeroBackdrop(item: items[layer.index], height: heroHeight)
+                NuvioHeroBackdrop(item: items[layer.index],
+                                  height: heroHeight,
+                                  program: viewModel.getCurrentProgram(for: items[layer.index].channel))
                     // Scroll parallax + the carousel's base scale, then the
                     // page's own sideways parallax on top (so the horizontal
                     // shift isn't multiplied by the scale, matching Nuvio's
@@ -3557,8 +3635,11 @@ struct FeaturedCarousel: View {
                     SwipeTapGuard.suppress()
                     guard items.count > 1 else { return }
                     // The finger now owns the fraction — cancel any in-flight
-                    // auto-advance's page commit.
+                    // auto-advance's page commit, and drop its pre-mount (the
+                    // non-zero fraction below mounts the right neighbour for
+                    // whichever way this drag is going).
                     advanceToken += 1
+                    autoDirection = nil
                     offsetFraction = max(-1, min(1, -dx / screenWidth))
                 }
                 .onEnded { value in
@@ -3605,21 +3686,36 @@ struct FeaturedCarousel: View {
 }
 
 /// The hero's ARTWORK layer — the part that barely moves and is scaled up so
-/// the parallax shift never exposes an edge. Two variants:
+/// the parallax shift never exposes an edge. Three variants:
 ///   • Matchup — team-colour washes meeting in the middle, big crests.
-///   • Channel — a wash built from the logo's own brand colour (a channel has
-///     no poster art, and a blurred wide logo only tinted a middle strip),
-///     with the sharp logo floating in the upper half.
+///   • Programme photo — a still of whatever is on, exactly as the spotlight
+///     cards do it: the guide's own image when it ships one, otherwise a
+///     lookup on the programme title (TVmaze, then Wikipedia), which is what
+///     puts a picture of the host on a talk or news hour.
+///   • Channel — a wash built from the logo's own brand colour, with the sharp
+///     logo floating in the upper half. The fallback when there's no photo to
+///     be had.
 struct NuvioHeroBackdrop: View {
     let item: FeaturedItem
     let height: CGFloat
+    /// What's on right now, for the programme photo. Resolved by the carousel,
+    /// which already looks it up for the title block.
+    var program: EPGProgram? = nil
 
     /// Bumped once the logo's colour lands in the shared cache, purely to
     /// trigger a re-render.
     @State private var glowTick = 0
+    /// Artwork found for the programme title when the guide shipped no still.
+    @State private var fetchedArt: String?
 
     private var channel: StreamChannel { item.channel }
     private var game: ESPNEvent? { item.game }
+
+    /// The photo to fill the hero with, if there is one.
+    private var still: String? {
+        if let image = program?.image, !image.isEmpty { return image }
+        return fetchedArt
+    }
 
     private var hasMatchup: Bool {
         game?.homeCompetitor?.team?.logo != nil && game?.awayCompetitor?.team?.logo != nil
@@ -3670,6 +3766,31 @@ struct NuvioHeroBackdrop: View {
                     .opacity(0.9)
                     .offset(y: -height * 0.13)
                 }
+            } else if let still {
+                let width = UIScreen.main.bounds.width
+                ZStack {
+                    // Cropped to fill the whole hero, and decoded at that size
+                    // — the shared 300x300 default would be upscaled here and
+                    // look soft. `size:` IS the frame, not just a decode hint.
+                    CachedAsyncImage(urlString: still,
+                                     size: CGSize(width: width, height: height),
+                                     contentMode: .fill,
+                                     decodeSize: CGSize(width: width, height: height))
+                        .frame(width: width, height: height)
+                        .clipped()
+
+                    // A gentle floor under the title block. The carousel draws
+                    // its own dissolve over every layer, so this only has to
+                    // cover the case of a photo that's bright at the bottom.
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0.38),
+                            .init(color: .black.opacity(0.40), location: 0.70),
+                            .init(color: .black.opacity(0.72), location: 1.0)
+                        ],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                }
             } else {
                 let base = glow ?? Color(white: 0.28)
                 ZStack {
@@ -3713,6 +3834,15 @@ struct NuvioHeroBackdrop: View {
         .frame(height: height)
         .frame(maxWidth: .infinity)
         .allowsHitTesting(false)
+        // Only when the guide gave us nothing: look the programme up. Results
+        // (including misses) are cached on disk, so it's one request per title
+        // ever, and the hero shows its brand treatment until it lands.
+        .task(id: program?.title) {
+            fetchedArt = nil
+            guard let title = program?.title, !title.isEmpty,
+                  (program?.image ?? "").isEmpty else { return }
+            fetchedArt = await ProgramArtworkService.shared.artwork(for: title)
+        }
     }
 }
 

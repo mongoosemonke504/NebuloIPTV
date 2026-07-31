@@ -94,6 +94,98 @@ class ChannelViewModel: ObservableObject {
         let channels: [StreamChannel]
     }
 
+    // MARK: - Home section order
+
+    /// One section of the home page below the hero — either a category shelf or
+    /// a row of big cards. Exists so the order can be stored as a plain list of
+    /// ids and reordered on a settings screen.
+    struct HomeSection: Identifiable, Hashable, Sendable {
+        let id: String
+        let title: String
+        let isSpotlight: Bool
+    }
+
+    /// The user's chosen section order, as `HomeSection` ids. EMPTY means "the
+    /// natural order" — which is the shipping default, so a fresh install and a
+    /// user who has reset both get the interleave below with nothing stored.
+    @Published var homeRowOrder: [String] = []
+
+    /// Ids for a category shelf and a big-card row. The home page builds its
+    /// rows with these too, so an id means the same thing in both places.
+    nonisolated static func homeSectionID(categoryID: Int) -> String { "c\(categoryID)" }
+    nonisolated static func homeSectionID(spotlightID: String) -> String { "s\(spotlightID)" }
+
+    /// The home page's NATURAL section order: category shelves in threes with a
+    /// row of big cards dropped in after each three, and any big-card rows still
+    /// owed at the end rather than dropped.
+    func naturalHomeSections() -> [HomeSection] {
+        var out: [HomeSection] = []
+        var groups = spotlightGroups[...]
+        var sinceSpotlight = 0
+        for cat in categories where !cat.isHidden {
+            // `renameCategory` writes straight into `categories`, so this is
+            // already the name the shelf header shows.
+            out.append(HomeSection(id: Self.homeSectionID(categoryID: cat.id),
+                                   title: cat.name,
+                                   isSpotlight: false))
+            sinceSpotlight += 1
+            if sinceSpotlight == 3, let group = groups.first {
+                groups = groups.dropFirst()
+                out.append(HomeSection(id: Self.homeSectionID(spotlightID: group.id),
+                                       title: group.title,
+                                       isSpotlight: true))
+                sinceSpotlight = 0
+            }
+        }
+        for group in groups {
+            out.append(HomeSection(id: Self.homeSectionID(spotlightID: group.id),
+                                   title: group.title,
+                                   isSpotlight: true))
+        }
+        return out
+    }
+
+    /// `naturalHomeSections()` with the saved order applied.
+    ///
+    /// Sections the saved order knows about come first, in that order; anything
+    /// it doesn't — a category the playlist grew, a themed row that only just
+    /// finished computing — keeps its natural relative position on the end. So a
+    /// new category appears rather than vanishing, and never silently displaces
+    /// an arrangement the user set by hand.
+    func orderedHomeSections() -> [HomeSection] {
+        let natural = naturalHomeSections()
+        guard !homeRowOrder.isEmpty else { return natural }
+        var rank: [String: Int] = [:]
+        for (index, id) in homeRowOrder.enumerated() where rank[id] == nil {
+            rank[id] = index
+        }
+        let known = natural.filter { rank[$0.id] != nil }
+            .sorted { (rank[$0.id] ?? 0) < (rank[$1.id] ?? 0) }
+        let unknown = natural.filter { rank[$0.id] == nil }
+        return known + unknown
+    }
+
+    /// Drag-to-reorder from the settings screen. Stores the FULL resolved order
+    /// so sections that were only implied become explicit.
+    func moveHomeSection(from source: IndexSet, to destination: Int) {
+        var sections = orderedHomeSections()
+        sections.move(fromOffsets: source, toOffset: destination)
+        homeRowOrder = sections.map(\.id)
+        saveHomeRowOrder()
+    }
+
+    /// Back to the shipping arrangement.
+    func resetHomeSectionOrder() {
+        homeRowOrder = []
+        saveHomeRowOrder()
+    }
+
+    private func saveHomeRowOrder() {
+        if let data = try? JSONEncoder().encode(homeRowOrder) {
+            UserDefaults.standard.set(data, forKey: settingsPrefix + "homeRowOrder")
+        }
+    }
+
     /// The themes, in home-screen order, and the words that put a channel in
     /// one. Matched against the channel's CATEGORY name first (playlists group
     /// by exactly these) and its own name second.
@@ -2165,6 +2257,8 @@ class ChannelViewModel: ObservableObject {
         let loadedRecents = load("recentChannelIDs", type: [Int].self) ?? []
         self.recentIDs = loadedRecents.reduce(into: [Int]()) { if !$0.contains($1) { $0.append($1) } }
         self.manualChannelOrder = load("manualChannelOrder", type: [Int].self) ?? []
+        // Empty is the shipping default — see `homeRowOrder`.
+        self.homeRowOrder = load("homeRowOrder", type: [String].self) ?? []
         self.recentQueries = UserDefaults.standard.stringArray(forKey: settingsPrefix + "recentQueries") ?? []
         
         if let langRaw = UserDefaults.standard.string(forKey: settingsPrefix + "preferredLanguage"), let lang = LanguagePreference(rawValue: langRaw) { self.preferredLanguage = lang }
