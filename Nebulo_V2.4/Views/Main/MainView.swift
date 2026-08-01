@@ -1310,10 +1310,27 @@ struct StandardLayout: SwiftUI.View {
                                                fadeStart: 0.3,
                                                tintOverride: .black)
                                 .frame(width: proxy.size.width)
+                                // CULLED while invisible, not merely faded.
+                                // This scrim is a `.regularMaterial`, and a
+                                // material samples and blurs whatever is behind
+                                // it on every frame even at opacity 0 — so a
+                                // full-width backdrop blur was being computed
+                                // for the entire length of every scroll from the
+                                // top of the page, for something nobody could
+                                // see. `ScrollProgressReveal` documents this
+                                // exact case; home was the one screen still
+                                // paying for it.
+                                //
+                                // The cull is INSIDE the GeometryReader on
+                                // purpose: culling stops layout, and the reader
+                                // has to keep measuring so the scrim comes back
+                                // at the right size instead of at zero for a
+                                // frame.
+                                .scrollProgressReveal(homeHeaderProgress,
+                                                      cullWhenHidden: true)
                         }
                         .ignoresSafeArea(.container, edges: .top)
                         .allowsHitTesting(false)
-                        .scrollProgressOpacity(homeHeaderProgress) { Double($0) }
                     }
                     .opacity(homeVisible ? 1 : 0)
                     .allowsHitTesting(homeVisible)
@@ -2702,13 +2719,21 @@ struct TouchPassingHorizontalScroll<Content: View>: UIViewRepresentable {
         context.coordinator.host?.view.invalidateIntrinsicContentSize()
         scrollView.setNeedsLayout()
         // Content can shrink on a data refresh (fewer live games, shorter
-        // shelf) while the old contentOffset survives — the shelf then shows
-        // a stray blank gap before the first card. Clamp after the new
-        // content has been laid out.
-        DispatchQueue.main.async {
-            scrollView.layoutIfNeeded()
-            Coordinator.clampOffset(scrollView)
-        }
+        // shelf) while the old contentOffset survives — the shelf then shows a
+        // stray blank gap before the first card. `ShelfScrollView.layoutSubviews`
+        // already clamps on EVERY layout pass, which covers that completely, so
+        // the marking above is all this needs to do.
+        //
+        // There used to be a `DispatchQueue.main.async { layoutIfNeeded();
+        // clampOffset() }` here, and it was the most expensive thing on the home
+        // screen. `updateUIView` runs on every SwiftUI update of the parent, and
+        // home has a shelf per category — so a single re-render queued one
+        // FORCED SYNCHRONOUS layout of a hosting controller's whole SwiftUI tree
+        // per shelf, all landing a runloop turn later, on whatever frame
+        // happened to be in flight. That is the irregular hitching: the cost
+        // scales with the number of shelves, fires on any update at all, and
+        // lands off-cycle by construction. `setNeedsLayout` gets the same work
+        // done inside UIKit's own layout pass instead of ahead of it.
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -3370,7 +3395,16 @@ struct FeaturedCarousel: View {
     /// toward the NEXT card. Everything visual is a function of this.
     @State private var offsetFraction: CGFloat = 0
     /// 0 → 1 across the dwell time; drives the dot's countdown fill.
-    @State private var progress: CGFloat = 0
+    ///
+    /// A LEAF, not a plain `@State`. It's animated linearly across the whole
+    /// eight-second dwell, and as a value on this view that meant SwiftUI
+    /// re-evaluated the carousel's entire body — both page layers, the backdrop
+    /// image, the title block, the pill — on every frame of those eight
+    /// seconds, on a loop, for as long as the home screen was on screen. That
+    /// is a full-screen view rebuilding at 60fps behind everything the user
+    /// does, which is exactly what a scroll has to compete with. Only
+    /// `NuvioPageDots` observes it now.
+    @State private var progress = ScrollProgress()
     /// Bumped when a drag ends, restarting the dwell countdown — so swiping
     /// resets the timer even when the swipe didn't commit.
     @State private var timerKey = 0
@@ -3402,12 +3436,24 @@ struct FeaturedCarousel: View {
     /// measures it too — for the overscroll stretch and the scroll-parallax
     /// clamp — and three copies of the same literal would drift apart.
     ///
-    /// Measured against Nuvio side by side in the app switcher: its page dots
-    /// land at ~0.54 of the screen and its first shelf heading at ~0.60, which
-    /// puts its hero between 0.56 and 0.60 depending on where you call the
-    /// bottom edge. 0.58 is the middle of that. (A scaled screenshot is worth
-    /// about ±0.02, so this is the dial if it still reads tall or short.)
-    static var heroHeight: CGFloat { UIScreen.main.bounds.height * 0.58 }
+    /// Matched to Nuvio by the landmark you actually SEE — where the first
+    /// shelf heading sits — measured off the two apps side by side in the app
+    /// switcher and expressed as a fraction of screen height:
+    ///
+    ///     Nuvio  "Continue Watching" at 0.695 x H
+    ///     Nebulo "Continue Watching" at 0.626 x H   (60pt high)
+    ///     hero bottom -> heading text = 53pt (30pt stack spacing + cap inset)
+    ///     heroHeight = 0.695 x H - 53pt = 0.634 x H
+    ///
+    /// Read the number, not the ratio, if this needs adjusting again: the two
+    /// apps have to be at the TOP of their home screens for the comparison to
+    /// mean anything, and Nuvio's own heading has measured at both 0.596 and
+    /// 0.695 across two different screenshots — so either it wasn't at the top
+    /// in one of them, or its hero is sized by its poster's aspect ratio and
+    /// isn't a fixed fraction at all. This matches the most recent one.
+    static var heroHeight: CGFloat {
+        UIScreen.main.bounds.height * 0.634
+    }
     private var heroHeight: CGFloat { Self.heroHeight }
 
     /// The pages worth drawing: the current one, plus the neighbour being
@@ -3476,7 +3522,7 @@ struct FeaturedCarousel: View {
             // draw at least once with the OUTGOING page's nearly-finished
             // progress — which is the white flash before the dot settles back
             // to grey.
-            progress = 0
+            progress.set(0)
         }
         withAnimation(.easeOut(duration: duration)) { offsetFraction = 0 }
     }
@@ -3536,7 +3582,7 @@ struct FeaturedCarousel: View {
                 withTransaction(t) {
                     page = (page + 1) % items.count
                     offsetFraction = 0
-                    progress = 0
+                    progress.set(0)
                     autoDirection = nil
                 }
             }
@@ -3670,9 +3716,9 @@ struct FeaturedCarousel: View {
         // Keyed to the page AND the drag generation, so any page change or
         // finished swipe cancels and restarts the countdown from zero.
         .task(id: "\(page)-\(timerKey)") {
-            progress = 0
+            progress.set(0)
             guard items.count > 1 else { return }
-            withAnimation(.linear(duration: Self.dwell)) { progress = 1 }
+            withAnimation(.linear(duration: Self.dwell)) { progress.set(1) }
             try? await Task.sleep(nanoseconds: UInt64(Self.dwell * 1_000_000_000))
             guard !Task.isCancelled, offsetFraction == 0 else { return }
             autoAdvance()

@@ -295,7 +295,7 @@ struct SearchView: View {
                     CompactHeaderScrim(height: screenInsets.top + 215, fadeStart: 0.2)
                         .frame(maxWidth: .infinity)
                         .ignoresSafeArea(.container, edges: .top)
-                        .scrollProgressOpacity(titleProgress) { Double($0 * $0) }
+                        .scrollProgressOpacity(titleProgress, cullWhenHidden: true) { Double($0 * $0) }
                         .allowsHitTesting(false)
                 }
                 // Chrome rides as a top inset OVER the scroll: content

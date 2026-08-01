@@ -275,14 +275,37 @@ extension View {
 struct ScrollProgressOpacity: ViewModifier {
     @ObservedObject var progress: ScrollProgress
     let map: (CGFloat) -> Double
+    /// Drop the content out of the render pass entirely while it maps to fully
+    /// transparent, rather than drawing it at opacity 0 — see
+    /// `ScrollProgressReveal.cullWhenHidden` for why that is not the same
+    /// thing. Every compact-header scrim in the app is a `.regularMaterial`,
+    /// and a material re-samples and blurs its backdrop on every frame the
+    /// content behind it moves, visible or not: a full-width backdrop blur
+    /// computed for the entire length of every scroll, for nothing.
+    ///
+    /// Opt-in, and only safe for pure decoration: a culled view stops laying
+    /// out, so anything measuring itself (or measured through a `.background`
+    /// chained after this) must keep rendering.
+    var cullWhenHidden = false
+
+    @ViewBuilder
     func body(content: Content) -> some View {
-        content.opacity(map(progress.value))
+        let value = map(progress.value)
+        if cullWhenHidden && value <= 0.001 {
+            EmptyView()
+        } else {
+            content.opacity(value)
+        }
     }
 }
 
 extension View {
-    func scrollProgressOpacity(_ progress: ScrollProgress, _ map: @escaping (CGFloat) -> Double) -> some View {
-        modifier(ScrollProgressOpacity(progress: progress, map: map))
+    func scrollProgressOpacity(_ progress: ScrollProgress,
+                               cullWhenHidden: Bool = false,
+                               _ map: @escaping (CGFloat) -> Double) -> some View {
+        modifier(ScrollProgressOpacity(progress: progress,
+                                       map: map,
+                                       cullWhenHidden: cullWhenHidden))
     }
 }
 

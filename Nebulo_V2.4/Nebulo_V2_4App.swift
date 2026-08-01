@@ -144,7 +144,10 @@ struct Nebulo_V2_4App: App {
                 }
                 .onReceive(liveActivityTimer) { _ in
                     guard !GameActivityManager.shared.trackedGameIDs.isEmpty else { return }
-                    Task { await scoreViewModel.fetchScores(silent: true) }
+                    // Explicitly forced: a tracked Live Activity is the one case
+                    // that genuinely wants a refresh faster than the freshness
+                    // window allows, and it only runs while one is on screen.
+                    Task { await scoreViewModel.fetchScores(forceRefresh: true, silent: true) }
                 }
         }
     }

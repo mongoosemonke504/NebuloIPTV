@@ -221,7 +221,14 @@ struct NuvioPageDots: View {
     let count: Int
     let index: Int
     /// 0 → 1 across the current page's dwell time.
-    var progress: CGFloat = 0
+    ///
+    /// A leaf object, NOT a plain value, and that distinction is the whole
+    /// point: the carousel animates this linearly over its full eight-second
+    /// dwell, so as a `@State` on the carousel it re-evaluated that entire
+    /// view — both hero layers, the backdrop image, the title block — on every
+    /// frame, forever, for a 30pt capsule filling up. Held here, the per-frame
+    /// updates re-render these dots and nothing else.
+    @ObservedObject var progress: ScrollProgress
 
     private static let activeWidth: CGFloat = 30
     private static let dotSize: CGFloat = 7
@@ -239,7 +246,7 @@ struct NuvioPageDots: View {
                             Capsule()
                                 .fill(.white)
                                 .frame(width: max(Self.dotSize,
-                                                  Self.activeWidth * min(max(progress, 0), 1)))
+                                                  Self.activeWidth * min(max(progress.value, 0), 1)))
                         }
                         .clipShape(Capsule())
                 } else {
@@ -332,9 +339,14 @@ struct NuvioBottomBar: View {
             .padding(.horizontal, 21)
             .padding(.bottom, typing ? 10 : 20)
         }
-        // A hair of transparency on top of the system glass so a little more
-        // of the content behind reads through.
-        .opacity(0.96)
+        // NOTE: there used to be a `.opacity(0.96)` here — "a hair of
+        // transparency on top of the system glass". Any opacity below 1 on a
+        // container forces its whole subtree to be flattened into an offscreen
+        // buffer before it can be blended, and this subtree is the glass bar:
+        // its material re-samples the backdrop every time the content behind it
+        // moves, so the flatten was being redone on every frame of every scroll,
+        // for a 4% change nobody can see. The system glass already lets plenty
+        // of the content through.
         .ignoresSafeArea(.container, edges: .bottom)
         .animation(.spring(response: 0.38, dampingFraction: 0.8), value: searchMode)
         .animation(.spring(response: 0.32, dampingFraction: 0.85), value: typing)
@@ -479,8 +491,22 @@ struct NuvioBottomBar: View {
                 Button {
                     // No haptic on a tab switch, by request — the whole app's
                     // tab and chip rows are silent.
-                    if tab != active { startHop() }
-                    onSelect(tab)
+                    guard tab != active else { onSelect(tab); return }
+
+                    // Order matters, and this is why the bar felt like it
+                    // hesitated before responding. `onSelect` swaps the section,
+                    // which builds a whole screen SYNCHRONOUSLY in the same
+                    // update pass — so when it ran first, the lens couldn't
+                    // start moving until that build was done, and the delay
+                    // read as the button not registering the press.
+                    //
+                    // Starting the hop first lets SwiftUI commit its animation
+                    // to the render server, which then runs it independently of
+                    // the main thread. Handing the swap to the next runloop turn
+                    // guarantees the commit lands first, so the lens is already
+                    // gliding while the incoming screen is still being built.
+                    startHop()
+                    DispatchQueue.main.async { onSelect(tab) }
                 } label: {
                     VStack(spacing: 3) {
                         Image(systemName: tab.icon)

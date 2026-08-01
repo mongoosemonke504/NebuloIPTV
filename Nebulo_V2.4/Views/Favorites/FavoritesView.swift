@@ -353,7 +353,7 @@ struct FavoritesView: View {
             .background(alignment: .top) {
                 CompactHeaderScrim(height: 265, fadeStart: 0.4)
                     .offset(y: -130)
-                    .scrollProgressOpacity(titleProgress) { Double($0 * $0) }
+                    .scrollProgressOpacity(titleProgress, cullWhenHidden: true) { Double($0 * $0) }
             }
     }
 

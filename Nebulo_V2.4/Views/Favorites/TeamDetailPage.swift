@@ -557,7 +557,7 @@ struct TeamDetailPage: View {
             CompactHeaderScrim(height: pinnedInset + 120,
                                fadeStart: 0.55,
                                topFade: Self.handoverSpan)
-                .scrollProgressOpacity(titleProgress) { Double($0 * $0) }
+                .scrollProgressOpacity(titleProgress, cullWhenHidden: true) { Double($0 * $0) }
         }
     }
 

@@ -446,7 +446,7 @@ struct SportsHubView: View {
         .background(alignment: .top) {
             CompactHeaderScrim(height: 265, fadeStart: 0.4)
                 .offset(y: -130)
-                .scrollProgressOpacity(statsProgress) { Double($0 * $0) }
+                .scrollProgressOpacity(statsProgress, cullWhenHidden: true) { Double($0 * $0) }
         }
     }
 

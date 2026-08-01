@@ -527,11 +527,22 @@ class ScoreViewModel: ObservableObject {
     }
 
     func fetchScores(forceRefresh: Bool = false, silent: Bool = false) async {
-        if !silent && !forceRefresh {
+        // `silent` means "don't show the spinner". It used to ALSO skip the
+        // freshness check, which is a different thing entirely — and the app's
+        // 60-second background timer passes it, so every minute the app was
+        // foregrounded it re-fetched every sport and republished the lot no
+        // matter what, on any screen. Freshness now applies to silent refreshes
+        // too; only an explicit `forceRefresh` overrides it.
+        if !forceRefresh {
             if !masterGames.isEmpty && !masterSectionsMap.isEmpty {
-                 if Date().timeIntervalSince(lastFetchTime) < 300 { return }
+                // A minute is the right cadence while something is actually in
+                // play. With nothing live there is no score to move, so the
+                // window opens back out. 55 rather than 60 so the app's
+                // minute timer can't land a hair early and skip a whole cycle.
+                let window: TimeInterval = allLiveGames.isEmpty ? 300 : 55
+                if Date().timeIntervalSince(lastFetchTime) < window { return }
             }
-            if isLoading { return }
+            if !silent && isLoading { return }
         }
         
         fetchTask?.cancel()
@@ -571,16 +582,39 @@ class ScoreViewModel: ObservableObject {
                         }
                     }
                     
+                    // Collect every sport's results OFF the main actor, then
+                    // publish them in a single hop.
+                    //
+                    // This loop used to do `await MainActor.run` per result.
+                    // There are twenty-odd feeds in this group, each writing up
+                    // to four @Published dictionaries — so one refresh landed as
+                    // dozens of separate main-actor hops, each firing
+                    // objectWillChange and re-evaluating the entire home screen,
+                    // interleaved with network responses arriving over a second
+                    // or two. Sitting on home while that ran is exactly the
+                    // random stutter: nothing on screen changed, but the biggest
+                    // view in the app was rebuilt dozens of times, and any of
+                    // those landing mid-scroll drops frames.
+                    //
+                    // Batched, the whole refresh is one update pass. The
+                    // trade-off is that scores now appear all together rather
+                    // than popping in feed by feed — on a cold launch the disk
+                    // cache is already on screen, so what this costs is the
+                    // stagger, not the wait.
+                    var newGames: [SportType: [ESPNEvent]] = [:]
+                    var newSections: [SportType: [SoccerGameSection]] = [:]
                     for await (sport, events, sections) in group {
-                        await MainActor.run {
-                            if let events = events {
-                                self.masterGames[sport] = events
-                                self.filteredGames[sport] = events
-                            }
-                            if let secs = sections {
-                                self.masterSectionsMap[sport] = secs
-                                self.filteredSectionsMap[sport] = secs
-                            }
+                        if let events { newGames[sport] = events }
+                        if let secs = sections { newSections[sport] = secs }
+                    }
+                    await MainActor.run {
+                        for (sport, events) in newGames {
+                            self.masterGames[sport] = events
+                            self.filteredGames[sport] = events
+                        }
+                        for (sport, secs) in newSections {
+                            self.masterSectionsMap[sport] = secs
+                            self.filteredSectionsMap[sport] = secs
                         }
                     }
                 }
