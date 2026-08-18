@@ -142,6 +142,15 @@ struct FavoritesView: View {
                         ZStack(alignment: .top) {
                             filterContent
                                 .id(filter)
+                                // Resolves the whole page's geometry as ONE unit
+                                // while it slides. Without this a child whose own
+                                // layout settles mid-transition — a logo that has
+                                // just finished loading and now has a size — is
+                                // positioned against the page's FINAL geometry
+                                // rather than its animating one, so it sits still
+                                // while everything around it travels. That is what
+                                // stops the switch reading as a single movement.
+                                .geometryGroup()
                                 .transition(.asymmetric(
                                     insertion: .move(edge: slideFromTrailing ? .trailing : .leading).combined(with: .opacity),
                                     removal: .move(edge: slideFromTrailing ? .leading : .trailing).combined(with: .opacity)

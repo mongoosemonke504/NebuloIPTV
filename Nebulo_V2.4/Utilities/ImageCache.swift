@@ -400,12 +400,21 @@ class ImageLoader: ObservableObject {
         // that was already cached on disk.
         let loaded = await ImageCache.shared.image(forKey: url, size: decodeSize)
         guard !Task.isCancelled, loadedURL != url else { return }
-        if let loaded {
-            image = loaded
-            loadedURL = url
-            failed = false
-        } else {
-            failed = true
+        // Applied with animation explicitly OFF. An image that resolves while
+        // its row is mid-slide would otherwise adopt whatever transaction is
+        // ambient — the slide's own — so the logo animates in on its own terms
+        // instead of simply being there, which reads as the logo failing to
+        // travel with the row it belongs to.
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            if let loaded {
+                image = loaded
+                loadedURL = url
+                failed = false
+            } else {
+                failed = true
+            }
         }
     }
 }

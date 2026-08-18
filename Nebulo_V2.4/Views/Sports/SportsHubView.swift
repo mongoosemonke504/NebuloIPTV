@@ -181,6 +181,27 @@ struct SportsHubView: View {
         }
     }
 
+    /// Warms the crests for the chips either side of the current one.
+    ///
+    /// `ImageLoader` only consults the memory cache while a view is being built
+    /// (its disk path decoded on the main thread, which is what made scrolling
+    /// stutter). So a chip switch whose crests are not yet resident builds rows
+    /// with placeholders, and the logos resolve a few frames later — appearing
+    /// in place instead of sliding in with the row they belong to, which is
+    /// what stops the switch reading as one movement. `prefetchLogos` no-ops on
+    /// anything already cached, so this is cheap to call on every switch.
+    private func warmAdjacentTabs() {
+        let tabs = orderedTabs
+        guard let idx = tabs.firstIndex(of: sportsTab) else { return }
+        for step in [-1, 1] {
+            let neighbour = idx + step
+            guard tabs.indices.contains(neighbour) else { continue }
+            if case .sport(let sport) = tabs[neighbour] {
+                scoreViewModel.prefetchLogos(for: sport)
+            }
+        }
+    }
+
     /// What used to run in `onAppear`: now on every arrival at the tab, since
     /// the hub itself only appears once.
     private func arrive() {
@@ -199,6 +220,8 @@ struct SportsHubView: View {
                 isRefreshingAnimation = true
             }
         }
+        // Ahead of the first swipe, not on it.
+        warmAdjacentTabs()
     }
 
     /// Steps to the previous/next chip. Driven by the horizontal swipe.
@@ -258,6 +281,15 @@ struct SportsHubView: View {
                                 }
                             }
                             .id(sportsTab)
+                            // Resolves the whole page's geometry as ONE unit
+                            // while it slides. Without this a child whose own
+                            // layout settles mid-transition — a logo that has
+                            // just finished loading and now has a size — is
+                            // positioned against the page's FINAL geometry
+                            // rather than its animating one, so it sits still
+                            // while everything around it travels. That is what
+                            // stops the switch reading as a single movement.
+                            .geometryGroup()
                             // Same slide as the Favorites section: move +
                             // opacity, NO opaque backdrop. The backdrop's dark
                             // fill clashed with the header gradient and the
@@ -337,6 +369,9 @@ struct SportsHubView: View {
                 // Remembered here rather than in selectTab, so a swipe between
                 // tabs is recorded the same as a chip tap.
                 UserDefaults.standard.set(tab.storedValue, forKey: SportsTab.storageKey)
+                // The chips this one can now be swiped to, warmed while the
+                // slide that just landed here is still finishing.
+                warmAdjacentTabs()
                 guard case .sport(let s) = tab else { return }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                     guard sportsTab == tab else { return }
