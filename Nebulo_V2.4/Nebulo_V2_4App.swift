@@ -109,6 +109,12 @@ struct Nebulo_V2_4App: App {
 
     init() {
         AppDefaults.register()
+        // The home shelves used to be UIScrollViews with this switched off,
+        // so a card highlighted the instant it was touched. Native SwiftUI
+        // scroll views default it on, which puts a ~150ms delay before a card
+        // reacts. Not an appearance selector, so this is best-effort — if it
+        // stops applying, taps get the system default rather than breaking.
+        UIScrollView.appearance().delaysContentTouches = false
         BackgroundManager.shared.register()
         // Re-arm at every launch too, not just on backgrounding — a reboot,
         // app update, or force-quit wipes pending BGTask submissions, and

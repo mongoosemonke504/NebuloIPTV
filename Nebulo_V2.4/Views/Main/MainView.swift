@@ -848,6 +848,26 @@ struct StandardLayout: SwiftUI.View {
     }
 
 
+    /// Promotes the logos home is about to draw into the memory image cache,
+    /// off the main thread.
+    ///
+    /// `ImageLoader` only consults memory during view construction now (see
+    /// the note there), so without this a card scrolling into view for the
+    /// first time in a session would show its placeholder for a frame or two
+    /// while the disk decode ran. Warming the shelves in the background keeps
+    /// the first paint exactly as it was, with none of the main-thread cost.
+    private func warmHomeArtwork() {
+        // The order shelves are drawn in, so the ones nearest the top of the
+        // page are resident first.
+        var icons: [String] = cachedRecent.compactMap(\.icon)
+        for row in homeRows {
+            guard case let .category(cat) = row.kind,
+                  let channels = channelsByCategory[cat.id] else { continue }
+            icons.append(contentsOf: channels.prefix(12).compactMap(\.icon))
+        }
+        ImageCache.prewarm(icons)
+    }
+
     /// Opens a featured hero page's destination: a live matchup goes to its
     /// game card, a plain channel to the channel preview popup.
     private func openFeatured(_ item: FeaturedItem) {
@@ -1392,12 +1412,15 @@ struct StandardLayout: SwiftUI.View {
                     // without a relaunch.
                     .task(id: viewModel.homeRowOrder) {
                         homeRows = computeHomeRows()
+                        warmHomeArtwork()
                     }
                     .task(id: categoryShelfCacheKey) {
                         channelsByCategory = computeChannelsByCategory()
+                        warmHomeArtwork()
                     }
                     .task(id: recentCacheKey) {
                         cachedRecent = viewModel.recentIDs.compactMap { idToChannel[$0] }
+                        warmHomeArtwork()
                     }
                     .task(id: scoreViewModel.allLiveGameIDsKey) {
                         cachedHomeLiveGames = scoreViewModel.allLiveGames
@@ -2762,156 +2785,41 @@ struct MatchupHeroContent: View {
 /// Without this, the inner pan gesture stays in a tracking state for ~half
 /// a second after every swipe and silently swallows taps. Used by the chip
 /// row and the home-page Live Now / Continue Watching shelves.
-struct TouchPassingHorizontalScroll<Content: View>: UIViewRepresentable {
+/// A home shelf: one horizontally scrolling row, built the way Nuvio builds
+/// theirs.
+///
+/// Nuvio's home is a `LazyColumn` of sections, each of which is a plain
+/// `Column { header; LazyRow(items, key = ...) }` — a lazy row nested in a
+/// lazy column, all of it composables drawn into a single canvas. Creating
+/// one when it scrolls into view costs a measure pass and nothing else.
+///
+/// This used to be a `UIViewRepresentable` wrapping a UIScrollView with a
+/// UIHostingController inside it, to work around SwiftUI's horizontal
+/// ScrollView leaving its pan recogniser tracking after a swipe and
+/// swallowing later taps. The cost of that workaround was enormous and paid
+/// on exactly the wrong beat: home's shelves sit in a `LazyVStack`, so every
+/// row entering the viewport built a hosting controller, an Auto Layout
+/// hierarchy and a full SwiftUI tree, synchronously, in the middle of the
+/// scroll. That is the jitter on every scroll — it scales with the number of
+/// shelves and lands mid-gesture by construction.
+///
+/// The tap bug it was working around is separately handled now: every card in
+/// every shelf checks `SwipeTapGuard.tapsAllowed`, which was added long after
+/// this wrapper and covers a swipe that ends over a tappable card.
+struct TouchPassingHorizontalScroll<Content: View>: View {
     @ViewBuilder var content: () -> Content
 
-    /// Re-attaching to a window (a fullScreenCover — player, search — was
-    /// dismissed) can leave the hosted SwiftUI content with a stale layout:
-    /// a too-small content size makes the shelf unscrollable, a too-large
-    /// one lets it drift into empty space with no snap-back. Kick a fresh
-    /// layout on every window re-attach, and clamp on every layout pass so
-    /// a stale offset never survives to the next data refresh.
-    final class ShelfScrollView: UIScrollView {
-        weak var hostedView: UIView?
-
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
-            guard window != nil else { return }
-            hostedView?.invalidateIntrinsicContentSize()
-            hostedView?.setNeedsLayout()
-            setNeedsLayout()
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            content()
         }
-
-        override func layoutSubviews() {
-            super.layoutSubviews()
-            TouchPassingHorizontalScroll.Coordinator.clampOffset(self)
-        }
-    }
-
-    func makeUIView(context: Context) -> UIScrollView {
-        let scrollView = ShelfScrollView()
-        scrollView.showsHorizontalScrollIndicator = false
-        scrollView.showsVerticalScrollIndicator = false
-        scrollView.alwaysBounceVertical = false
-        scrollView.alwaysBounceHorizontal = false
-        // The two crucial settings: don't intercept taps, don't cancel them
-        // until the user is actually dragging.
-        scrollView.delaysContentTouches = false
-        scrollView.canCancelContentTouches = true
-        scrollView.backgroundColor = .clear
-
-        let host = UIHostingController(rootView: content())
-        host.view.backgroundColor = .clear
-        host.view.translatesAutoresizingMaskIntoConstraints = false
-        // `safeAreaRegions = []` keeps SwiftUI from inset-shrinking the
-        // hosted content based on the parent scroll view's safe area —
-        // we manage padding inside the chip HStack ourselves.
-        if #available(iOS 16.4, *) {
-            host.safeAreaRegions = []
-        }
-        scrollView.addSubview(host.view)
-
-        NSLayoutConstraint.activate([
-            host.view.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
-            host.view.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
-            host.view.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
-            host.view.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
-            host.view.heightAnchor.constraint(equalTo: scrollView.frameLayoutGuide.heightAnchor)
-        ])
-
-        context.coordinator.host = host
-        (scrollView as? ShelfScrollView)?.hostedView = host.view
-        scrollView.delegate = context.coordinator
-        return scrollView
-    }
-
-    func updateUIView(_ scrollView: UIScrollView, context: Context) {
-        context.coordinator.host?.rootView = content()
-        context.coordinator.scrollView = scrollView
-        // Force a fresh measurement on every content change. Without this,
-        // an update that lands while the shelf is covered (a new Continue
-        // Watching entry added mid-playback) keeps the OLD content size —
-        // the shelf comes back cut off and unscrollable until something
-        // else (backgrounding the app) kicks a layout.
-        context.coordinator.host?.view.invalidateIntrinsicContentSize()
-        scrollView.setNeedsLayout()
-        // Content can shrink on a data refresh (fewer live games, shorter
-        // shelf) while the old contentOffset survives — the shelf then shows a
-        // stray blank gap before the first card. `ShelfScrollView.layoutSubviews`
-        // already clamps on EVERY layout pass, which covers that completely, so
-        // the marking above is all this needs to do.
-        //
-        // There used to be a `DispatchQueue.main.async { layoutIfNeeded();
-        // clampOffset() }` here, and it was the most expensive thing on the home
-        // screen. `updateUIView` runs on every SwiftUI update of the parent, and
-        // home has a shelf per category — so a single re-render queued one
-        // FORCED SYNCHRONOUS layout of a hosting controller's whole SwiftUI tree
-        // per shelf, all landing a runloop turn later, on whatever frame
-        // happened to be in flight. That is the irregular hitching: the cost
-        // scales with the number of shelves, fires on any update at all, and
-        // lands off-cycle by construction. `setNeedsLayout` gets the same work
-        // done inside UIKit's own layout pass instead of ahead of it.
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    final class Coordinator: NSObject, UIScrollViewDelegate {
-        var host: UIHostingController<Content>?
-        weak var scrollView: UIScrollView?
-
-        override init() {
-            super.init()
-            // Returning from the background can leave the hosted SwiftUI
-            // content re-laid-out while the scroll view keeps a stale
-            // offset/content size — the shelf comes back with a huge blank
-            // gap or the first card shoved half off-screen with no way to
-            // drag it back. Force a fresh layout and re-clamp on every
-            // foreground activation.
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(appDidBecomeActive),
-                name: UIApplication.didBecomeActiveNotification,
-                object: nil
-            )
-        }
-
-        @objc private func appDidBecomeActive() {
-            guard let scrollView else { return }
-            host?.view.invalidateIntrinsicContentSize()
-            host?.view.setNeedsLayout()
-            scrollView.setNeedsLayout()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                scrollView.layoutIfNeeded()
-                Self.clampOffset(scrollView)
-            }
-        }
-
-        /// Clamps the offset into the valid range in BOTH directions —
-        /// a stale offset can survive as too-far-right (content shrank) or
-        /// negative (restored mid-bounce), and either strands the shelf.
-        static func clampOffset(_ scrollView: UIScrollView) {
-            guard !scrollView.isDragging, !scrollView.isDecelerating else { return }
-            let maxX = max(0, scrollView.contentSize.width - scrollView.bounds.width)
-            let x = min(max(0, scrollView.contentOffset.x), maxX)
-            if x != scrollView.contentOffset.x {
-                scrollView.setContentOffset(CGPoint(x: x, y: 0), animated: false)
-            }
-        }
-
-        // While the user is actively dragging this shelf, mark the global
-        // horizontal-scroll signal so page-level chip-swipe gestures ignore
-        // the same drag.
-        func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            if scrollView.isDragging || scrollView.isDecelerating {
-                HorizontalScrollActivity.touch()
-            }
-        }
+        // The UIKit version set `alwaysBounceHorizontal = false`; this is the
+        // native equivalent — a shelf narrower than the screen sits still
+        // instead of rubber-banding.
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
     }
 }
 
-/// "Live Now" horizontal shelf — currently-live sports games across every
-/// sport. Tapping a card runs the existing smart-search pipeline to find
-/// and play the channel broadcasting that game.
 struct LiveGamesPreviewList: View {
     let games: [ESPNEvent]
     @ObservedObject var scoreViewModel: ScoreViewModel
@@ -2923,7 +2831,7 @@ struct LiveGamesPreviewList: View {
         // Prevents the post-swipe gesture lockout that makes Quick Access
         // buttons un-tappable after scrolling this shelf.
         TouchPassingHorizontalScroll {
-            HStack(spacing: 12) {
+            LazyHStack(spacing: 12) {
                 ForEach(games) { game in
                     LiveEventCard(game: game, accentColor: accentColor)
                         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))

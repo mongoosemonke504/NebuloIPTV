@@ -479,7 +479,7 @@ class ScoreViewModel: ObservableObject {
                 let limit = 20
                 
                 for url in urlsToLoad {
-                    if await ImageCache.shared.hasImage(forKey: url) { continue }
+                    if ImageCache.shared.hasImage(forKey: url) { continue }
                     if active >= limit { await group.next(); active -= 1 }
                     group.addTask { await ImageCache.prefetchAndWait(urlString: url) }
                     active += 1

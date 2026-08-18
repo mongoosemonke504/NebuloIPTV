@@ -26,19 +26,49 @@ enum LogoGlow {
     static func color(for icon: String?) async -> Color? {
         guard let icon, !icon.isEmpty else { return nil }
         if let cached = cache[icon] { return cached }
-        for _ in 0..<12 {
-            if let ui = ImageCache.shared.get(forKey: icon, size: CGSize(width: 160, height: 160)),
-               let sample = ui.brandSample() {
-                let c = Color(sample.glow)
-                cache[icon] = c
-                toneCache[icon] = Color(sample.tone)
-                if sample.isLightTone { lightToneIcons.insert(icon) }
-                return c
+        // Two cards showing the same logo shouldn't each decode it.
+        if let running = inFlight[icon] { return await running.value }
+
+        let work = Task<Color?, Never> { @MainActor in
+            defer { inFlight[icon] = nil }
+            for _ in 0..<12 {
+                // The decode and both pixel passes run OFF the main thread.
+                //
+                // This function is @MainActor and used to call the cache's
+                // synchronous accessor, whose own documentation reserves it for
+                // one-shot callers because its disk path decodes on the calling
+                // thread. It is called from a `.task` on every channel card, so
+                // every card scrolling into view ran a file read, a full
+                // downsample, a 64x64 border-trim scan and a 16x16 brand scan
+                // on the main thread — and retried all of it up to twelve times
+                // for a logo that had not arrived yet. That is the hitch on
+                // every scroll; the colours it produces are identical either
+                // way, so nothing here changes but where the work happens.
+                let boxed = await Task.detached(priority: .utility) { () -> SampleBox in
+                    guard let ui = ImageCache.decodeFromDisk(
+                        urlString: icon,
+                        size: CGSize(width: 160, height: 160)
+                    ) else { return SampleBox(sample: nil) }
+                    return SampleBox(sample: ui.brandSample())
+                }.value
+
+                if let sample = boxed.sample {
+                    let c = Color(sample.glow)
+                    cache[icon] = c
+                    toneCache[icon] = Color(sample.tone)
+                    if sample.isLightTone { lightToneIcons.insert(icon) }
+                    return c
+                }
+                try? await Task.sleep(nanoseconds: 250_000_000)
             }
-            try? await Task.sleep(nanoseconds: 250_000_000)
+            return nil
         }
-        return nil
+        inFlight[icon] = work
+        return await work.value
     }
+
+    /// Samples in progress, keyed by logo URL.
+    @MainActor private static var inFlight: [String: Task<Color?, Never>] = [:]
 
     /// The channel's solid card colour, or nil until the logo has been sampled.
     /// Read on every render (never held in view state) so a recycled card can't
@@ -57,7 +87,13 @@ enum LogoGlow {
 
 /// What one pass over a logo yields: the bright colour used for glows and
 /// halos, and the solid colour its cards are filled with.
-struct BrandSample {
+/// Carries a sample back from the detached decode. Safe because the colours
+/// are created there and never touched again on that side.
+private struct SampleBox: @unchecked Sendable { let sample: BrandSample? }
+
+/// Nonisolated so it can be built on the sampling thread — see
+/// `brandSample()`, which runs off the main actor.
+nonisolated struct BrandSample {
     let glow: UIColor
     let tone: UIColor
     /// The tone came out pale, because the logo is dark.
@@ -84,7 +120,7 @@ extension UIImage {
     /// background by HUE as well as by brightness. A pure red logo (luminance
     /// 0.21) is perfectly legible on a deep red slab; a dark grey logo of the
     /// same luminance is not.
-    func brandSample() -> BrandSample? {
+    nonisolated func brandSample() -> BrandSample? {
         guard let cg = cgImage else { return nil }
         let w = 16, h = 16
         var pixels = [UInt8](repeating: 0, count: w * h * 4)
@@ -163,7 +199,10 @@ extension UIImage {
 }
 
 private extension UIColor {
-    var hueComponent: CGFloat {
+    /// Nonisolated for the same reason as `brandSample()` — it is read on the
+    /// sampling thread, and inheriting main-actor isolation would drag the
+    /// whole calculation back onto the main thread.
+    nonisolated var hueComponent: CGFloat {
         var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         getHue(&h, saturation: &s, brightness: &b, alpha: &a)
         return h

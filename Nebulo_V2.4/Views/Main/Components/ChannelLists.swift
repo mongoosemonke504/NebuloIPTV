@@ -99,7 +99,7 @@ struct HorizontalPreviewList: View {
         // gesture in a tracking state after a swipe, which silently swallows
         // taps on this shelf and on the Quick Access panel beneath it.
         TouchPassingHorizontalScroll {
-            HStack(spacing: 14) {
+            LazyHStack(spacing: 14) {
                 ForEach(channels) { c in
                     Button(action: {
                         guard SwipeTapGuard.tapsAllowed else { return }
@@ -866,7 +866,7 @@ struct FavoriteTeamsShelf: View {
 
     var body: some View {
         TouchPassingHorizontalScroll {
-            HStack(alignment: .top, spacing: 16) {
+            LazyHStack(alignment: .top, spacing: 16) {
                 // Positional ids — a team id alone can repeat across sports.
                 ForEach(Array(teams.enumerated()), id: \.offset) { _, item in
                     FavoriteBadge(

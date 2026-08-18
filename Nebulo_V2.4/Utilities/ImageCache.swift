@@ -56,7 +56,11 @@ final class ImageCache: @unchecked Sendable {
         cache.object(forKey: Self.cacheKey(key, size))
     }
 
-    func hasImage(forKey key: String) -> Bool {
+    /// Nonisolated: this only stats a file, and the logo prefetch loops over
+    /// hundreds of URLs calling it. Main-actor isolated, every one of those was
+    /// a hop onto the main thread for a filesystem check — from a background
+    /// task that is free to run in the middle of a scroll.
+    nonisolated func hasImage(forKey key: String) -> Bool {
         FileManager.default.fileExists(atPath: Self.fileURL(for: key).path)
     }
 
@@ -76,6 +80,31 @@ final class ImageCache: @unchecked Sendable {
 
     private func store(_ image: UIImage, key: NSString) {
         cache.setObject(image, forKey: key, cost: Self.cost(of: image))
+    }
+
+    /// Promotes disk-cached images into the MEMORY cache, off the main thread.
+    ///
+    /// The point is that `ImageLoader` can then find them synchronously when
+    /// its card is built, with no file access on the main thread. Call it for
+    /// what a screen is about to show; already-resident entries cost a lookup
+    /// and nothing else.
+    nonisolated static func prewarm(_ urls: [String], size: CGSize? = nil, limit: Int = 240) {
+        let wanted = Array(urls.filter { !$0.isEmpty }.prefix(limit))
+        guard !wanted.isEmpty else { return }
+        Task.detached(priority: .utility) {
+            for url in wanted {
+                if await MainActor.run(body: {
+                    ImageCache.shared.getMemoryCache(forKey: url, size: size) != nil
+                }) { continue }
+                guard let decoded = decodeFromDisk(urlString: url, size: size) else { continue }
+                let boxed = DecodedImage(image: decoded)
+                await MainActor.run {
+                    guard let image = boxed.image else { return }
+                    // Already on disk by definition — no need to write it back.
+                    ImageCache.shared.set(image, forKey: url, size: size, skipDiskWrite: true)
+                }
+            }
+        }
     }
 
     // MARK: - Async load (decode off the main thread, coalesced)
@@ -331,8 +360,17 @@ class ImageLoader: ObservableObject {
         // Without the disk fallback, rows created mid-transition (e.g. the
         // directional sport swipe) rendered gray boxes for a beat and their
         // logos popped in after the slide instead of moving with it.
-        if let cached = ImageCache.shared.getMemoryCache(forKey: urlString, size: decodeSize)
-            ?? ImageCache.shared.get(forKey: urlString, size: decodeSize) {
+        // MEMORY ONLY. This initialiser runs during SwiftUI view construction,
+        // on the main thread, for every card that scrolls into view — and the
+        // disk branch of `get(forKey:)` reads a file, runs a full downsample
+        // and scans the result for a trimmable border, all synchronously. That
+        // is a decode per card, mid-gesture, which is precisely the stall the
+        // async path below exists to avoid; the cache's own documentation says
+        // as much. A disk-cached image now arrives a frame or two later via
+        // `.task`, and `ImageCache.prewarm` promotes what a screen is about to
+        // show into memory beforehand so the common case still paints
+        // immediately.
+        if let cached = ImageCache.shared.getMemoryCache(forKey: urlString, size: decodeSize) {
             self.image = cached
             self.loadedURL = urlString
         }
