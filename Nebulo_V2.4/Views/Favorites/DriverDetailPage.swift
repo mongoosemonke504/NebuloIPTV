@@ -16,7 +16,6 @@ struct DriverDetailPage: View {
     @ObservedObject var scoreViewModel: ScoreViewModel
     /// Passed through to the race card so an onboard feed can start from here.
     let playAction: (StreamChannel) -> Void
-    @Environment(\.dismiss) private var dismiss
 
 
     enum Tab: String, CaseIterable, Identifiable {
@@ -182,7 +181,7 @@ struct DriverDetailPage: View {
             HStack(spacing: 10) {
                 NuvioCircleButton(systemName: "chevron.left") {
                     viewModel.triggerSelectionHaptic()
-                    dismiss()
+                    DetailRouter.shared.close()
                 }
                 Spacer(minLength: 0)
                 Text(name)
@@ -386,7 +385,7 @@ struct DriverDetailPage: View {
             viewModel.triggerSelectionHaptic()
             // Closes this page and opens the weekend's game card — the same
             // card the hub and the home shelves open.
-            dismiss()
+            DetailRouter.shared.close()
             scoreViewModel.presentRaceCard(race)
         }) {
             VStack(alignment: .leading, spacing: 12) {
@@ -633,7 +632,7 @@ struct DriverDetailPage: View {
     /// channel-matching search the hub uses.
     private func watch(_ race: ESPNEvent) {
         let (home, away) = race.searchTerms
-        dismiss()
+        DetailRouter.shared.close()
         viewModel.runSmartSearch(gameID: race.id, home: home, away: away,
                                  sport: .f1, network: race.broadcastName)
     }

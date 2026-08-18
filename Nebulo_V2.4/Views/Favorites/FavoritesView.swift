@@ -7,6 +7,7 @@ enum FavoritesFilter: String, CaseIterable, Identifiable {
     case all = "All"
     case channels = "Channels"
     case teams = "Teams"
+    case leagues = "Leagues"
     case reminders = "Reminders"
     var id: String { rawValue }
 }
@@ -37,40 +38,17 @@ struct FavoritesView: View {
     @State private var showReorderChannels = false
     @State private var showSeeAllTeams = false
     @State private var showSearchSheet = false
-    /// Identifies the team row that should present its detail sheet. Using an
-    /// optional struct (rather than a Bool + ID combo) means the sheet
-    /// presents/dismisses purely from this binding — no race conditions.
     /// Set the instant a drag reads as horizontal, which disables the page's
     /// vertical scroll for the rest of that gesture. A leaf box, so flipping it
     /// re-renders the scroll modifier alone.
     @State private var scrollLock = FlagBox()
 
-    @State private var detailTeam: TeamDetailSelection? = nil
-    @State private var detailLeague: LeagueDetailSelection? = nil
     /// 0 at rest, 1 once the big title has scrolled away. Tracked 1:1 with
     /// the scroll offset (no canned animation) — drives the title fade and
     /// the compact line growing into the pinned pill bar. Held in its own
     /// object (observed only by the fading title + gradient) so scrolling
     /// doesn't re-render this whole screen's content every frame.
     @State private var titleProgress = ScrollProgress()
-
-    /// Lightweight envelope used to drive the team page on team taps. Carries
-    /// the team plus its league context (needed to look up the right logo).
-    struct TeamDetailSelection: Identifiable {
-        let team: ESPNTeam
-        let leagueLabel: String?
-        var sport: SportType? = nil
-        var id: String { ScoreViewModel.teamKey(sport: sport, teamID: team.id) }
-    }
-
-    /// Drives the league page on league taps. Carries the sport + league
-    /// label so the page can pull the right table and fixtures.
-    struct LeagueDetailSelection: Identifiable {
-        let sport: SportType
-        let leagueLabel: String?
-        let displayName: String
-        var id: String { "\(sport.rawValue)|\(leagueLabel ?? "*")" }
-    }
 
     /// Which side the incoming content enters from. `true` when moving to a
     /// pill further right, so content slides in from the trailing edge like
@@ -274,35 +252,6 @@ struct FavoritesView: View {
         // team here and a tap on the same team there now land in exactly one
         // place. Previously this presented a games-only sheet while home
         // presented the full page.
-        .fullScreenCover(item: $detailTeam) { selection in
-            // An F1 favourite is a driver, and ESPN's team endpoints 404 for
-            // racing, so the team page came up blank. Drivers get their own.
-            if selection.sport == .f1 {
-                DriverDetailPage(
-                    driver: selection.team,
-                    viewModel: viewModel,
-                    scoreViewModel: scoreViewModel,
-                    playAction: playAction
-                )
-            } else {
-                TeamDetailPage(
-                    team: selection.team,
-                    leagueLabel: selection.leagueLabel,
-                    sport: selection.sport,
-                    viewModel: viewModel,
-                    scoreViewModel: scoreViewModel
-                )
-            }
-        }
-        .fullScreenCover(item: $detailLeague) { selection in
-            LeagueDetailPage(
-                sport: selection.sport,
-                leagueLabel: selection.leagueLabel,
-                displayName: selection.displayName,
-                viewModel: viewModel,
-                scoreViewModel: scoreViewModel
-            )
-        }
     }
 
     // MARK: Title row (matches RecordingsView's headerView)
@@ -324,8 +273,14 @@ struct FavoritesView: View {
 
     private var headerSubtitle: String {
         let c = favoriteChannels.count
-        let t = favoriteTeams.count + favoriteLeagues.count
-        return "\(c) channel\(c == 1 ? "" : "s") · \(t) team\(t == 1 ? "" : "s")"
+        let t = favoriteTeams.count
+        let l = favoriteLeagues.count
+        var parts = ["\(c) channel\(c == 1 ? "" : "s")", "\(t) team\(t == 1 ? "" : "s")"]
+        // Leagues only earn a slot in the line once there are some — an
+        // always-on "0 leagues" is noise on a screen most people fill with
+        // channels and clubs.
+        if l > 0 { parts.append("\(l) league\(l == 1 ? "" : "s")") }
+        return parts.joined(separator: " · ")
     }
 
     // MARK: TabView pages
@@ -364,6 +319,7 @@ struct FavoritesView: View {
         case .all:       allPageContent
         case .channels:  channelsPageContent
         case .teams:     teamsPageContent
+        case .leagues:   leaguesPageContent
         case .reminders: remindersPageContent
         }
     }
@@ -375,11 +331,15 @@ struct FavoritesView: View {
 
     @ViewBuilder private var allPageContent: some View {
         VStack(alignment: .leading, spacing: 24) {
-            channelsSection
-            teamsSection
-            if !reminderGames.isEmpty { remindersSection }
+            // Nothing favorited at all gets the single big empty state — the
+            // per-section "add" tiles would otherwise stack three deep above it.
             if favoriteChannels.isEmpty && favoriteTeams.isEmpty && favoriteLeagues.isEmpty && reminderGames.isEmpty {
                 emptyState.padding(.top, 60)
+            } else {
+                channelsSection
+                teamsSection
+                leaguesSection
+                if !reminderGames.isEmpty { remindersSection }
             }
             pageVerticalPadding
         }
@@ -399,6 +359,15 @@ struct FavoritesView: View {
     @ViewBuilder private var teamsPageContent: some View {
         VStack(alignment: .leading, spacing: 24) {
             teamsSection
+            pageVerticalPadding
+        }
+        .padding(.top, 4)
+        .padding(.bottom, 16)
+    }
+
+    @ViewBuilder private var leaguesPageContent: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            leaguesSection
             pageVerticalPadding
         }
         .padding(.top, 4)
@@ -466,29 +435,33 @@ struct FavoritesView: View {
         }
     }
 
-    // MARK: Teams & Leagues section
+    // MARK: Teams section
 
+    /// Teams and leagues get their own sections rather than one merged list:
+    /// a club and a competition are different things to follow, they open
+    /// different pages, and mixed together the list read as one long run of
+    /// crests with no order to it.
     @ViewBuilder private var teamsSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             FavoritesSectionHeader(
-                title: "Teams & Leagues",
-                count: favoriteTeams.count + favoriteLeagues.count,
+                title: "Teams",
+                count: favoriteTeams.count,
                 // Chevron opens the Teams & Leagues editor (reorder / delete);
                 // "+" adds more. Both render as the same neutral circular
                 // buttons — no accent-colored text.
-                trailingIcon: (favoriteTeams.isEmpty && favoriteLeagues.isEmpty) ? nil : "chevron.right",
+                trailingIcon: favoriteTeams.isEmpty ? nil : "chevron.right",
                 accentColor: accentColor,
                 onTrailingTap: { guard SwipeTapGuard.tapsAllowed else { return }; showSeeAllTeams = true },
                 onAddTap: { guard SwipeTapGuard.tapsAllowed else { return }; showAddSheet = true }
             )
             .padding(.horizontal, 20)
 
-            if favoriteTeams.isEmpty && favoriteLeagues.isEmpty {
+            if favoriteTeams.isEmpty {
                 Button(action: { guard SwipeTapGuard.tapsAllowed else { return }; showAddSheet = true }) {
                     FavoritesEmptyTile(
                         icon: "sportscourt.fill",
-                        title: "Add a team or league",
-                        subtitle: "Every club, national side, and F1 driver — pick your favorites."
+                        title: "Add a team",
+                        subtitle: "Every club, national side, F1 driver and golfer — pick your favorites."
                     )
                 }
                 .buttonStyle(.plain)
@@ -518,7 +491,7 @@ struct FavoritesView: View {
                                         highlightPlayer: item.team.displayName
                                     )
                                 } else {
-                                    detailTeam = TeamDetailSelection(team: item.team, leagueLabel: item.leagueLabel, sport: item.sport)
+                                    DetailRouter.shared.open(.team(team: item.team, sport: item.sport, leagueLabel: item.leagueLabel))
                                 }
                             },
                             onWatch: { game in
@@ -529,6 +502,40 @@ struct FavoritesView: View {
                             }
                         )
                     }
+
+                    addAnotherRow(title: "Add another team")
+                }
+                .padding(.horizontal, 20)
+            }
+        }
+    }
+
+    // MARK: Leagues section
+
+    @ViewBuilder private var leaguesSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            FavoritesSectionHeader(
+                title: "Leagues",
+                count: favoriteLeagues.count,
+                trailingIcon: favoriteLeagues.isEmpty ? nil : "chevron.right",
+                accentColor: accentColor,
+                onTrailingTap: { guard SwipeTapGuard.tapsAllowed else { return }; showSeeAllTeams = true },
+                onAddTap: { guard SwipeTapGuard.tapsAllowed else { return }; showAddSheet = true }
+            )
+            .padding(.horizontal, 20)
+
+            if favoriteLeagues.isEmpty {
+                Button(action: { guard SwipeTapGuard.tapsAllowed else { return }; showAddSheet = true }) {
+                    FavoritesEmptyTile(
+                        icon: "trophy.fill",
+                        title: "Add a league",
+                        subtitle: "Follow a competition for its table, fixtures and results."
+                    )
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 20)
+            } else {
+                VStack(spacing: 10) {
                     ForEach(Array(favoriteLeagues.enumerated()), id: \.element.displayName) { _, item in
                         FavoriteLeagueRow(
                             sport: item.sport,
@@ -539,11 +546,11 @@ struct FavoritesView: View {
                                 // Every favourited series opens its own page —
                                 // Formula 1 and golf get the season (calendar
                                 // and championships) there, not a single race.
-                                detailLeague = LeagueDetailSelection(
+                                DetailRouter.shared.open(.league(
                                     sport: item.sport,
                                     leagueLabel: item.leagueLabel,
                                     displayName: item.displayName
-                                )
+                                ))
                             },
                             onRemove: {
                                 scoreViewModel.toggleFavoriteLeague(sport: item.sport, leagueLabel: item.leagueLabel)
@@ -551,41 +558,45 @@ struct FavoritesView: View {
                         )
                     }
 
-                    // "Add another" row so users can keep adding teams even
-                    // after the first favorite. Tapping opens the same picker
-                    // sheet as the empty-state tile.
-                    Button(action: { guard SwipeTapGuard.tapsAllowed else { return }; showAddSheet = true }) {
-                        HStack(spacing: 12) {
-                            Image(systemName: "plus")
-                                .font(.system(size: 18, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 44, height: 44)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .fill(Color.white.opacity(0.14))
-                                )
-                            Text("Add another team or league")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.85))
-                            Spacer()
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .fill(Color.black.opacity(0.3))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .stroke(Color.white.opacity(0.08), style: StrokeStyle(lineWidth: 0.8, dash: [5, 4]))
-                        )
-                    }
-                    .buttonStyle(.plain)
+                    addAnotherRow(title: "Add another league")
                 }
                 .padding(.horizontal, 20)
             }
         }
+    }
+
+    /// Dashed "add" row that closes out a populated section, so users can keep
+    /// adding after the first favourite. Opens the same picker as the empty
+    /// state and the header's "+".
+    private func addAnotherRow(title: String) -> some View {
+        Button(action: { guard SwipeTapGuard.tapsAllowed else { return }; showAddSheet = true }) {
+            HStack(spacing: 12) {
+                Image(systemName: "plus")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color.white.opacity(0.14))
+                    )
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.85))
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.black.opacity(0.3))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), style: StrokeStyle(lineWidth: 0.8, dash: [5, 4]))
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: Reminders section

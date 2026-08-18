@@ -210,7 +210,6 @@ struct LeagueDetailPage: View {
     let displayName: String
     @ObservedObject var viewModel: ChannelViewModel
     @ObservedObject var scoreViewModel: ScoreViewModel
-    @Environment(\.dismiss) private var dismiss
 
     enum Tab: String, CaseIterable, Identifiable {
         case table = "Table", fixtures = "Fixtures", results = "Results"
@@ -384,7 +383,7 @@ struct LeagueDetailPage: View {
             HStack {
                 NuvioCircleButton(systemName: "chevron.left") {
                     viewModel.triggerSelectionHaptic()
-                    dismiss()
+                    DetailRouter.shared.close()
                 }
                 Spacer()
             }
@@ -554,7 +553,7 @@ struct LeagueDetailPage: View {
                         // behind it; the rest of the calendar is reference.
                         guard let game = scheduleEvent(for: entry.id) else { return }
                         viewModel.triggerSelectionHaptic()
-                        dismiss()
+                        DetailRouter.shared.close()
                         if sport == .f1 {
                             scoreViewModel.presentRaceCard(game)
                         } else {
@@ -772,7 +771,7 @@ struct LeagueDetailPage: View {
                                     viewModel.triggerSelectionHaptic()
                                     let s = scoreViewModel.sportType(for: game)
                                     scoreViewModel.deepLinkRequest = scoreViewModel.makeDetailRequest(for: game, sport: s)
-                                    dismiss()
+                                    DetailRouter.shared.close()
                                 }) {
                                     TeamGameRow(game: game, dateFormatter: Self.dateFmt)
                                 }

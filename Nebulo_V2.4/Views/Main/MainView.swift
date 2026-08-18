@@ -210,6 +210,121 @@ struct MainView: SwiftUI.View {
     }
 }
 
+/// Renders whichever detail page the router has open, and owns the
+/// swipe-to-close gesture for it.
+///
+/// Mounted ABOVE the bottom dock (see where it is applied in
+/// `MainViewModifiers`) so the page covers the whole screen the way a
+/// full-screen cover used to — but as part of the same view tree, so the
+/// screen it is covering is still there to slide back into view behind it.
+struct DetailPageHost: SwiftUI.View {
+    @ObservedObject private var router = DetailRouter.shared
+    // Passed straight through to the page, which subscribes to them itself —
+    // observing them here as well would re-render the host on every unrelated
+    // publish from either model.
+    let viewModel: ChannelViewModel
+    let scoreViewModel: ScoreViewModel
+    let playAction: (StreamChannel) -> Void
+
+    /// The drag has been claimed as a close gesture.
+    @State private var dragging = false
+    /// Started at the edge but read as something else — a vertical scroll, or
+    /// a leftward drag — and is ignored for the rest of this drag.
+    @State private var rejected = false
+
+    /// Only the far edge closes the page: everything inboard of this belongs
+    /// to the page itself, whose own tab paging starts at 44.
+    private static let edgeWidth: CGFloat = 32
+
+    var body: some SwiftUI.View {
+        ZStack {
+            if let route = router.route {
+                page(for: route)
+                    .id(route.id)
+                    .modifier(DetailSlideOffset(slide: router.slide))
+                    .transition(.move(edge: .trailing))
+                    .simultaneousGesture(closeDrag)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func page(for route: DetailRoute) -> some SwiftUI.View {
+        switch route {
+        case let .team(team, sport, leagueLabel):
+            // Drivers aren't teams — ESPN's team endpoints 404 for racing,
+            // so they get their own page.
+            if sport == .f1 {
+                DriverDetailPage(
+                    driver: team,
+                    viewModel: viewModel,
+                    scoreViewModel: scoreViewModel,
+                    playAction: playAction
+                )
+            } else {
+                TeamDetailPage(
+                    team: team,
+                    leagueLabel: leagueLabel,
+                    sport: sport,
+                    viewModel: viewModel,
+                    scoreViewModel: scoreViewModel
+                )
+            }
+        case let .league(sport, leagueLabel, displayName):
+            LeagueDetailPage(
+                sport: sport,
+                leagueLabel: leagueLabel,
+                displayName: displayName,
+                viewModel: viewModel,
+                scoreViewModel: scoreViewModel
+            )
+        }
+    }
+
+    private var closeDrag: some Gesture {
+        let width = max(UIScreen.main.bounds.width, 1)
+        return DragGesture(minimumDistance: 8, coordinateSpace: .global)
+            .onChanged { value in
+                guard value.startLocation.x <= Self.edgeWidth else { return }
+                let dx = value.translation.width
+                let dy = value.translation.height
+                if !dragging && !rejected {
+                    // Judged once, on the first reported movement.
+                    guard dx > 0, abs(dx) > abs(dy) else { rejected = true; return }
+                    dragging = true
+                    SwipeTapGuard.suppress()
+                }
+                guard dragging else { return }
+                router.slide.set(min(max(dx / width, 0), 1))
+            }
+            .onEnded { value in
+                let wasDragging = dragging
+                dragging = false
+                rejected = false
+                guard wasDragging else { return }
+                let travelled = max(0, value.translation.width)
+                let flick = value.predictedEndTranslation.width - value.translation.width
+                if travelled > width * 0.3 || travelled + flick > width * 0.6 {
+                    router.finishSwipe()
+                } else {
+                    router.cancelSwipe()
+                }
+            }
+    }
+}
+
+/// Slides the page sideways from the router's drag progress. An
+/// `@ObservedObject` on the modifier rather than on the host, so each frame
+/// of the drag re-renders this offset and nothing else — the page's body is
+/// never re-evaluated while it travels.
+struct DetailSlideOffset: ViewModifier {
+    @ObservedObject var slide: ScrollProgress
+
+    func body(content: Content) -> some SwiftUI.View {
+        content.offset(x: slide.value * UIScreen.main.bounds.width)
+    }
+}
+
 struct MainViewModifiers: ViewModifier {
     @ObservedObject var viewModel: ChannelViewModel
     @ObservedObject var scoreViewModel: ScoreViewModel
@@ -381,6 +496,17 @@ struct MainViewModifiers: ViewModifier {
                             .allowsHitTesting(false)
                     )
                 }
+            }
+            // Team / league / driver pages. Applied AFTER the dock overlay
+            // above, so it renders over the bar exactly like the full-screen
+            // cover this replaced — while leaving the screen underneath in
+            // the hierarchy, which is what lets the close swipe reveal it.
+            .overlay {
+                DetailPageHost(
+                    viewModel: viewModel,
+                    scoreViewModel: scoreViewModel,
+                    playAction: playAction
+                )
             }
             // Plays a recording over the HOME screen (transparent cover). A
             // recording tapped inside the live player routes here after that
@@ -686,20 +812,6 @@ struct StandardLayout: SwiftUI.View {
         let kind: Kind
     }
 
-    struct HomeTeamSelection: Identifiable {
-        let team: ESPNTeam
-        let sport: SportType?
-        let leagueLabel: String?
-        var id: String { "\(sport?.rawValue ?? "-")|\(team.id)" }
-    }
-    struct HomeLeagueSelection: Identifiable {
-        let sport: SportType
-        let leagueLabel: String?
-        let displayName: String
-        var id: String { "\(sport.rawValue)|\(leagueLabel ?? "-")" }
-    }
-    @State private var openedTeam: HomeTeamSelection?
-    @State private var openedLeague: HomeLeagueSelection?
 
     /// Opens a featured hero page's destination: a live matchup goes to its
     /// game card, a plain channel to the channel preview popup.
@@ -1114,10 +1226,10 @@ struct StandardLayout: SwiftUI.View {
                                         teams: cachedFavTeams,
                                         leagues: cachedFavLeagues,
                                         onTeam: { team, sport, league in
-                                            openedTeam = HomeTeamSelection(team: team, sport: sport, leagueLabel: league)
+                                            DetailRouter.shared.open(.team(team: team, sport: sport, leagueLabel: league))
                                         },
                                         onLeague: { sport, label, name in
-                                            openedLeague = HomeLeagueSelection(sport: sport, leagueLabel: label, displayName: name)
+                                            DetailRouter.shared.open(.league(sport: sport, leagueLabel: label, displayName: name))
                                         }
                                     )
                                 }
@@ -1345,36 +1457,6 @@ struct StandardLayout: SwiftUI.View {
                 viewModel: viewModel,
                 accentColor: accentColor,
                 playAction: { playAction($0) }
-            )
-        }
-        // My Teams — a full-screen page, not a sheet: it's a destination with
-        // its own hero, the same as a category catalog page.
-        .fullScreenCover(item: $openedTeam) { sel in
-            // Drivers aren't teams — see DriverDetailPage.
-            if sel.sport == .f1 {
-                DriverDetailPage(
-                    driver: sel.team,
-                    viewModel: viewModel,
-                    scoreViewModel: scoreViewModel,
-                    playAction: playAction
-                )
-            } else {
-                TeamDetailPage(
-                    team: sel.team,
-                    leagueLabel: sel.leagueLabel,
-                    sport: sel.sport,
-                    viewModel: viewModel,
-                    scoreViewModel: scoreViewModel
-                )
-            }
-        }
-        .fullScreenCover(item: $openedLeague) { sel in
-            LeagueDetailPage(
-                sport: sel.sport,
-                leagueLabel: sel.leagueLabel,
-                displayName: sel.displayName,
-                viewModel: viewModel,
-                scoreViewModel: scoreViewModel
             )
         }
         // Racing's game card, presented here rather than inside the Sports hub

@@ -18,7 +18,6 @@ struct TeamDetailPage: View {
     var sport: SportType? = nil
     @ObservedObject var viewModel: ChannelViewModel
     @ObservedObject var scoreViewModel: ScoreViewModel
-    @Environment(\.dismiss) private var dismiss
 
     enum Tab: String, CaseIterable, Identifiable {
         case overview = "Overview"
@@ -319,7 +318,7 @@ struct TeamDetailPage: View {
             HStack(spacing: 10) {
                 NuvioCircleButton(systemName: "chevron.left") {
                     viewModel.triggerSelectionHaptic()
-                    dismiss()
+                    DetailRouter.shared.close()
                 }
                 Spacer(minLength: 0)
                 Text(displayName)
@@ -1179,6 +1178,6 @@ struct TeamDetailPage: View {
     private func openGameCard(_ game: ESPNEvent) {
         let sport = scoreViewModel.sportType(for: game)
         scoreViewModel.deepLinkRequest = scoreViewModel.makeDetailRequest(for: game, sport: sport)
-        dismiss()
+        DetailRouter.shared.close()
     }
 }
