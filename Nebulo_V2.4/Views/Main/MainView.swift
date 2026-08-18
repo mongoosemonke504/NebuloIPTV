@@ -210,6 +210,28 @@ struct MainView: SwiftUI.View {
     }
 }
 
+/// One hero page's position and alpha, straight out of Nuvio's `graphicsLayer`
+/// block: `offset = -rel + fraction`, `alpha = 1 - |offset|`, and a sideways
+/// shift of `offset x width x parallax` — 0.055 for the artwork, 0.18 for the
+/// title block, which is the difference in speed that reads as depth.
+///
+/// An `@ObservedObject` on the modifier rather than on the carousel, so a frame
+/// of a swipe re-renders this transform alone and never the hero's content.
+struct HeroPageTransform: ViewModifier {
+    @ObservedObject var fraction: ScrollProgress
+    /// 0 for the current page, ±1 for a neighbour.
+    let rel: Int
+    let width: CGFloat
+    let parallax: CGFloat
+
+    func body(content: Content) -> some SwiftUI.View {
+        let offset = CGFloat(-rel) + fraction.value
+        return content
+            .offset(x: -offset * width * parallax)
+            .opacity(Double(max(0, min(1, 1 - abs(offset)))))
+    }
+}
+
 /// Blocking "finding a stream" spinner, shown while a smart search or a
 /// stream-list build is running.
 struct StreamSearchOverlay: SwiftUI.View {
@@ -3557,7 +3579,16 @@ struct FeaturedCarousel: View {
     @State private var page = 0
     /// How far the pager sits past `page`, in pages. Positive while dragging
     /// toward the NEXT card. Everything visual is a function of this.
-    @State private var offsetFraction: CGFloat = 0
+    /// A LEAF, for the same reason the countdown below is one.
+    ///
+    /// Nuvio's pager offset feeds nothing but `graphicsLayer` blocks — alpha,
+    /// translationX, scale — so dragging its hero re-runs those blocks and
+    /// recomposes nothing. As a plain `@State` here, every frame of a swipe
+    /// re-evaluated this whole view: both full-screen artwork layers, the title
+    /// block, the pill and the dots, sixty to a hundred and twenty times a
+    /// second. Held in its own object, a frame of the drag re-renders the two
+    /// transform modifiers that read it and nothing else.
+    @State private var fraction = ScrollProgress()
     /// 0 → 1 across the dwell time; drives the dot's countdown fill.
     ///
     /// A LEAF, not a plain `@State`. It's animated linearly across the whole
@@ -3578,7 +3609,32 @@ struct FeaturedCarousel: View {
     /// Direction of an auto-advance that has been PRE-MOUNTED but hasn't begun
     /// travelling. It exists only so `layers` puts the incoming page in the view
     /// tree one pass before the slide starts — see `autoAdvance`.
-    @State private var autoDirection: Int?
+    /// The page this transition is moving TO.
+    ///
+    /// Held in state because the commit rebases `page`, and the two layers must
+    /// not swap z-order when it does. Ordering by `rel` alone flipped them at
+    /// exactly that moment: the outgoing page went from the bottom of the stack
+    /// to the top in one frame, still at most of its alpha, which is the
+    /// previous slide flashing over the new one as you let go. Ordering by
+    /// destination is stable across the rebase AND doesn't flip mid-drag, which
+    /// sorting by visibility did at the halfway crossover.
+    ///
+    /// Never cleared: by the time it changes again the neighbour is invisible,
+    /// so the reorder can't be seen.
+    @State private var incomingIndex: Int?
+
+    /// Set for the duration of one drag, so the auto-advance token is bumped
+    /// once per gesture instead of once per frame.
+    @State private var dragOwnsPager = false
+
+    /// Which neighbouring page is mounted: +1 for the one to the right, -1 to
+    /// the left, nil for none. Drags and the auto-advance share it.
+    ///
+    /// This used to be derived from the fraction's sign, which is what tied
+    /// `layers` to a value that changes every frame. Direction changes at most
+    /// once per gesture, so holding it separately is what lets the layer list
+    /// stay still while the fraction runs.
+    @State private var neighbour: Int?
 
     // ── Nuvio's constants ────────────────────────────────────────────────
     private static let backgroundParallax: CGFloat = 0.055
@@ -3588,7 +3644,17 @@ struct FeaturedCarousel: View {
     /// HERO_SWIPE_VELOCITY_THRESHOLD — a flick this fast commits regardless of
     /// how far it actually travelled.
     private static let swipeVelocityThreshold: CGFloat = 300
+    /// How a page settles after a swipe, committed or abandoned.
+    ///
+    /// Nuvio hands both to `animateScrollToPage`, whose default snap spec in
+    /// Compose Foundation is a critically damped spring at stiffness 400 — so
+    /// this is that: no overshoot, landing in about a third of a second. It
+    /// replaces a pair of hand-picked easeOut curves that differed between
+    /// committing and springing back.
+    private static let settle: Animation = .spring(response: 0.32, dampingFraction: 1)
     private static let dwell: Double = 8
+    /// How long the auto-advance takes to travel a page.
+    private static let autoSlide: Double = 0.7
     /// Two lines of the 30pt title (≈36pt each) + the 13pt gap + the 15pt
     /// metadata line. Reserving it keeps the static pill from being nudged by
     /// a card whose title wraps.
@@ -3620,42 +3686,37 @@ struct FeaturedCarousel: View {
     }
     private var heroHeight: CGFloat { Self.heroHeight }
 
-    /// The pages worth drawing: the current one, plus the neighbour being
-    /// dragged toward. Sorted least-visible first so the more visible card
-    /// always composites on top, as Nuvio does.
-    private var layers: [(index: Int, visibility: CGFloat, offset: CGFloat)] {
+    /// The pages worth drawing: the current one, plus whichever neighbour is
+    /// mounted. Position and alpha are NOT here — they are applied per layer by
+    /// `HeroPageTransform`, which reads the fraction itself.
+    ///
+    /// Order follows `incomingIndex`, not the live fraction: sorting by
+    /// visibility needed a value that changes every frame, and it swapped the
+    /// two layers' z-order as the swipe passed halfway.
+    private var layers: [(index: Int, rel: Int)] {
         let n = items.count
         guard n > 0 else { return [] }
-        // rel 0 is the current page; offset = -rel + fraction.
         var rels: [Int] = [0]
-        if n > 1 {
-            if offsetFraction != 0 {
-                rels.append(offsetFraction > 0 ? 1 : -1)
-            } else if let dir = autoDirection {
-                // Pre-mounted for an auto-advance: sits a full page out at
-                // visibility 0, so it's invisible but already in the tree.
-                rels.append(dir)
-            }
-        }
+        if n > 1, let neighbour { rels.append(neighbour) }
         // Deliberately NOT culled at visibility 0 — a page that is mounted but
         // invisible is what lets the slide animate its offset instead of the
         // view being inserted at its destination.
-        return rels.map { rel in
-            let offset = CGFloat(-rel) + offsetFraction
-            return (index: ((page + rel) % n + n) % n,
-                    visibility: max(0, min(1, 1 - abs(offset))),
-                    offset: offset)
-        }
-        .sorted { $0.visibility < $1.visibility }
+        return rels
+            .map { (index: (($0 + page) % n + n) % n, rel: $0) }
+            // Destination last, so it composites on top for the whole
+            // transition — see `incomingIndex`.
+            .sorted { ($0.index == incomingIndex ? 1 : 0) < ($1.index == incomingIndex ? 1 : 0) }
     }
 
     /// The card the static pill belongs to: the most visible layer, which is
     /// the last one after the least-visible-first sort. Nuvio resolves its
     /// button's target the same way, so the label and destination always match
     /// the words you're actually reading.
+    /// Nuvio reads `pagerState.currentPage` for its button's target, so this
+    /// follows the settled page too — and stays off the live fraction, which
+    /// would drag this whole body into every frame of a swipe.
     private var currentItem: FeaturedItem? {
         guard !items.isEmpty else { return nil }
-        if let front = layers.last { return items[front.index] }
         return items[min(page, items.count - 1)]
     }
 
@@ -3672,15 +3733,16 @@ struct FeaturedCarousel: View {
     /// the two layers in pixel-identical positions. Then the fraction eases to
     /// zero. Because nothing is scheduled for later, a second fast swipe lands
     /// on clean state instead of colliding with a pending hand-off.
-    private func step(_ delta: Int, duration: Double) {
+    private func step(_ delta: Int) {
         guard items.count > 1 else { return }
         let n = items.count
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) {
             page = ((page + delta) % n + n) % n
-            offsetFraction -= CGFloat(delta)
-            autoDirection = nil
+            fraction.set(fraction.value - CGFloat(delta))
+            // The page just left behind, so it can finish sliding out.
+            neighbour = -delta
             // Zero the countdown in the SAME unanimated pass as the page. Left
             // to the `.task` below, it lands a frame or more later, so the dots
             // draw at least once with the OUTGOING page's nearly-finished
@@ -3688,7 +3750,7 @@ struct FeaturedCarousel: View {
             // to grey.
             progress.set(0)
         }
-        withAnimation(.easeOut(duration: duration)) { offsetFraction = 0 }
+        withAnimation(Self.settle) { fraction.set(0) }
     }
 
     /// The AUTO-advance, which has to travel the whole page to read as a slide.
@@ -3719,7 +3781,10 @@ struct FeaturedCarousel: View {
         // seen.
         var mount = Transaction()
         mount.disablesAnimations = true
-        withTransaction(mount) { autoDirection = 1 }
+        withTransaction(mount) {
+            neighbour = 1
+            incomingIndex = (page + 1) % items.count
+        }
 
         // Pass 2, next frame: now that both pages exist, the fraction can be
         // animated and their offsets interpolate. The delay only has to outlast
@@ -3728,26 +3793,30 @@ struct FeaturedCarousel: View {
             // A drag that arrived in between bumped the token and owns the
             // fraction now; drop the pre-mount and leave the finger alone.
             guard advanceToken == token else {
-                autoDirection = nil
+                neighbour = nil
                 return
             }
-            withAnimation(.easeInOut(duration: 0.7)) {
-                offsetFraction = 1
-            } completion: {
+            withAnimation(.easeInOut(duration: Self.autoSlide)) { fraction.set(1) }
+            // SCHEDULED, not a completion handler. A completion that shares its
+            // transaction with another animation in the same subtree can simply
+            // never arrive — the dock's lens hop was left frozen mid-swell by
+            // exactly that — and if this one went missing the carousel would
+            // stall a page out forever.
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.autoSlide) {
                 // `items` can shrink while the slide is in flight (a live game
                 // ends and its channel drops out), and an empty list would make
                 // the modulo below divide by zero.
                 guard advanceToken == token, items.count > 1 else {
-                    autoDirection = nil
+                    neighbour = nil
                     return
                 }
                 var t = Transaction()
                 t.disablesAnimations = true
                 withTransaction(t) {
                     page = (page + 1) % items.count
-                    offsetFraction = 0
+                    fraction.set(0)
                     progress.set(0)
-                    autoDirection = nil
+                    neighbour = nil
                 }
             }
         }
@@ -3766,8 +3835,10 @@ struct FeaturedCarousel: View {
                     // shift isn't multiplied by the scale, matching Nuvio's
                     // single graphicsLayer).
                     .modifier(HeroScrollParallax(scroll: scroll, baseScale: Self.backgroundScale))
-                    .offset(x: -layer.offset * screenWidth * Self.backgroundParallax)
-                    .opacity(Double(layer.visibility))
+                    .modifier(HeroPageTransform(fraction: fraction,
+                                                rel: layer.rel,
+                                                width: screenWidth,
+                                                parallax: Self.backgroundParallax))
             }
 
             // ── The dissolve into the black canvas is drawn ONCE, not per
@@ -3802,10 +3873,14 @@ struct FeaturedCarousel: View {
                             onPlay: { open(item) }
                         )
                         .frame(width: screenWidth)
-                        .offset(x: -layer.offset * screenWidth * Self.contentParallax)
-                        .opacity(Double(layer.visibility))
-                        // Only the frontmost page should take taps.
-                        .allowsHitTesting(layer.visibility > 0.5)
+                        .modifier(HeroPageTransform(fraction: fraction,
+                                                    rel: layer.rel,
+                                                    width: screenWidth,
+                                                    parallax: Self.contentParallax))
+                        // Only the settled page takes taps, as Nuvio only wires
+                        // its current page's button. Reading the live fraction
+                        // here would put this body back on every frame.
+                        .allowsHitTesting(layer.rel == 0)
                     }
                 }
                 // A FIXED, bottom-aligned block: a two-line title grows UPWARD
@@ -3848,15 +3923,31 @@ struct FeaturedCarousel: View {
                     // auto-advance's page commit, and drop its pre-mount (the
                     // non-zero fraction below mounts the right neighbour for
                     // whichever way this drag is going).
-                    advanceToken += 1
-                    autoDirection = nil
-                    offsetFraction = max(-1, min(1, -dx / screenWidth))
+                    // ONCE per gesture. This was `advanceToken += 1` on every
+                    // frame — a plain `@State` write per frame, which
+                    // re-evaluated this whole view sixty times a second and
+                    // undid the point of holding the fraction in a leaf.
+                    if !dragOwnsPager {
+                        dragOwnsPager = true
+                        advanceToken += 1
+                    }
+                    // Mount the neighbour this drag is heading toward, and mark
+                    // it as the destination for z-order. Assigned only when the
+                    // direction actually changes, so it is one or two renders
+                    // per gesture rather than one per frame.
+                    let heading = dx < 0 ? 1 : -1
+                    if neighbour != heading {
+                        neighbour = heading
+                        let n = items.count
+                        if n > 0 { incomingIndex = ((page + heading) % n + n) % n }
+                    }
+                    fraction.set(max(-1, min(1, -dx / screenWidth)))
                 }
                 .onEnded { value in
                     let dx = value.translation.width
-                    defer { timerKey += 1 }
+                    defer { timerKey += 1; dragOwnsPager = false }
                     guard items.count > 1, abs(dx) > abs(value.translation.height) else {
-                        withAnimation(.easeOut(duration: 0.25)) { offsetFraction = 0 }
+                        withAnimation(Self.settle) { fraction.set(0) }
                         return
                     }
                     // Nuvio's resolveHeroTargetPage: commit on a sixth of the
@@ -3864,9 +3955,9 @@ struct FeaturedCarousel: View {
                     let travelled = abs(dx) > screenWidth * Self.swipeThresholdFraction
                     let thrown = abs(value.velocity.width) > Self.swipeVelocityThreshold
                     if travelled || thrown {
-                        step(dx < 0 ? 1 : -1, duration: 0.3)
+                        step(dx < 0 ? 1 : -1)
                     } else {
-                        withAnimation(.easeOut(duration: 0.25)) { offsetFraction = 0 }
+                        withAnimation(Self.settle) { fraction.set(0) }
                     }
                 }
         )
@@ -3884,7 +3975,8 @@ struct FeaturedCarousel: View {
             guard items.count > 1 else { return }
             withAnimation(.linear(duration: Self.dwell)) { progress.set(1) }
             try? await Task.sleep(nanoseconds: UInt64(Self.dwell * 1_000_000_000))
-            guard !Task.isCancelled, offsetFraction == 0 else { return }
+            // Never auto-advance out from under a finger that is still mid-swipe.
+            guard !Task.isCancelled, fraction.value == 0 else { return }
             autoAdvance()
         }
         // The featured list can shrink in place (a live game ends and its
