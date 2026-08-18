@@ -1343,7 +1343,7 @@ class ChannelViewModel: ObservableObject {
         
         let infos: [GameSearchInfo] = games.map {
             let terms = $0.searchTerms
-            return GameSearchInfo(id: $0.id, home: terms.home, away: terms.away, network: $0.broadcastName)
+            return GameSearchInfo(id: $0.id, home: terms.home, away: terms.away, network: $0.streamNetworkHint)
         }
         
         let inputChannels = self.channels
@@ -2557,7 +2557,7 @@ class ChannelViewModel: ObservableObject {
         let hiddenCatIDs = Set(categories.filter { $0.isHidden }.map { $0.id })
 
         guard let channel = ChannelViewModel.resolveBestMatch(
-            home: home, away: away, network: game.broadcastName,
+            home: home, away: away, network: game.streamNetworkHint,
             channels: channels, hiddenIDs: hiddenIDs,
             hiddenCatIDs: hiddenCatIDs,
             epg: epgData, now: currentTime,

@@ -317,7 +317,7 @@ struct MMADetailContentView: View {
                     home: terms.home,
                     away: terms.away,
                     sport: .mma,
-                    network: game.broadcastName
+                    network: game.streamNetworkHint
                 )
             } label: {
                 HStack(spacing: 8) {

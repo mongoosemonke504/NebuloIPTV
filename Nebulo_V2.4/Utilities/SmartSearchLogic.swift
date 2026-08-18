@@ -1,8 +1,22 @@
 import Foundation
 
 struct SmartSearchLogic {
+    /// Words that carry no signal but appear in most channel names, EPG
+    /// titles and descriptions. Left in, a query like "The Open Championship"
+    /// scored a content match against half the guide on "the" alone, and the
+    /// real golf channels were buried in the noise.
+    nonisolated static let ignoredTokens: Set<String> = [
+        "the", "a", "an", "of", "at", "in", "on", "and", "vs", "v"
+    ]
+
     nonisolated static func tokenize(_ text: String) -> [String] {
-        return text.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+        let raw = text.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+        let meaningful = raw.filter { !ignoredTokens.contains($0) }
+        // Never return nothing: a query that is ALL function words is better
+        // served by its own weak tokens than by matching everything.
+        return meaningful.isEmpty ? raw : meaningful
     }
     
     nonisolated static func isBanner(_ name: String) -> Bool {

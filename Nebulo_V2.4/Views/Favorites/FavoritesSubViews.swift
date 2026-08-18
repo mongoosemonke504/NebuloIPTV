@@ -556,7 +556,7 @@ struct TeamNextGamesSheet: View {
             home: home,
             away: away,
             sport: sport,
-            network: game.broadcastName
+            network: game.streamNetworkHint
         )
         dismiss()
     }
@@ -866,7 +866,7 @@ struct LeagueGamesSheet: View {
             home: home,
             away: away,
             sport: sport,
-            network: game.broadcastName
+            network: game.streamNetworkHint
         )
         dismiss()
     }
@@ -934,12 +934,23 @@ struct TeamGameRow: View {
                 }
             }
 
-            HStack(spacing: 12) {
-                competitorView(game.awayCompetitor)
-                Text(game.status.type.state == "pre" ? "vs" : "—")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.tertiary)
-                competitorView(game.homeCompetitor)
+            // A Grand Prix and a golf tournament have no two sides to split a
+            // row between — ESPN gives them a field of athletes with no team,
+            // so the matchup layout drew two blank crests either side of a
+            // "vs". Both get a leaderboard instead, the score under the name.
+            // Dispatched off the event's own shape, exactly like LiveEventCard.
+            if game.isRaceEvent {
+                fieldBoard(entries: raceOrder, caption: raceCaption, parColored: false)
+            } else if game.isFieldEvent {
+                fieldBoard(entries: leaderboard, caption: nil, parColored: true)
+            } else {
+                HStack(spacing: 12) {
+                    competitorView(game.awayCompetitor)
+                    Text(game.status.type.state == "pre" ? "vs" : "—")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.tertiary)
+                    competitorView(game.homeCompetitor)
+                }
             }
 
             if let network = game.broadcastName, !network.isEmpty {
@@ -973,6 +984,91 @@ struct TeamGameRow: View {
         .padding(.horizontal, 7)
         .padding(.vertical, 3)
         .background(stateColor.opacity(0.15), in: Capsule())
+    }
+
+    /// The session with a result worth showing — the one running, else the
+    /// last one that finished. Same rule the Live Now race card uses.
+    private var raceSession: ESPNEvent.RaceSession? {
+        let current = game.currentRaceSession
+        if current?.state == "in" { return current }
+        return game.latestFinishedRaceSession ?? current
+    }
+
+    private var raceOrder: [ESPNCompetitor] { raceSession?.order ?? [] }
+
+    private var raceCaption: String? {
+        guard let raceSession else { return nil }
+        return ScoreRow.sessionName(raceSession.label)
+    }
+
+    private var leaderboard: [ESPNCompetitor] {
+        (game.allCompetitions.first?.competitors ?? [])
+            .sorted { ($0.order ?? 999) < ($1.order ?? 999) }
+    }
+
+    /// Under par green, over par red — golf's own convention.
+    private static func parColor(_ total: String?) -> Color {
+        guard let total, !total.isEmpty else { return .primary }
+        if total.hasPrefix("-") { return Color(red: 0.30, green: 0.75, blue: 0.40) }
+        if total.hasPrefix("+") { return Color(red: 0.90, green: 0.35, blue: 0.30) }
+        return .primary
+    }
+
+    private static func entrantName(_ c: ESPNCompetitor) -> String {
+        c.athlete?.shortName ?? c.athlete?.displayName
+            ?? c.team?.shortDisplayName ?? c.team?.displayName ?? "—"
+    }
+
+    /// The event, then its top three with each score sitting on that
+    /// entrant's own line.
+    @ViewBuilder
+    private func fieldBoard(entries: [ESPNCompetitor], caption: String?, parColored: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(game.shortName)
+                    .font(.system(size: 14, weight: .bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                if let caption {
+                    Text(caption.uppercased())
+                        .font(.system(size: 9, weight: .black))
+                        .kerning(0.4)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(Color.primary.opacity(0.08), in: Capsule())
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+
+            if entries.isEmpty {
+                Text(game.status.type.state == "pre" ? "Field not confirmed yet" : "No leaderboard yet")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(entries.prefix(3).enumerated()), id: \.offset) { index, entrant in
+                    HStack(spacing: 8) {
+                        Text("\(index + 1)")
+                            .font(.system(size: 11, weight: .black))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                            .frame(width: 13, alignment: .leading)
+                        Text(Self.entrantName(entrant))
+                            .font(.system(size: 13, weight: .semibold))
+                            .lineLimit(1)
+                        Spacer(minLength: 4)
+                        if let score = entrant.score, !score.isEmpty {
+                            Text(score)
+                                .font(.system(size: 13, weight: .heavy))
+                                .monospacedDigit()
+                                .foregroundStyle(parColored ? Self.parColor(score) : Color.primary)
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder private func competitorView(_ c: ESPNCompetitor?) -> some View {

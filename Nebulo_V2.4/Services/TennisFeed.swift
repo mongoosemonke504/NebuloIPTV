@@ -238,6 +238,21 @@ extension ESPNEvent {
     /// player last names + tournament keywords for tennis (initial-dot
     /// names like "K. Muchova" tokenize into a bare "k" that matches half
     /// the playlist, and channel/EPG rows never carry the initial anyway).
+    /// Strips the words every golf tournament shares, so what's left is the
+    /// part that actually identifies this one. "Farmers Insurance Open"
+    /// becomes "farmers insurance"; a name that is ALL shared words ("The
+    /// Open Championship") keeps its own, since something is better than
+    /// nothing. The tennis feed above already does the same thing for the
+    /// same reason.
+    nonisolated static func golfQueryName(_ name: String) -> String {
+        let shared: Set<String> = [
+            "the", "open", "championship", "champions", "tournament", "invitational",
+            "classic", "cup", "trophy", "presented", "by", "of", "at", "golf", "tour"
+        ]
+        let kept = SmartSearchLogic.tokenize(name).filter { !shared.contains($0) && $0.count > 2 }
+        return kept.isEmpty ? name : kept.joined(separator: " ")
+    }
+
     nonisolated var searchTerms: (home: String, away: String) {
         if tennisPath != nil { return TennisFeed.searchTerms(for: self) }
         // A race weekend or a golf tournament is a FIELD event: dozens of
@@ -245,7 +260,14 @@ extension ESPNEvent {
         // stream search hunting for "Verstappen" and "Hamilton" when the channel
         // is called "SKY SPORTS F1" — the event's own name is the term that
         // matches, with the broadcast network doing the rest.
-        if isFieldEvent { return (shortName, "") }
+        // Racing's own name is distinctive enough ("Monaco Grand Prix");
+        // golf's is not, and its channels are named for the sport rather than
+        // the tournament — so the sport rides along as the second term, which
+        // also earns the both-sides bonus when a channel matches both.
+        if isFieldEvent {
+            if isRaceEvent { return (shortName, "") }
+            return (ESPNEvent.golfQueryName(shortName), "golf pga")
+        }
         let home = homeCompetitor?.team?.shortDisplayName ?? homeCompetitor?.athlete?.shortName ?? ""
         let away = awayCompetitor?.team?.shortDisplayName ?? awayCompetitor?.athlete?.shortName ?? ""
         return (home, away)

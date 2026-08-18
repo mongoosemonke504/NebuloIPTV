@@ -298,10 +298,6 @@ struct SportsHubView: View {
                     scoreViewModel.prefetchLogos(for: s)
                 }
             }
-
-            if viewModel.isSearchingGame {
-                loadingOverlay
-            }
         }
         .overlay(alignment: .bottom) {
             if let onSearch = onOpenSearch {
@@ -393,7 +389,10 @@ struct SportsHubView: View {
             scoreViewModel.applyFilter(text: text)
             triggerPreResolution()
         }
-        .sheet(isPresented: $viewModel.showSelectionSheet) { ManualSelectionSheet(viewModel: viewModel, accentColor: accentColor, playAction: playAction) }
+        // The stream picker moved up to MainViewModifiers: every "Stream List"
+        // action sets the same flag, but this sheet only existed here, so the
+        // one on a home or search card set it with nothing mounted to present
+        // it and the menu item did nothing at all.
         // The race card itself is presented one level up, in MainView, so the
         // same request opens it from the hub, the home shelves and the hero.
         // The game detail is presented as a custom overlay from ContentView
@@ -530,21 +529,6 @@ struct SportsHubView: View {
         return sport == .soccerLeagues || sport == .domesticCups || sport == .continental || sport == .international
     }
     
-    private var loadingOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.4).ignoresSafeArea()
-            VStack(spacing: 15) {
-                CustomSpinner(color: .white, lineWidth: 4, size: 40)
-                Text("Finding best stream...").font(.caption).bold().foregroundStyle(.primary)
-            }
-            .padding(25)
-            .background(.ultraThinMaterial)
-            .cornerRadius(20)
-            .shadow(radius: 20)
-        }
-        .transition(.opacity)
-        .zIndex(100)
-    }
 }
 
 struct SportGamesListView: View {
@@ -834,19 +818,19 @@ private struct GameScoreButton: View {
         .buttonStyle(.plain)
         .contextMenu(menuItems: {
             Button {
-                viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.broadcastName)
+                viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.streamNetworkHint)
             } label: {
                 Label("Watch Stream", systemImage: "play.fill")
             }
 
             Button {
-                viewModel.showStreamOptions(home: h, away: a, sport: sport, network: game.broadcastName)
+                viewModel.showStreamOptions(home: h, away: a, sport: sport, network: game.streamNetworkHint)
             } label: {
                 Label("Stream List", systemImage: "list.bullet")
             }
 
             Button {
-                viewModel.autoAddGameToMultiView(home: h, away: a, network: game.broadcastName)
+                viewModel.autoAddGameToMultiView(home: h, away: a, network: game.streamNetworkHint)
             } label: {
                 Label("Add to Multi-View", systemImage: "square.grid.2x2")
             }
@@ -1248,7 +1232,7 @@ struct AllLiveSportsView: View {
 
     private func playGame(_ game: ESPNEvent, sport: SportType) {
         let (h, a) = game.searchTerms
-        viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.broadcastName)
+        viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.streamNetworkHint)
     }
 }
 

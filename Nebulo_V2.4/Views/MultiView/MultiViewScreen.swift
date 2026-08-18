@@ -383,7 +383,7 @@ struct MultiViewScreen: View {
         // Fast path: pre-resolution cache or direct synchronous match.
         let hiddenCatIDs = Set(viewModel.categories.filter { $0.isHidden }.map { $0.id })
         if let match = ChannelViewModel.resolveBestMatch(
-            home: h, away: a, network: game.broadcastName,
+            home: h, away: a, network: game.streamNetworkHint,
             channels: viewModel.channels,
             hiddenIDs: viewModel.hiddenIDs,
             hiddenCatIDs: hiddenCatIDs,
@@ -406,7 +406,7 @@ struct MultiViewScreen: View {
         // multiViewModeActive.
         viewModel.multiViewModeActive = true
         let sport = scoreViewModel.sportType(for: game)
-        viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.broadcastName)
+        viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.streamNetworkHint)
     }
 
     private func openFullSearch() {

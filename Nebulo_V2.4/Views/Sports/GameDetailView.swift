@@ -1504,7 +1504,7 @@ struct GameDetailContentView: View {
                     home: terms.home,
                     away: terms.away,
                     sport: request.sport,
-                    network: request.game.broadcastName
+                    network: request.game.streamNetworkHint
                 )
             } label: {
                 HStack(spacing: 8) {

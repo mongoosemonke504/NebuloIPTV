@@ -210,6 +210,25 @@ struct MainView: SwiftUI.View {
     }
 }
 
+/// Blocking "finding a stream" spinner, shown while a smart search or a
+/// stream-list build is running.
+struct StreamSearchOverlay: SwiftUI.View {
+    var body: some SwiftUI.View {
+        ZStack {
+            Color.black.opacity(0.4).ignoresSafeArea()
+            VStack(spacing: 15) {
+                CustomSpinner(color: .white, lineWidth: 4, size: 40)
+                Text("Finding best stream...").font(.caption).bold().foregroundStyle(.primary)
+            }
+            .padding(25)
+            .background(.ultraThinMaterial)
+            .cornerRadius(20)
+            .shadow(radius: 20)
+        }
+        .transition(.opacity)
+    }
+}
+
 /// Renders whichever detail page the router has open, and owns the
 /// swipe-to-close gesture for it.
 ///
@@ -496,6 +515,22 @@ struct MainViewModifiers: ViewModifier {
                             .allowsHitTesting(false)
                     )
                 }
+            }
+            // "Finding best stream..." — root level for the same reason as
+            // the picker below it: the search is kicked off from home shelves
+            // and search results too, and used to give no feedback at all
+            // anywhere outside the Sports hub.
+            .overlay {
+                if viewModel.isSearchingGame { StreamSearchOverlay() }
+            }
+            // Manual stream picker for "Stream List". Presented at the root
+            // so it works from the home shelves and search too, not only from
+            // inside the Sports hub.
+            .sheet(isPresented: Binding(
+                get: { viewModel.showSelectionSheet },
+                set: { viewModel.showSelectionSheet = $0 }
+            )) {
+                ManualSelectionSheet(viewModel: viewModel, accentColor: accentColor, playAction: playAction)
             }
             // Team / league / driver pages. Applied AFTER the dock overlay
             // above, so it renders over the bar exactly like the full-screen
@@ -2978,21 +3013,21 @@ struct LiveGameContextMenuModifier: ViewModifier {
 
             Button {
                 beforeNavigate?()
-                viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.broadcastName)
+                viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.streamNetworkHint)
             } label: {
                 Label("Watch Stream", systemImage: "play.fill")
             }
 
             Button {
                 beforeNavigate?()
-                viewModel.showStreamOptions(home: h, away: a, sport: sport, network: game.broadcastName)
+                viewModel.showStreamOptions(home: h, away: a, sport: sport, network: game.streamNetworkHint)
             } label: {
                 Label("Stream List", systemImage: "list.bullet")
             }
 
             Button {
                 beforeNavigate?()
-                viewModel.autoAddGameToMultiView(home: h, away: a, network: game.broadcastName)
+                viewModel.autoAddGameToMultiView(home: h, away: a, network: game.streamNetworkHint)
             } label: {
                 Label("Add to Multi-View", systemImage: "square.grid.2x2")
             }

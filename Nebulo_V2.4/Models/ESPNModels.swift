@@ -148,6 +148,24 @@ struct ESPNEvent: Codable, Identifiable, Hashable, Sendable {
         allCompetitions.first?.broadcasts?.compactMap(\.displayName).first
     }
 
+    /// The network term the stream search should hunt for.
+    ///
+    /// A network match is by far the strongest signal the search has (+1000,
+    /// and it fills the results list first). ESPN's golf and racing feeds hang
+    /// no broadcast off the leaderboard competition, so those events reached
+    /// the search with no network at all and had to get by on the event name —
+    /// which for golf is mostly words like "The", "Open" and "Championship"
+    /// that match half the guide. The sport's own name stands in: golf lives
+    /// on channels with "golf" in the name, a Grand Prix on ones with "F1".
+    nonisolated var streamNetworkHint: String? {
+        if let broadcastName, !broadcastName.trimmingCharacters(in: .whitespaces).isEmpty {
+            return broadcastName
+        }
+        if isRaceEvent { return "F1" }
+        if isFieldEvent { return "golf" }
+        return nil
+    }
+
     // MARK: Racing
     //
     // A Grand Prix is one event holding five sessions — FP1, FP2, FP3,

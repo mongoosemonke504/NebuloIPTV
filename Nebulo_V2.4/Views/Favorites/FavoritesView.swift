@@ -691,7 +691,7 @@ struct FavoritesView: View {
             home: home,
             away: away,
             sport: sport ?? scoreViewModel.sportType(for: game),
-            network: game.broadcastName
+            network: game.streamNetworkHint
         )
     }
 }

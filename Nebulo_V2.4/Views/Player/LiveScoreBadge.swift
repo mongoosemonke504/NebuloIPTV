@@ -43,7 +43,35 @@ struct LiveScoreBadge: View {
         .modifier(GlassEffect(cornerRadius: 18, isSelected: true, accentColor: nil))
     }
 
+    /// A race weekend and a golf tournament have no two sides, so the matchup
+    /// line read "HOME 0 — 0 AWAY" over the video. Both get their leader
+    /// instead: the event, then whoever is on top and their score.
+    private var fieldLine: String? {
+        let entrants: [ESPNCompetitor]
+        if game.isRaceEvent {
+            let current = game.currentRaceSession
+            let session = current?.state == "in" ? current : (game.latestFinishedRaceSession ?? current)
+            entrants = session?.order ?? []
+        } else if game.isFieldEvent {
+            entrants = (game.allCompetitions.first?.competitors ?? [])
+                .sorted { ($0.order ?? 999) < ($1.order ?? 999) }
+        } else {
+            return nil
+        }
+
+        let event = game.shortName.uppercased()
+        guard let leader = entrants.first,
+              let name = leader.athlete?.shortName ?? leader.athlete?.displayName else {
+            return event
+        }
+        if let score = leader.score, !score.isEmpty {
+            return "\(event) · \(name.uppercased()) \(score)"
+        }
+        return "\(event) · \(name.uppercased())"
+    }
+
     private var scoreLine: String {
+        if let fieldLine { return fieldLine }
         let homeName = game.homeCompetitor?.team?.shortDisplayName
             ?? game.homeCompetitor?.team?.abbreviation
             ?? game.homeCompetitor?.team?.displayName
