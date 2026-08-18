@@ -33,11 +33,39 @@ private enum SportsTab: Hashable {
     }
 }
 
+/// Watches a hub's visibility flag without pulling the hub's own body into it:
+/// a zero-size view that observes the box and reports transitions.
+private struct HubActivationProbe: View {
+    @ObservedObject var flag: FlagBox
+    let onChange: (Bool) -> Void
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onAppear { onChange(flag.value) }
+            .onChangeCompat(of: flag.value) { onChange($0) }
+    }
+}
+
 struct SportsHubView: View {
     @ObservedObject var viewModel: ChannelViewModel
     let accentColor: Color; let playAction: (StreamChannel) -> Void; var onBack: (() -> Void)? = nil
     @ObservedObject var scoreViewModel: ScoreViewModel
     var onOpenSearch: (() -> Void)? = nil
+    /// Whether this hub is the visible tab.
+    ///
+    /// The hub is kept alive across tab switches now (see StandardLayout), so
+    /// everything it reacts to would keep firing while it is off screen — a
+    /// filter pass on every keystroke in the app-wide search, a forced refresh
+    /// on every foreground, and a `repeatForever` spinner driving frames for a
+    /// view nobody can see. Each of those is gated on this.
+    ///
+    /// A leaf box read directly, deliberately NOT an `@ObservedObject` and not
+    /// a plain `Bool` property. Either of those would make flipping tabs change
+    /// this view's inputs, and re-evaluating a whole screen's body is exactly
+    /// the pause that keeping it mounted was supposed to remove. Only the tiny
+    /// probe below watches it.
+    var active: FlagBox = FlagBox()
     @Environment(\.scenePhase) var scenePhase
     @State private var isRefreshingAnimation = false
     /// Header stat counts — refreshed whenever the live game set changes.
@@ -150,6 +178,26 @@ struct SportsHubView: View {
         withAnimation(.easeOut(duration: 0.25)) { sportsTab = newTab }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             isSliding = false
+        }
+    }
+
+    /// What used to run in `onAppear`: now on every arrival at the tab, since
+    /// the hub itself only appears once.
+    private func arrive() {
+        // No swipe can be in flight on arrival, so never inherit a frozen
+        // scroll from a gesture that was cancelled on the way out.
+        scrollLock.set(false)
+        // The remembered tab was restored without knowing which sports are
+        // visible (that needs the view model). Drop back to All if it names
+        // a sport the user has since hidden, so the hub can't open on a tab
+        // with no chip to match it.
+        if case .sport(let sport) = sportsTab, !orderedSports.contains(sport) {
+            sportsTab = .all
+        }
+        if scoreViewModel.isLoading {
+            withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+                isRefreshingAnimation = true
+            }
         }
     }
 
@@ -339,24 +387,21 @@ struct SportsHubView: View {
         .task(id: scoreViewModel.allLiveGameIDsKey) {
             recomputeStats()
         }
-        .onAppear {
-            // No swipe can be in flight on arrival, so never inherit a frozen
-            // scroll from a gesture that was cancelled on the way out.
-            scrollLock.set(false)
-            // The remembered tab was restored without knowing which sports are
-            // visible (that needs the view model). Drop back to All if it names
-            // a sport the user has since hidden, so the hub can't open on a tab
-            // with no chip to match it.
-            if case .sport(let sport) = sportsTab, !orderedSports.contains(sport) {
-                sportsTab = .all
-            }
-            if scoreViewModel.isLoading {
-                withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
-                    isRefreshingAnimation = true
+        // Was `.onAppear`. Mounted hubs appear once and then stay, so the
+        // arrival work hangs off becoming visible instead — watched by a
+        // zero-size probe so this screen's body stays out of it.
+        .background(
+            HubActivationProbe(flag: active) { isVisible in
+                guard isVisible else {
+                    // A spinner nobody can see must not keep driving frames.
+                    isRefreshingAnimation = false
+                    return
                 }
+                arrive()
             }
-        }
+        )
         .onChangeCompat(of: scoreViewModel.isLoading) { loading in
+            guard active.value else { return }
             if loading {
                 withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
                     isRefreshingAnimation = true
@@ -369,6 +414,7 @@ struct SportsHubView: View {
             }
         }
         .onChangeCompat(of: scenePhase) { phase in
+            guard active.value else { return }
             if phase == .active {
                 Task { 
                     await scoreViewModel.fetchScores(forceRefresh: true, silent: true)
@@ -377,6 +423,7 @@ struct SportsHubView: View {
             }
         }
         .onChangeCompat(of: scoreViewModel.selectedSport) { _ in
+            guard active.value else { return }
             // `_ =` keeps this a Void statement — as the closure's lone
             // expression, the Task would be its implicit return value and
             // Swift 6.2's named-Task initializer overloads become ambiguous.
@@ -385,7 +432,11 @@ struct SportsHubView: View {
                 triggerPreResolution()
             }
         }
-        .onChangeCompat(of: viewModel.searchText) { text in 
+        .onChangeCompat(of: viewModel.searchText) { text in
+            // Every keystroke in the app-wide search reached here. Hidden, it
+            // would filter and pre-resolve streams for a screen nobody is
+            // looking at, on the thread doing the typing.
+            guard active.value else { return }
             scoreViewModel.applyFilter(text: text)
             triggerPreResolution()
         }

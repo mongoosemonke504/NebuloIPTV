@@ -344,6 +344,23 @@ struct DetailSlideOffset: ViewModifier {
     }
 }
 
+/// Holds an expensive subtree still while its parent re-renders.
+///
+/// SwiftUI re-evaluates a child's body whenever it cannot prove the child
+/// unchanged, and a single closure among its inputs is enough to make that
+/// impossible — which is why a screen that is already built and mounted still
+/// paid full price on every unrelated parent update. Compared on `key` alone,
+/// the body is evaluated when that changes and not otherwise; the subtree's own
+/// observed objects and state still drive it normally.
+struct StableSubtree<Content: View>: SwiftUI.View, Equatable {
+    let key: AnyHashable
+    @ViewBuilder var content: () -> Content
+
+    static func == (lhs: StableSubtree, rhs: StableSubtree) -> Bool { lhs.key == rhs.key }
+
+    var body: some SwiftUI.View { content() }
+}
+
 struct MainViewModifiers: ViewModifier {
     @ObservedObject var viewModel: ChannelViewModel
     @ObservedObject var scoreViewModel: ScoreViewModel
@@ -848,6 +865,174 @@ struct StandardLayout: SwiftUI.View {
     }
 
 
+    /// Compact-title progress for the two mounted hubs, one each.
+    ///
+    /// These cannot share `sectionTitleProgress` with the sections that come
+    /// and go. That one is reset to 0 on every tab change, and `.onPreferenceChange`
+    /// only fires when its value CHANGES — a mounted hub's layout doesn't move
+    /// while it is hidden, so returning to one scrolled past its big title left
+    /// the progress at 0 with nothing to re-fire it, and the name was missing
+    /// from the top of the screen entirely. Held per hub, the value persists
+    /// alongside the scroll position it describes.
+    @State private var sportsTitleProgress = ScrollProgress()
+    @State private var favoritesTitleProgress = ScrollProgress()
+
+    /// Which mounted hub is on screen, delivered as leaf boxes so switching
+    /// tabs doesn't change either hub's inputs — see `SportsHubView.active`.
+    @State private var sportsActive = FlagBox()
+    @State private var favoritesActive = FlagBox()
+
+    /// The hub the dock is currently on, or nil. Search hides a hub exactly as
+    /// it hides home: the old chain put `searchView` ahead of the section, so
+    /// opening search destroyed it.
+    private var activeHubID: Int? { searchText.isEmpty ? selectedCategory?.id : nil }
+
+    /// Tab sections that are built once and then kept alive, hidden, rather
+    /// than rebuilt on every visit.
+    private static let mountedHubIDs: Set<Int> = [-3, -4]
+
+    /// Hubs the user has actually opened. Nothing is built until its tab is
+    /// chosen for the first time, so opening the app costs no more than before.
+    @State private var visitedHubs: Set<Int> = []
+
+    /// Sports and Favorites, mounted on first visit and hidden afterwards.
+    ///
+    /// Rebuilding one of these from scratch is a screen's worth of view
+    /// construction, and it lands SYNCHRONOUSLY on the frame the dock is
+    /// animating — which is what the bar was stuttering through. Kept mounted,
+    /// every visit after the first has almost nothing to build. They sit below
+    /// home in z-order while hidden, and their reactive work is gated by
+    /// `isActive` so an off-screen hub is not filtering on every keystroke or
+    /// driving a spinner nobody can see.
+    @ViewBuilder
+    private var persistentHubs: some View {
+        // `visitedHubs` is written from an onChange, which lands AFTER the
+        // render that selected the tab — so the active hub has to count as
+        // mounted here too, or its first appearance is a blank frame.
+        let activeID = activeHubID
+        if visitedHubs.contains(-3) || activeID == -3 {
+            let isActive = activeID == -3
+            // Wrapped so a parent re-render does NOT re-evaluate this screen.
+            // Everything the hub needs from out here is either an object it
+            // observes itself or a leaf box it reads, so the only input that
+            // can genuinely change it is the accent colour — which is the key.
+            //
+            // Without this, mounting made switching WORSE: the closures below
+            // are new values on every render, SwiftUI cannot prove the view
+            // unchanged, and both hubs had their whole bodies re-evaluated on
+            // every tab change on top of home's.
+            StableSubtree(key: accentColor) {
+                SportsHubView(viewModel: viewModel,
+                              accentColor: accentColor,
+                              playAction: playAction,
+                              onBack: handleBackNavigation,
+                              scoreViewModel: scoreViewModel,
+                              active: sportsActive)
+            }
+            .equatable()
+            // Chrome, preference reading and visibility all sit OUTSIDE the
+            // memo, so they keep updating while the screen itself holds still.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                sectionChromeRow(for: StreamCategory(id: -3, name: "Sports"),
+                                 titleProgress: sportsTitleProgress)
+            }
+            .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
+                guard let y = offsets["sports"] else { return }
+                sportsTitleProgress.set(min(max(-y / 40, 0), 1))
+            }
+            .opacity(isActive ? 1 : 0)
+            .allowsHitTesting(isActive && isDetailInteractive)
+            .zIndex(isActive ? 1 : -1)
+        }
+        if visitedHubs.contains(-4) || activeID == -4 {
+            let isActive = activeID == -4
+            StableSubtree(key: accentColor) {
+                FavoritesView(viewModel: viewModel,
+                              scoreViewModel: scoreViewModel,
+                              accentColor: accentColor,
+                              playAction: playAction,
+                              onBack: handleBackNavigation)
+            }
+            .equatable()
+            // Chrome, preference reading and visibility all sit OUTSIDE the
+            // memo, so they keep updating while the screen itself holds still.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                sectionChromeRow(for: StreamCategory(id: -4, name: "Favorites"),
+                                 titleProgress: favoritesTitleProgress)
+            }
+            .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
+                guard let y = offsets["fav"] else { return }
+                favoritesTitleProgress.set(min(max(-y / 40, 0), 1))
+            }
+            .opacity(isActive ? 1 : 0)
+            .allowsHitTesting(isActive && isDetailInteractive)
+            .zIndex(isActive ? 1 : -1)
+        }
+    }
+
+    /// The chrome row over a section: the back chevron on drill-down pages,
+    /// and the compact title that crossfades in as the big in-scroll one
+    /// departs. Shared by the sections that come and go and by the two hubs
+    /// that now stay mounted, so there is one definition of this row.
+    @ViewBuilder
+    private func sectionChromeRow(for cat: StreamCategory,
+                                  titleProgress: ScrollProgress) -> some View {
+            // Nuvio chrome: drill-down pages (plain categories,
+            // Recently Watched, Recordings) get the reference
+            // catalog page's circular back chevron + centred title.
+            // The hub TABS (Sports, Favorites) have no back button —
+            // the dock owns navigation — just the compact title that
+            // crossfades in as their big in-scroll title departs.
+            HStack {
+                if cat.id != -3 && cat.id != -4 && cat.id != -6 {
+                    NuvioCircleButton(systemName: "chevron.left") {
+                        viewModel.triggerSelectionHaptic()
+                        handleBackNavigation()
+                    }
+                }
+                Spacer()
+            }
+            // The row must RESERVE the compact title's height even on
+            // the hub tabs, which have no back button. Without this the
+            // row was only as tall as its 8pt padding, the safe-area
+            // inset reserved almost nothing, and the title — drawn in
+            // an overlay, which doesn't contribute height — spilled
+            // over the pinned chip row beneath it. That's what read as
+            // the scrunched, overlapping compact header on Sports and
+            // Favorites. 40pt is the circular back button's size, so
+            // drill-down pages are unchanged.
+            .frame(height: 40)
+            .overlay {
+                if cat.id >= 0 || cat.id == -2 {
+                    Text(cat.name)
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    .padding(.horizontal, 64)
+                } else if cat.id == -3 || cat.id == -4 || cat.id == -5 {
+                    // Hub sections: the compact title crossfades in
+                    // as the big in-scroll title departs — pure
+                    // opacity, no layout shift, so the transition
+                    // stays perfectly smooth.
+                    VStack(spacing: 0) {
+                        Text(cat.name)
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(.white)
+                        if let detail = sectionChromeDetail(for: cat) {
+                            Text(detail)
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.7))
+                        }
+                    }
+                    .lineLimit(1)
+                    .padding(.horizontal, 64)
+                    .scrollProgressOpacity(titleProgress) { Double($0) }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 4)
+    }
+
     /// Promotes the logos home is about to draw into the memory image cache,
     /// off the main thread.
     ///
@@ -1039,7 +1224,7 @@ struct StandardLayout: SwiftUI.View {
                 searchView
                     .modifier(SwipeBackModifier(onBack: { withAnimation(Self.pageAnimation) { searchText = "" } }))
                     .zIndex(2)
-            } else if let cat = selectedCategory {
+            } else if let cat = selectedCategory, !Self.mountedHubIDs.contains(cat.id) {
                 // `.allowsHitTesting(isDetailInteractive)` is the key fix for
                 // Quick Access buttons becoming unresponsive after navigation.
                 // During the blurFade removal animation the departing view stays
@@ -1052,13 +1237,9 @@ struct StandardLayout: SwiftUI.View {
                     // The hub TABS have no swipe-back: each section is its
                     // own place — you're in it or you're not, and the dock
                     // is the only way between them.
-                    if cat.id == -3 {
-                        SportsHubView(viewModel: viewModel, accentColor: accentColor, playAction: playAction, onBack: handleBackNavigation, scoreViewModel: scoreViewModel)
-                            .transition(.opacity)
-                    } else if cat.id == -4 {
-                        FavoritesView(viewModel: viewModel, scoreViewModel: scoreViewModel, accentColor: accentColor, playAction: playAction, onBack: handleBackNavigation)
-                            .transition(.opacity)
-                    } else if cat.id == -5 {
+                    // Sports and Favorites are NOT here — they are mounted
+                    // once and kept (see `persistentHubs`).
+                    if cat.id == -5 {
                         RecordingsView(viewModel: viewModel, playAction: playAction, onBack: handleBackNavigation)
                             .transition(.opacity)
                             .modifier(SwipeBackModifier(onBack: handleBackNavigation))
@@ -1101,64 +1282,13 @@ struct StandardLayout: SwiftUI.View {
                 // blur-fades beneath it. The system nav bar is permanently
                 // hidden (see MainViewModifiers), so this is the only chrome.
                 .safeAreaInset(edge: .top, spacing: 0) {
-                    // Nuvio chrome: drill-down pages (plain categories,
-                    // Recently Watched, Recordings) get the reference
-                    // catalog page's circular back chevron + centred title.
-                    // The hub TABS (Sports, Favorites) have no back button —
-                    // the dock owns navigation — just the compact title that
-                    // crossfades in as their big in-scroll title departs.
-                    HStack {
-                        if cat.id != -3 && cat.id != -4 && cat.id != -6 {
-                            NuvioCircleButton(systemName: "chevron.left") {
-                                viewModel.triggerSelectionHaptic()
-                                handleBackNavigation()
-                            }
-                        }
-                        Spacer()
-                    }
-                    // The row must RESERVE the compact title's height even on
-                    // the hub tabs, which have no back button. Without this the
-                    // row was only as tall as its 8pt padding, the safe-area
-                    // inset reserved almost nothing, and the title — drawn in
-                    // an overlay, which doesn't contribute height — spilled
-                    // over the pinned chip row beneath it. That's what read as
-                    // the scrunched, overlapping compact header on Sports and
-                    // Favorites. 40pt is the circular back button's size, so
-                    // drill-down pages are unchanged.
-                    .frame(height: 40)
-                    .overlay {
-                        if cat.id >= 0 || cat.id == -2 {
-                            Text(cat.name)
-                                .font(.system(size: 17, weight: .bold))
-                                .foregroundStyle(.white)
-                                .lineLimit(1)
-                            .padding(.horizontal, 64)
-                        } else if cat.id == -3 || cat.id == -4 || cat.id == -5 {
-                            // Hub sections: the compact title crossfades in
-                            // as the big in-scroll title departs — pure
-                            // opacity, no layout shift, so the transition
-                            // stays perfectly smooth.
-                            VStack(spacing: 0) {
-                                Text(cat.name)
-                                    .font(.subheadline.weight(.bold))
-                                    .foregroundStyle(.white)
-                                if let detail = sectionChromeDetail(for: cat) {
-                                    Text(detail)
-                                        .font(.caption2)
-                                        .foregroundStyle(.white.opacity(0.7))
-                                }
-                            }
-                            .lineLimit(1)
-                            .padding(.horizontal, 64)
-                            .scrollProgressOpacity(sectionTitleProgress) { Double($0) }
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 4)
+                    sectionChromeRow(for: cat, titleProgress: sectionTitleProgress)
                 }
                 .allowsHitTesting(isDetailInteractive)
                 .zIndex(1)
             }
+
+            persistentHubs
 
             // Home stays MOUNTED (hidden) underneath every section instead of
             // being torn down: recreating the ScrollView reset its offset, so
@@ -1545,6 +1675,15 @@ struct StandardLayout: SwiftUI.View {
         .onChangeCompat(of: selectedCategory) { cat in
             if cat != nil { isDetailInteractive = true }
             sectionTitleProgress.set(0)
+            // First visit to a hub mounts it; it stays for the rest of the
+            // session. Nothing is built for a tab that is never opened.
+            if let id = cat?.id, Self.mountedHubIDs.contains(id) {
+                visitedHubs.insert(id)
+            }
+        }
+        .onChangeCompat(of: activeHubID) { id in
+            sportsActive.set(id == -3)
+            favoritesActive.set(id == -4)
         }
     }
 
