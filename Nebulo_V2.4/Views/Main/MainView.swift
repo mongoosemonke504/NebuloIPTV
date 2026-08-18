@@ -3653,8 +3653,14 @@ struct FeaturedCarousel: View {
     /// committing and springing back.
     private static let settle: Animation = .spring(response: 0.32, dampingFraction: 1)
     private static let dwell: Double = 8
-    /// How long the auto-advance takes to travel a page.
-    private static let autoSlide: Double = 0.7
+    /// When to rebase the page index after a settle animation.
+    ///
+    /// A spring's `response` is not its duration, so this is deliberately past
+    /// the point the motion is visually done. Landing late is harmless — both
+    /// pages are already at their final positions, the incoming one at rest and
+    /// the outgoing one a full page out at zero alpha — whereas landing early
+    /// would cut the travel short.
+    private static let settleHandoff: Double = 0.5
     /// Two lines of the 30pt title (≈36pt each) + the 13pt gap + the 15pt
     /// metadata line. Reserving it keeps the static pill from being nudged by
     /// a card whose title wraps.
@@ -3751,6 +3757,17 @@ struct FeaturedCarousel: View {
             progress.set(0)
         }
         withAnimation(Self.settle) { fraction.set(0) }
+        // Drop the page just left behind once it has finished sliding out. It
+        // is invisible by then, so nothing is seen to disappear — and leaving it
+        // mounted means a second full-screen texture and a second shadowed text
+        // block being composited at rest, for a page nobody can see. Guarded by
+        // the token so a drag that starts in the meantime keeps its own
+        // neighbour.
+        let token = advanceToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.settleHandoff) {
+            guard advanceToken == token else { return }
+            neighbour = nil
+        }
     }
 
     /// The AUTO-advance, which has to travel the whole page to read as a slide.
@@ -3796,13 +3813,16 @@ struct FeaturedCarousel: View {
                 neighbour = nil
                 return
             }
-            withAnimation(.easeInOut(duration: Self.autoSlide)) { fraction.set(1) }
+            // The SAME spec a swipe settles with. Nuvio hands its auto-advance
+            // to `animateScrollToPage` exactly as it hands a manual commit, so
+            // an idle slide travels at the speed of a thrown one.
+            withAnimation(Self.settle) { fraction.set(1) }
             // SCHEDULED, not a completion handler. A completion that shares its
             // transaction with another animation in the same subtree can simply
             // never arrive — the dock's lens hop was left frozen mid-swell by
             // exactly that — and if this one went missing the carousel would
             // stall a page out forever.
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.autoSlide) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.settleHandoff) {
                 // `items` can shrink while the slide is in flight (a live game
                 // ends and its channel drops out), and an empty list would make
                 // the modulo below divide by zero.
@@ -3830,6 +3850,20 @@ struct FeaturedCarousel: View {
                 NuvioHeroBackdrop(item: items[layer.index],
                                   height: heroHeight,
                                   program: viewModel.getCurrentProgram(for: items[layer.index].channel))
+                    // Flattened to ONE texture before anything transforms or
+                    // fades it. A backdrop is an image plus gradients — several
+                    // children — so an opacity below 1 on it forces the whole
+                    // subtree into an offscreen buffer before it can be blended,
+                    // and mid-swipe BOTH backdrops are partly transparent. That
+                    // is two full-screen flattens per frame, redone every frame
+                    // because the alpha keeps moving, which is the frame loss
+                    // during a swipe. Rasterised once, the scale, the shift and
+                    // the fade are three cheap operations on a single layer.
+                    //
+                    // Placed INSIDE the parallax deliberately: outside it, the
+                    // scroll scale would change the rasterised size and re-draw
+                    // the texture on every frame of a vertical scroll instead.
+                    .drawingGroup()
                     // Scroll parallax + the carousel's base scale, then the
                     // page's own sideways parallax on top (so the horizontal
                     // shift isn't multiplied by the scale, matching Nuvio's
