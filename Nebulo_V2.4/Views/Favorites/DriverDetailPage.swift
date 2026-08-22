@@ -140,7 +140,7 @@ struct DriverDetailPage: View {
             }
             .ignoresSafeArea(.container, edges: .top)
             .coordinateSpace(name: "driverScroll")
-            .scrollLocked(scrollLock)
+            .scrollLocked(scrollLock, DetailRouter.shared.dragLock)
             .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
                 guard let y = offsets["driver"] else { return }
                 let span = Self.handoverSpan

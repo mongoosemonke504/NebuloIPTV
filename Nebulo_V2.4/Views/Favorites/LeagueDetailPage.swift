@@ -341,7 +341,7 @@ struct LeagueDetailPage: View {
             .ignoresSafeArea(.container, edges: .top)
             // Frozen for the duration of a horizontal swipe, so a sideways
             // gesture travels purely sideways.
-            .scrollLocked(scrollLock)
+            .scrollLocked(scrollLock, DetailRouter.shared.dragLock)
             .onScrollGeometryChange(for: CGFloat.self) { geo in
                 geo.contentOffset.y + geo.contentInsets.top
             } action: { _, scrolled in

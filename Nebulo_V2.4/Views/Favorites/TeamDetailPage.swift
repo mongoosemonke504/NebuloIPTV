@@ -265,7 +265,7 @@ struct TeamDetailPage: View {
             .coordinateSpace(name: "teamScroll")
             // Frozen for the duration of a horizontal swipe, so a sideways
             // gesture travels purely sideways.
-            .scrollLocked(scrollLock)
+            .scrollLocked(scrollLock, DetailRouter.shared.dragLock)
             .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
                 guard let y = offsets["team"] else { return }
                 // `y` is the chip header's distance below the top of the visible

@@ -133,6 +133,22 @@ final class DetailRouter: ObservableObject {
     /// and not the screen that owns the router.
     let slide = ScrollProgress()
 
+    /// Set while a close swipe is in flight, so the page being swiped away
+    /// holds still vertically instead of scrolling under the finger.
+    let dragLock = FlagBox()
+
+    /// How much of the screen underneath is covered: 1 while a page is fully
+    /// over it, 0 with nothing open. Drives the parallax on the screen behind,
+    /// the way a navigation pop eases the previous screen in from part-way
+    /// across rather than having it sit still. A leaf, so a drag frame moves
+    /// that one offset and re-renders nothing else.
+    let cover = ScrollProgress()
+
+    /// How far the screen underneath is pushed aside while fully covered.
+    /// UIKit's own interactive pop uses about a third; a quarter reads the
+    /// same here without the far edge of the page ever showing through.
+    static let underlayParallax: CGFloat = 0.25
+
     /// How long the page takes to travel on and off under its own power.
     static let travel: TimeInterval = 0.3
 
@@ -140,7 +156,10 @@ final class DetailRouter: ObservableObject {
         // Reset here rather than on close: the page is already gone by then,
         // and resetting in the same frame it is removed can flash it back on.
         slide.set(0)
-        withAnimation(.easeOut(duration: Self.travel)) { route = newRoute }
+        withAnimation(.easeOut(duration: Self.travel)) {
+            route = newRoute
+            cover.set(1)
+        }
     }
 
     /// Chevron / programmatic close — the page slides off the same way it
@@ -148,7 +167,10 @@ final class DetailRouter: ObservableObject {
     func close() {
         guard route != nil else { return }
         slide.set(0)
-        withAnimation(.easeOut(duration: Self.travel)) { route = nil }
+        withAnimation(.easeOut(duration: Self.travel)) {
+            route = nil
+            cover.set(0)
+        }
     }
 
     /// Finish a swipe that has passed the threshold: carry the page the rest
@@ -156,7 +178,10 @@ final class DetailRouter: ObservableObject {
     /// is off-screen, with no second animation to play over the top.
     func finishSwipe() {
         let duration: TimeInterval = 0.2
-        withAnimation(.easeOut(duration: duration)) { slide.set(1) }
+        withAnimation(.easeOut(duration: duration)) {
+            slide.set(1)
+            cover.set(0)
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
             var t = Transaction()
             t.disablesAnimations = true
@@ -166,6 +191,16 @@ final class DetailRouter: ObservableObject {
 
     /// Abandoned swipe — springs back under the screen edge.
     func cancelSwipe() {
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) { slide.set(0) }
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
+            slide.set(0)
+            cover.set(1)
+        }
+    }
+
+    /// Tracks a drag in progress: the screen underneath eases in by exactly as
+    /// much as the page has travelled off.
+    func trackSwipe(_ travelled: CGFloat) {
+        slide.set(travelled)
+        cover.set(1 - travelled)
     }
 }

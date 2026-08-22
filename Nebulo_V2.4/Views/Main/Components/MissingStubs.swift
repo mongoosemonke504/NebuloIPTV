@@ -343,7 +343,12 @@ struct SearchView: View {
 
     /// Minimal chrome row — the dock owns navigation now, so the row only
     /// hosts the compact "Search" title crossfading in as the big in-scroll
-    /// title departs, plus a circular ✕ for the dock-less multi-view overlay.
+    /// title departs.
+    ///
+    /// The ✕ below is off by default and currently unused: multi-view once
+    /// needed it, but that overlay now carries the real bottom bar, whose left
+    /// circle leaves search the same way it does everywhere else. Kept because
+    /// restoring it is a single argument if a dock-less caller wants one.
     private var chromeRow: some View {
         HStack {
             Spacer()
@@ -819,13 +824,27 @@ struct SearchView: View {
 /// Search overlay used by MultiViewScreen to add streams — same UI as the
 /// main SearchView plus its own bottom glass field (the multi-view sheet
 /// has no morphing bottom bar).
+/// The app's search, for the one place that cannot host the dock: multi-view
+/// runs inside a full-screen cover, so the bottom bar that normally carries the
+/// search field is not on screen.
+///
+/// Everything else is the SAME search — same `SearchView`, same scopes, same
+/// results including live games, and the real `NuvioBottomBar` in its search
+/// state rather than a hand-rolled field. It used to differ in two ways that
+/// showed: no `scoreViewModel` was passed, and SearchView gates its whole live
+/// games section on that, so those results never appeared here at all; and the
+/// field was a taller capsule at different insets with no companion circle.
 struct SearchOverlayView: View {
     @ObservedObject var viewModel: ChannelViewModel
+    /// Required for parity: without it the live games section is skipped.
+    var scoreViewModel: ScoreViewModel? = nil
     @Binding var searchText: String
     let accentColor: Color
     let playAction: (StreamChannel) -> Void
     let onCategorySelect: (StreamCategory) -> Void
     let onDismiss: () -> Void
+    /// Glyph for the circle that leaves search — see NuvioBottomBar.
+    var exitIcon: String = "house.fill"
 
     @State private var query = ""
     @FocusState private var focused: Bool
@@ -833,45 +852,39 @@ struct SearchOverlayView: View {
     var body: some View {
         SearchView(
             viewModel: viewModel,
+            scoreViewModel: scoreViewModel,
             accentColor: accentColor,
             queryText: $query,
             playAction: playAction,
             onCategorySelect: onCategorySelect,
-            onDismiss: onDismiss,
-            showsCloseButton: true
+            onDismiss: onDismiss
         )
         .overlay(alignment: .bottom) {
-            HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.6))
-                TextField("Search", text: $query)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 16))
-                    .foregroundColor(.white)
-                    .submitLabel(.search)
-                    .focused($focused)
-                if !query.isEmpty {
-                    Button {
-                        viewModel.triggerSelectionHaptic()
-                        query = ""
-                        viewModel.searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 18))
-                            .foregroundStyle(.white.opacity(0.5))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 18)
-            .frame(height: 58)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .modifier(DockGlass(circular: false))
-            .contentShape(Capsule())
-            .onTapGesture { focused = true }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 12)
+            NuvioBottomBar(
+                active: .search,
+                // The reference bar's selected-tab blue, exactly as
+                // MainViewModifiers passes it — same bar, same tint.
+                tint: Color(red: 0.333, green: 0.686, blue: 0.976),
+                searchMode: true,
+                searchExitIcon: exitIcon,
+                queryText: $query,
+                fieldFocused: $focused,
+                onSelect: { tab in
+                    // The bar's left circle leaves search. There is no tab to
+                    // switch to from inside multi-view, so anything but search
+                    // itself closes the overlay — the same gesture that leaves
+                    // search everywhere else.
+                    guard tab != .search else { return }
+                    hideKeyboard()
+                    onDismiss()
+                },
+                onClearQuery: {
+                    viewModel.triggerSelectionHaptic()
+                    query = ""
+                    viewModel.searchText = ""
+                },
+                onCancelSearch: { focused = false }
+            )
         }
     }
 }

@@ -719,6 +719,11 @@ class ScoreViewModel: ObservableObject {
     /// can read this directly with zero per-frame cost.
     @Published private(set) var allLiveGames: [ESPNEvent] = []
 
+    /// Everything happening TODAY across the visible sports — still to start,
+    /// in play, and finished — deduped and in start-time order. The All tab
+    /// shows the day, not just the minute.
+    @Published private(set) var allTodayGames: [ESPNEvent] = []
+
     /// Monotonically-increasing revision counter — bumped each time the live
     /// games snapshot is refreshed. Used as a `.task(id:)` key in views that
     /// want to react only when the live set actually changes (not on every
@@ -766,6 +771,20 @@ class ScoreViewModel: ObservableObject {
                 result.append(game)
             }
         }
+        // The day's card, on the same pass over the same pool. A game that
+        // began yesterday and is STILL running belongs here too, which is why
+        // this is not a plain date test.
+        let calendar = Calendar.current
+        var todaySeen = Set<String>()
+        var today: [ESPNEvent] = []
+        for game in pool where calendar.isDateInToday(game.gameDate) || game.isLiveNow {
+            if todaySeen.insert(game.id).inserted { today.append(game) }
+        }
+        let todaySorted = today.sorted { $0.gameDate < $1.gameDate }
+        if todaySorted.map(\.id) != self.allTodayGames.map(\.id) {
+            self.allTodayGames = todaySorted
+        }
+
         let sorted = result.sorted { $0.gameDate < $1.gameDate }
         // Only publish when the set actually changed — avoids spurious
         // re-renders when scores tick on the same set of games.

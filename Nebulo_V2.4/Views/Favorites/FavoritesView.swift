@@ -50,6 +50,16 @@ struct FavoritesView: View {
     /// doesn't re-render this whole screen's content every frame.
     @State private var titleProgress = ScrollProgress()
 
+    /// Live scroll offset and the height of the big title above the pills.
+    /// A class, not `@State`: `scrollY` updates on every scroll frame and must
+    /// not re-render this screen. Mirrors the Sports hub's HubMetrics.
+    @Observable final class FavMetrics {
+        var titleHeight: CGFloat = 96
+        var scrollY: CGFloat = 0
+    }
+    @State private var favMetrics = FavMetrics()
+    @State private var favScrollPos = ScrollPosition()
+
     /// Which side the incoming content enters from. `true` when moving to a
     /// pill further right, so content slides in from the trailing edge like
     /// a page turn. Set BEFORE the animated change so the transition reads
@@ -72,6 +82,17 @@ struct FavoritesView: View {
         let newIdx = all.firstIndex(of: newFilter) ?? 0
         slideFromTrailing = newIdx > oldIdx
         isSliding = true
+        // Land no lower than the compact anchor — pills pinned, big title gone.
+        // The pages are wildly different lengths (a long channel list against
+        // three reminders), so switching while scrolled deep into a long one
+        // left the offset past the end of a short one: a screen of nothing.
+        // Clamping only ever moves the page UP, and never while it already sits
+        // above the anchor, so a switch near the top doesn't jump.
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            favScrollPos.scrollTo(y: min(favMetrics.scrollY, favMetrics.titleHeight))
+        }
         withAnimation(.easeOut(duration: 0.25)) { filter = newFilter }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             isSliding = false
@@ -133,6 +154,15 @@ struct FavoritesView: View {
                     titleRow
                         .scrollProgressOpacity(titleProgress) { 1 - Double($0) }
                         .background(ScrollOffsetProbe(space: "favScroll", id: "fav"))
+                        // How far down the pills pin — the anchor a filter
+                        // switch clamps to.
+                        .background(
+                            GeometryReader { g in
+                                Color.clear
+                                    .onAppear { favMetrics.titleHeight = g.size.height }
+                                    .onChangeCompat(of: g.size.height) { favMetrics.titleHeight = $0 }
+                            }
+                        )
 
                     Section(header: pinnedPillHeader) {
                         // ZStack so the outgoing and incoming content overlap
@@ -160,11 +190,13 @@ struct FavoritesView: View {
                 }
             }
             .coordinateSpace(name: "favScroll")
+            .scrollPosition($favScrollPos)
             // Frozen for the duration of a horizontal swipe, so a sideways
             // gesture travels purely sideways — same as the Sports hub.
             .scrollLocked(scrollLock)
             .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
                 guard let y = offsets["fav"] else { return }
+                favMetrics.scrollY = max(0, -y)
                 titleProgress.set(min(max(-y / 40, 0), 1))
             }
             // Horizontal swipe flips to the previous/next filter, matching
@@ -315,8 +347,13 @@ struct FavoritesView: View {
             // tall frame + upward offset stretch it past the screen top so
             // no edge can form; below, it fades to clear past the pills.
             .background(alignment: .top) {
-                CompactHeaderScrim(height: 265, fadeStart: 0.4)
-                    .offset(y: -130)
+                    // Sized to the header above it: the chrome row lost 10pt, so
+                    // the scrim's reach and the point it starts fading come in by
+                    // the same amount. The upward offset still has to clear the
+                    // status bar plus that row, with slack — it is what stops an
+                    // edge forming at the top of the screen.
+                CompactHeaderScrim(height: 240, fadeStart: 0.44)
+                    .offset(y: -120)
                     .scrollProgressOpacity(titleProgress, cullWhenHidden: true) { Double($0 * $0) }
             }
     }
@@ -968,13 +1005,16 @@ struct FavoriteTeamRow: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
+            // The same surface a channel row is drawn on — NuvioTheme.card
+            // with the same hairline — rather than a black wash that all but
+            // disappeared against the black canvas behind it.
             .background(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color.black.opacity(0.45))
+                    .fill(NuvioTheme.card)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+                    .stroke(Color.white.opacity(0.06), lineWidth: 0.5)
             )
             .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
@@ -1260,13 +1300,16 @@ struct FavoriteLeagueRow: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
+            // The same surface a channel row is drawn on — NuvioTheme.card
+            // with the same hairline — rather than a black wash that all but
+            // disappeared against the black canvas behind it.
             .background(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color.black.opacity(0.45))
+                    .fill(NuvioTheme.card)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+                    .stroke(Color.white.opacity(0.06), lineWidth: 0.5)
             )
         }
         .buttonStyle(.plain)

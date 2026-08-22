@@ -237,6 +237,10 @@ final class ScrollProgress: ObservableObject {
 /// flipping it re-renders only the leaf that reads it rather than the whole
 /// view that owns it.
 final class FlagBox: ObservableObject {
+    /// A box that is never set, for callers that only have one lock to give.
+    /// Shared and immutable in practice, so observing it costs nothing.
+    static let never = FlagBox()
+
     @Published var value: Bool = false
 
     /// Assigns only on a real change, so repeat writes don't publish.
@@ -249,8 +253,16 @@ final class FlagBox: ObservableObject {
 /// scrolling under the finger during a drag that is dismissing the whole card.
 struct ScrollLocked: ViewModifier {
     @ObservedObject var flag: FlagBox
+    /// A second, independent lock, ORed with the first.
+    ///
+    /// Two `scrollDisabled` modifiers cannot be stacked to mean "either": the
+    /// one nearest the scroll view wins, so an outer `false` would release an
+    /// inner `true`. A page that has its own lock AND is subject to a lock
+    /// owned by whatever is presenting it needs both resolved in one place.
+    @ObservedObject var other: FlagBox
+
     func body(content: Content) -> some View {
-        content.scrollDisabled(flag.value)
+        content.scrollDisabled(flag.value || other.value)
     }
 }
 
@@ -259,9 +271,9 @@ extension View {
     /// substituting a fresh `FlagBox` for nil would mint a new object on every
     /// render and observe nothing.
     @ViewBuilder
-    func scrollLocked(_ flag: FlagBox?) -> some View {
+    func scrollLocked(_ flag: FlagBox?, _ other: FlagBox? = nil) -> some View {
         if let flag {
-            modifier(ScrollLocked(flag: flag))
+            modifier(ScrollLocked(flag: flag, other: other ?? FlagBox.never))
         } else {
             self
         }

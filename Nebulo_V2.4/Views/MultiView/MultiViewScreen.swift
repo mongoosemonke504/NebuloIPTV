@@ -232,11 +232,15 @@ struct MultiViewScreen: View {
                 let activeURLs = Set(viewModel.multiViewSlots.compactMap { $0?.streamURL })
                 MultiViewPlayerPool.shared.reconcile(activeURLs: activeURLs)
             }
-            .sheet(isPresented: $showSearchSheet) {
-                MultiViewSearchSheet(viewModel: viewModel, onSelect: { c in
-                    viewModel.addToMultiView(c)
-                    showSearchSheet = false
-                })
+            // Multi-view had two different searches: this flag opened a plain
+            // list sheet while the header's button opened the app's real one.
+            // Both add a stream, so both go through the real one now — the tile
+            // and the header behave identically, and there is one search
+            // experience in the app rather than two.
+            .onChangeCompat(of: showSearchSheet) { wants in
+                guard wants else { return }
+                showSearchSheet = false
+                openFullSearch()
             }
             .statusBar(hidden: false)
             // No system toolbar anywhere in multi-view. On iOS 26 the
@@ -324,6 +328,7 @@ struct MultiViewScreen: View {
             if showFullSearch {
                 SearchOverlayView(
                     viewModel: viewModel,
+                    scoreViewModel: scoreViewModel,
                     searchText: $viewModel.searchText,
                     accentColor: accentColor,
                     playAction: { channel in
@@ -338,11 +343,23 @@ struct MultiViewScreen: View {
                         closeFullSearch()
                     },
                     onCategorySelect: { _ in closeFullSearch() },
-                    onDismiss: closeFullSearch
+                    onDismiss: closeFullSearch,
+                    // Back to multi-view, not home — the grid says where the
+                    // button actually goes.
+                    exitIcon: "square.grid.2x2.fill"
                 )
                 .transition(.move(edge: .bottom))
                 .zIndex(100)
-                .ignoresSafeArea()
+                // `.container` ONLY. A bare `ignoresSafeArea()` also ignores
+                // the KEYBOARD region, which is the region SwiftUI's avoidance
+                // uses to lift a view above the keyboard — so the search bar
+                // stayed pinned to the bottom of the screen, behind it.
+                //
+                // This does not bite the main app's search: there the bar is
+                // the dock, applied outside that overlay, so ignoring the
+                // keyboard inside it costs nothing. Here the bar is part of the
+                // overlay, so the overlay has to respect the keyboard.
+                .ignoresSafeArea(.container)
             }
         } // end outer ZStack
     }
@@ -525,7 +542,6 @@ struct MultiViewHubLayout: View {
             MultiViewHubHeader(
                 streamsCount: activeIndices.count,
                 streamsWithAudio: streamsWithAudio,
-                layoutMode: $layoutMode,
                 onAddStream: onSearchTap
             )
             .padding(.bottom, isLandscapeImmersive ? 0 : 14)
@@ -624,7 +640,6 @@ struct MultiViewHubLayout: View {
 struct MultiViewHubHeader: View {
     let streamsCount: Int
     let streamsWithAudio: Int
-    @Binding var layoutMode: MultiViewLayoutMode
     let onAddStream: () -> Void
 
     private let inlineTileSize: CGFloat = 44
@@ -661,33 +676,6 @@ struct MultiViewHubHeader: View {
                 }
                 .buttonStyle(.plain)
 
-                Menu {
-                    ForEach(MultiViewLayoutMode.allCases) { mode in
-                        Button {
-                            // easeInOut (no spring overshoot) keeps the
-                            // rect-change animation in EqualStreamGrid
-                            // monotonic. A spring with light damping was
-                            // briefly driving rect height/width below zero
-                            // during the focus→equal swap, which combined
-                            // with KSPlayer view re-parenting could crash.
-                            withAnimation(.easeInOut(duration: 0.3)) {
-                                layoutMode = mode
-                            }
-                        } label: {
-                            Label(mode.label, systemImage: mode.icon)
-                            if mode == layoutMode {
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
-                } label: {
-                    Image(systemName: layoutMode.icon)
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: inlineTileSize, height: inlineTileSize)
-                        .modifier(GlassEffect(cornerRadius: inlineTileSize / 2, isSelected: false, accentColor: nil))
-                }
-                .tint(.white)
             }
             .padding(.horizontal, 20)
         }
@@ -1766,68 +1754,6 @@ struct ChannelInfoSheet: View {
 
 // MARK: - Search Sheet (unchanged)
 
-struct MultiViewSearchSheet: View {
-    @ObservedObject var viewModel: ChannelViewModel
-    var onSelect: (StreamChannel) -> Void
-    @State private var localSearchText = ""
-    @Environment(\.dismiss) var dismiss
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Add Stream").font(.headline)
-                Spacer()
-                Button("Done") { dismiss() }.fontWeight(.bold)
-            }
-            .padding()
-
-            HStack {
-                Image(systemName: "magnifyingglass").foregroundColor(.gray)
-                TextField("Search channels...", text: $localSearchText)
-                    .textFieldStyle(.plain)
-                    .submitLabel(.search)
-                if !localSearchText.isEmpty {
-                    Button(action: { localSearchText = "" }) {
-                        Image(systemName: "xmark.circle.fill").foregroundColor(.gray)
-                    }
-                }
-            }
-            .padding(10)
-            .background(Color.primary.opacity(0.05))
-            .cornerRadius(10)
-            .padding(.horizontal)
-            .padding(.bottom, 10)
-
-            List {
-                let res = viewModel.channels.filter {
-                    localSearchText.isEmpty || $0.name.localizedCaseInsensitiveContains(localSearchText)
-                }
-                ForEach(res.prefix(100)) { c in
-                    Button(action: { onSelect(c) }) {
-                        HStack(spacing: 12) {
-                            CachedAsyncImage(urlString: c.icon ?? "", size: CGSize(width: 35, height: 35))
-                                .frame(width: 35, height: 35)
-                                .padding(2)
-                                .cornerRadius(6)
-                                .clipped()
-                            Text(c.name).font(.body).foregroundColor(.primary)
-                        }
-                    }
-                }
-            }
-            .listStyle(.plain)
-        }
-        .presentationDetents([.medium, .large])
-    }
-}
-
-// MARK: - Smart Player
-
-/// Thin SwiftUI wrapper around the per-URL player entries owned by
-/// `MultiViewPlayerPool`. The pool keeps the underlying `NebuloKSVideoPlayerView`
-/// (or VLC fallback) alive across view rebuilds, so flipping orientation
-/// or switching between focus and equal layouts re-parents the existing
-/// player instead of tearing it down and re-buffering from scratch.
 struct SmartGridPlayer: UIViewRepresentable {
     let url: URL
     let isMuted: Bool

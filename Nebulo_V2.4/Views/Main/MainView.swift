@@ -100,7 +100,14 @@ struct MainView: SwiftUI.View {
                 overlays(isL: isL)
             }
         }
-        .ignoresSafeArea()
+        // `.container`, NOT all regions. A bare `ignoresSafeArea()` also drops
+        // the KEYBOARD region, and everything drawn by `overlays` above is a
+        // SIBLING of the navigation stack — so those overlays inherited a
+        // hierarchy with no keyboard inset and nothing in them could ever lift
+        // above the keyboard. (The app's own dock was fine either way: it lives
+        // inside the navigation stack, which re-establishes its own safe area.)
+        // Multi-view's search bar is the case that exposed it.
+        .ignoresSafeArea(.container)
         .task { 
             if viewModel.channels.isEmpty { 
                 await viewModel.loadData(url: xstreamURL, user: username, pass: password, type: LoginType(rawValue: loginTypeRaw) ?? .xtream) 
@@ -334,14 +341,19 @@ struct DetailPageHost: SwiftUI.View {
                     guard dx > 0, abs(dx) > abs(dy) else { rejected = true; return }
                     dragging = true
                     SwipeTapGuard.suppress()
+                    // Freeze the page's own scroll for the rest of the gesture:
+                    // a close swipe should travel sideways only, not drift the
+                    // content up or down as it goes.
+                    router.dragLock.set(true)
                 }
                 guard dragging else { return }
-                router.slide.set(min(max(dx / width, 0), 1))
+                router.trackSwipe(min(max(dx / width, 0), 1))
             }
             .onEnded { value in
                 let wasDragging = dragging
                 dragging = false
                 rejected = false
+                router.dragLock.set(false)
                 guard wasDragging else { return }
                 let travelled = max(0, value.translation.width)
                 let flick = value.predictedEndTranslation.width - value.translation.width
@@ -351,6 +363,19 @@ struct DetailPageHost: SwiftUI.View {
                     router.cancelSwipe()
                 }
             }
+    }
+}
+
+/// Eases the screen UNDERNEATH a detail page in from part-way across as the
+/// page is swiped off, rather than leaving it sitting still — the parallax a
+/// navigation pop gives you, which is what the Settings sub-pages get for free
+/// from UIKit. Observes the router's leaf, so a drag frame moves this one
+/// offset and re-renders none of the app beneath it.
+struct DetailUnderlayParallax: ViewModifier {
+    @ObservedObject var cover: ScrollProgress
+
+    func body(content: Content) -> some SwiftUI.View {
+        content.offset(x: -UIScreen.main.bounds.width * DetailRouter.underlayParallax * cover.value)
     }
 }
 
@@ -555,6 +580,9 @@ struct MainViewModifiers: ViewModifier {
                     )
                 }
             }
+            // Pushed aside while a detail page covers this. At rest the value
+            // is 0, so this is an offset of zero and costs nothing.
+            .modifier(DetailUnderlayParallax(cover: DetailRouter.shared.cover))
             // "Finding best stream..." — root level for the same reason as
             // the picker below it: the search is kicked off from home shelves
             // and search results too, and used to give no feedback at all
@@ -1022,8 +1050,10 @@ struct StandardLayout: SwiftUI.View {
             // over the pinned chip row beneath it. That's what read as
             // the scrunched, overlapping compact header on Sports and
             // Favorites. 40pt is the circular back button's size, so
-            // drill-down pages are unchanged.
-            .frame(height: 40)
+            // drill-down pages keep it; the hub tabs have no button to clear
+            // and only need to fit their two-line compact title, which is
+            // about 31pt, so they run tighter.
+            .frame(height: Self.chromeRowHeight(for: cat))
             .overlay {
                 if cat.id >= 0 || cat.id == -2 {
                     Text(cat.name)
@@ -1031,7 +1061,7 @@ struct StandardLayout: SwiftUI.View {
                         .foregroundStyle(.white)
                         .lineLimit(1)
                     .padding(.horizontal, 64)
-                } else if cat.id == -3 || cat.id == -4 || cat.id == -5 {
+                } else if cat.id == -3 || cat.id == -4 || cat.id == -5 || cat.id == -6 {
                     // Hub sections: the compact title crossfades in
                     // as the big in-scroll title departs — pure
                     // opacity, no layout shift, so the transition
@@ -1052,7 +1082,13 @@ struct StandardLayout: SwiftUI.View {
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 4)
+            .padding(.vertical, Self.chromeRowHeight(for: cat) < 40 ? 2 : 4)
+    }
+
+    /// Row height by section. The hub tabs draw no back button, so they only
+    /// have to clear the compact title itself.
+    private static func chromeRowHeight(for cat: StreamCategory) -> CGFloat {
+        (cat.id == -3 || cat.id == -4 || cat.id == -6) ? 32 : 40
     }
 
     /// Promotes the logos home is about to draw into the memory image cache,
@@ -1294,7 +1330,7 @@ struct StandardLayout: SwiftUI.View {
                 // chrome row itself host the compact title — level with the
                 // Back pill and gear — instead of a separate bar below them.
                 .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
-                    let key: String? = cat.id == -3 ? "sports" : cat.id == -4 ? "fav" : cat.id == -5 ? "rec" : nil
+                    let key: String? = cat.id == -3 ? "sports" : cat.id == -4 ? "fav" : cat.id == -5 ? "rec" : cat.id == -6 ? "settings" : nil
                     guard let key, let y = offsets[key] else { return }
                     sectionTitleProgress.set(min(max(-y / 40, 0), 1))
                 }

@@ -30,6 +30,11 @@ struct SettingsView: View {
     @ObservedObject var accountManager = AccountManager.shared
     @ObservedObject var updateService = UpdateService.shared
     
+    /// 0 at rest, 1 once the big title has scrolled away — drives the compact
+    /// header's blur and dark wash, the same recipe the hubs use. A leaf, so a
+    /// scroll frame re-renders the scrim alone.
+    @State private var headerProgress = ScrollProgress()
+
     @State private var showAddPlaylist = false
     @State private var accountToEdit: Account? = nil
     
@@ -55,6 +60,12 @@ struct SettingsView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.top, 6)
                             .padding(.bottom, -6)
+                            // Reports this screen's scroll the same way the
+                            // hubs do, so the shared chrome row can fade its
+                            // compact "Settings" in as this one leaves.
+                            .background(
+                                isSection ? ScrollOffsetProbe(space: "settingsScroll", id: "settings") : nil
+                            )
 
                         SettingsSectionHeader(title: "Content Management")
                         ContentManagementCard(
@@ -103,6 +114,27 @@ struct SettingsView: View {
                     }
                     .padding(20)
                     .padding(.bottom, isSection ? 100 : 0)
+                }
+                .coordinateSpace(name: "settingsScroll")
+                // Read directly rather than through the preference the probe
+                // publishes: this drives a per-frame value, and the preference
+                // pipeline recomputes across the whole page to deliver it.
+                .onScrollGeometryChange(for: CGFloat.self) { geo in
+                    geo.contentOffset.y + geo.contentInsets.top
+                } action: { _, scrolled in
+                    headerProgress.set(min(max(scrolled / 40, 0), 1))
+                }
+            }
+            // The compact header every other section has: the frosted blur and
+            // dark wash that content passes under once the big title is gone.
+            // Settings was the one section drawn without it, so its rows ran
+            // straight up under the status bar.
+            .overlay(alignment: .top) {
+                if isSection {
+                    CompactHeaderScrim(height: 150, fadeStart: 0.42)
+                        .scrollProgressReveal(headerProgress, cullWhenHidden: true)
+                        .ignoresSafeArea(.container, edges: .top)
+                        .allowsHitTesting(false)
                 }
             }
             .navigationTitle("")
@@ -313,11 +345,6 @@ struct ContentManagementCard: View {
                 }
                 .disabled(viewModel.isUpdatingEPG)
                 .buttonStyle(.plain)
-                .foregroundStyle(.primary)
-
-                NavigationLink(destination: CategoriesManagerView(categories: $categories, accentColor: accentColor, viewModel: viewModel)) {
-                    SettingsRow(icon: "list.bullet.rectangle.portrait.fill", title: "Manage Categories", iconColor: .orange)
-                }
                 .foregroundStyle(.primary)
 
                 NavigationLink(destination: SportTabsManagerView(scoreViewModel: scoreViewModel, accentColor: accentColor)) {
@@ -597,103 +624,6 @@ struct SettingsToggle: View {
     }
 }
 
-struct CategoriesManagerView: View {
-    @Binding var categories: [StreamCategory]
-    let accentColor: Color
-    @ObservedObject var viewModel: ChannelViewModel
-    @State private var categoryToRename: StreamCategory?
-    @State private var localRenameName = ""
-    @State private var showLocalRenameAlert = false
-
-    @AppStorage("nebColor1") private var nebColor1 = "#1A2538"
-    @AppStorage("nebColor2") private var nebColor2 = "#11101A"
-    @AppStorage("nebColor3") private var nebColor3 = "#1F1A24"
-    @AppStorage("nebX1") private var nebX1 = 0.5
-    @AppStorage("nebY1") private var nebY1 = 0.0
-    @AppStorage("nebX2") private var nebX2 = 0.5
-    @AppStorage("nebY2") private var nebY2 = 0.5
-    @AppStorage("nebX3") private var nebX3 = 0.5
-    @AppStorage("nebY3") private var nebY3 = 1.0
-
-    var body: some View {
-        ZStack {
-            NebulaBackgroundView(
-                color1: Color(hex: nebColor1) ?? .purple,
-                color2: Color(hex: nebColor2) ?? .blue,
-                color3: Color(hex: nebColor3) ?? .pink,
-                point1: UnitPoint(x: nebX1, y: nebY1),
-                point2: UnitPoint(x: nebX2, y: nebY2),
-                point3: UnitPoint(x: nebX3, y: nebY3)
-            )
-
-            List {
-                Section {
-                    Button(action: { categories.indices.forEach { categories[$0].isHidden = false } }) {
-                        Label("Show All Categories", systemImage: "eye")
-                            .foregroundStyle(.white)
-                    }
-                    .listRowBackground(Color.black.opacity(0.35))
-
-                    Button(action: { categories.indices.forEach { categories[$0].isHidden = true } }) {
-                        Label("Hide All Categories", systemImage: "eye.slash")
-                            .foregroundStyle(.white)
-                    }
-                    .listRowBackground(Color.black.opacity(0.35))
-                }
-
-                Section {
-                    ForEach($categories) { $cat in
-                        HStack {
-                            Button(action: { withAnimation { cat.isHidden.toggle() } }) {
-                                Image(systemName: cat.isHidden ? "eye.slash" : "eye")
-                                    .foregroundColor(cat.isHidden ? .gray : accentColor)
-                                    .frame(width: 30)
-                            }
-                            .buttonStyle(.plain)
-                            Text(cat.name)
-                                .foregroundStyle(cat.isHidden ? .white.opacity(0.45) : .white)
-                                .strikethrough(cat.isHidden)
-                            Spacer()
-                        }
-                        .listRowBackground(Color.black.opacity(0.35))
-                        .contextMenu {
-                            Button {
-                                categoryToRename = cat
-                                localRenameName = cat.name
-                                showLocalRenameAlert = true
-                            } label: {
-                                Label("Rename", systemImage: "pencil")
-                            }
-                        }
-                    }
-                    .onMove { src, dst in
-                        categories.move(fromOffsets: src, toOffset: dst)
-                        for i in 0..<categories.count { categories[i].order = i }
-                    }
-                } header: {
-                    Text("Drag to Reorder")
-                        .foregroundStyle(.white.opacity(0.65))
-                } footer: {
-                    Text("Tap the eye icon to toggle visibility. Long press to rename.")
-                        .foregroundStyle(.white.opacity(0.55))
-                }
-            }
-            .scrollContentBackground(.hidden)
-            .environment(\.editMode, .constant(.active))
-        }
-        .navigationTitle("Categories")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(.hidden, for: .navigationBar)
-        .tint(.white)
-        .alert("Rename Category", isPresented: $showLocalRenameAlert) {
-            TextField("Name", text: $localRenameName)
-            Button("Save") {
-                if let c = categoryToRename { viewModel.renameCategory(id: c.id, newName: localRenameName) }
-            }
-            Button("Cancel", role: .cancel) {}
-        }
-    }
-}
 struct SportTabsManagerView: View {
     @ObservedObject var scoreViewModel: ScoreViewModel
     let accentColor: Color
@@ -806,6 +736,17 @@ struct HomeLayoutSettingsView: View {
 
     private var sections: [ChannelViewModel.HomeSection] { viewModel.orderedHomeSections() }
 
+    /// The category a long press is renaming, and the name being typed.
+    @State private var renamingCategory: (id: Int, name: String)?
+    @State private var renameText = ""
+
+    /// A section's category id, or nil for a row of big cards — those are
+    /// generated groups with no name of their own to change.
+    private func categoryID(for section: ChannelViewModel.HomeSection) -> Int? {
+        guard !section.isSpotlight else { return nil }
+        return Int(section.id.dropFirst())
+    }
+
     var body: some View {
         ZStack {
             NebulaBackgroundView(
@@ -838,6 +779,28 @@ struct HomeLayoutSettingsView: View {
                                 .foregroundStyle(.white.opacity(0.5))
                         }
                         .listRowBackground(Color.black.opacity(0.35))
+                        // What the Manage Categories page used to be for, in
+                        // the place the categories are already listed.
+                        .contextMenu {
+                            if let id = categoryID(for: section) {
+                                Button {
+                                    renameText = section.title
+                                    renamingCategory = (id: id, name: section.title)
+                                } label: {
+                                    Label("Rename", systemImage: "pencil")
+                                }
+                                Button {
+                                    if let index = viewModel.categories.firstIndex(where: { $0.id == id }) {
+                                        withAnimation { viewModel.categories[index].isHidden.toggle() }
+                                        viewModel.saveCategorySettings()
+                                    }
+                                } label: {
+                                    let hidden = viewModel.categories.first(where: { $0.id == id })?.isHidden ?? false
+                                    Label(hidden ? "Show on Home" : "Hide from Home",
+                                          systemImage: hidden ? "eye" : "eye.slash")
+                                }
+                            }
+                        }
                     }
                     .onMove { src, dst in
                         viewModel.moveHomeSection(from: src, to: dst)
@@ -846,7 +809,7 @@ struct HomeLayoutSettingsView: View {
                     Text("Drag to Reorder")
                         .foregroundStyle(.white.opacity(0.65))
                 } footer: {
-                    Text("The order of the home screen below the featured card. Drag every row of big cards to the top to group them together, or spread them out however you like.")
+                    Text("The order of the home screen below the featured card. Drag every row of big cards to the top to group them together, or spread them out however you like. Press and hold a category to rename or hide it.")
                         .foregroundStyle(.white.opacity(0.55))
                 }
 
@@ -866,6 +829,19 @@ struct HomeLayoutSettingsView: View {
         }
         .navigationTitle("Home Layout")
         .navigationBarTitleDisplayMode(.inline)
+        .alert("Rename Category", isPresented: Binding(
+            get: { renamingCategory != nil },
+            set: { if !$0 { renamingCategory = nil } }
+        )) {
+            TextField("Name", text: $renameText)
+            Button("Save") {
+                if let target = renamingCategory, !renameText.trimmingCharacters(in: .whitespaces).isEmpty {
+                    viewModel.renameCategory(id: target.id, newName: renameText)
+                }
+                renamingCategory = nil
+            }
+            Button("Cancel", role: .cancel) { renamingCategory = nil }
+        }
         .toolbarBackground(.hidden, for: .navigationBar)
         .tint(.white)
     }

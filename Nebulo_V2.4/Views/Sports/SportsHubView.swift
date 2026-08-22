@@ -519,7 +519,7 @@ struct SportsHubView: View {
         ) {
             Task { await scoreViewModel.fetchScores() }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 2)
         .captureGlobalFrame { chipBarFrame = $0 }
         // Home-style dark gradient. As part of the pinned header it renders
         // ABOVE the scrolling games (dimming them as they pass under) but
@@ -529,8 +529,12 @@ struct SportsHubView: View {
         // gradient reaches the true screen top and no edge can form; below,
         // it fades to clear well past the chips.
         .background(alignment: .top) {
-            CompactHeaderScrim(height: 265, fadeStart: 0.4)
-                .offset(y: -130)
+            // Sized to the header above it: the chrome row lost 10pt, so the
+            // scrim's reach and the point it starts fading come in to match.
+            // The upward offset still clears the status bar plus that row with
+            // slack — it is what stops an edge forming at the top of the screen.
+            CompactHeaderScrim(height: 226, fadeStart: 0.46)
+                .offset(y: -112)
                 .scrollProgressOpacity(statsProgress, cullWhenHidden: true) { Double($0 * $0) }
         }
     }
@@ -1059,10 +1063,10 @@ struct AllLiveSportsView: View {
 
     /// Games grouped by sport, preserving the order in which sports first
     /// appear in `allLiveGames`. Each sport header is shown exactly once.
-    private var groupedLiveGames: [LiveSportGroup] {
+    private func groups(from games: [ESPNEvent]) -> [LiveSportGroup] {
         var orderedSports: [SportType] = []
         var buckets: [SportType: [ESPNEvent]] = [:]
-        for game in scoreViewModel.allLiveGames {
+        for game in games {
             let sport = scoreViewModel.sportType(for: game)
             if buckets[sport] == nil {
                 orderedSports.append(sport)
@@ -1078,6 +1082,73 @@ struct AllLiveSportsView: View {
         }
     }
 
+    private var groupedLiveGames: [LiveSportGroup] { groups(from: scoreViewModel.allLiveGames) }
+
+    /// The rest of the day either side of what is in play. Anything already
+    /// listed as live is excluded so a game cannot appear twice — a race
+    /// weekend reads as live off its sessions while its own status still says
+    /// otherwise.
+    private func todayGroups(state: String) -> [LiveSportGroup] {
+        let live = Set(scoreViewModel.allLiveGames.map(\.id))
+        return groups(from: scoreViewModel.allTodayGames.filter {
+            !live.contains($0.id) && $0.status.type.state == state
+        })
+    }
+
+    private var upcomingGroups: [LiveSportGroup] { todayGroups(state: "pre") }
+    private var finishedGroups: [LiveSportGroup] { todayGroups(state: "post") }
+
+    /// One titled block of games grouped by sport. Extracted so Live Now and
+    /// the rest of the day are drawn by the same code rather than three copies
+    /// of it; the count capsule's colour is the app's state convention — red in
+    /// play, blue still to come, grey done.
+    @ViewBuilder
+    private func section(_ groups: [LiveSportGroup], title: String, tint: Color) -> some View {
+        if !groups.isEmpty {
+            let total = groups.reduce(0) { $0 + $1.games.count }
+            HStack(spacing: 10) {
+                Text(title)
+                    .font(.title2.bold())
+                    .foregroundStyle(.primary)
+                Text("\(total)")
+                    .font(.caption.bold())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 3)
+                    .background(tint, in: Capsule())
+                Spacer()
+            }
+            .padding(.horizontal)
+            .padding(.top, 6)
+
+            // One VStack per sport — header shown once, games beneath.
+            VStack(spacing: 20) {
+                ForEach(groups) { group in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "trophy.fill")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(.tertiary)
+                            Text(group.name.uppercased())
+                                .font(.system(size: 10, weight: .black))
+                                .kerning(0.6)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                        }
+                        .padding(.leading, 4)
+
+                        VStack(spacing: 10) {
+                            ForEach(group.games) { game in
+                                gameButton(game: game, sport: group.sport)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal)
+        }
+    }
+
     // Content only — no ScrollView. SportsHubView provides the single
     // scroll so the title, pinned chips and games all share one page.
     var body: some View {
@@ -1088,57 +1159,21 @@ struct AllLiveSportsView: View {
                         .padding(.horizontal)
                 }
 
-                // Live Now section header + grouped list
-                let groups = groupedLiveGames
-                if !groups.isEmpty {
-                    let totalLive = groups.reduce(0) { $0 + $1.games.count }
-                    HStack(spacing: 10) {
-                        Text("Live Now")
-                            .font(.title2.bold())
-                            .foregroundStyle(.primary)
-                        Text("\(totalLive)")
-                            .font(.caption.bold())
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 3)
-                            .background(Color.red, in: Capsule())
-                        Spacer()
-                    }
-                    .padding(.horizontal)
-                    .padding(.top, 6)
+                // The day, in the order it happens: what is on now, what is
+                // still to come, and what has already finished.
+                let live = groupedLiveGames
+                let upcoming = upcomingGroups
+                let finished = finishedGroups
 
-                    // One VStack per sport — header shown once, games beneath.
-                    VStack(spacing: 20) {
-                        ForEach(groups) { group in
-                            VStack(alignment: .leading, spacing: 8) {
-                                // Sport section header — shown once per sport
-                                HStack(spacing: 8) {
-                                    Image(systemName: "trophy.fill")
-                                        .font(.system(size: 9, weight: .bold))
-                                        .foregroundStyle(.tertiary)
-                                    Text(group.name.uppercased())
-                                        .font(.system(size: 10, weight: .black))
-                                        .kerning(0.6)
-                                        .foregroundStyle(.secondary)
-                                    Spacer()
-                                }
-                                .padding(.leading, 4)
+                section(live, title: "Live Now", tint: .red)
+                section(upcoming, title: "Later Today", tint: .blue)
+                section(finished, title: "Finished Today", tint: .gray)
 
-                                // All games for this sport
-                                VStack(spacing: 10) {
-                                    ForEach(group.games) { game in
-                                        gameButton(game: game, sport: group.sport)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    .padding(.horizontal)
-                } else {
+                if live.isEmpty && upcoming.isEmpty && finished.isEmpty {
                     EmptyStateView(
-                        title: "No Live Events",
+                        title: "Nothing On Today",
                         systemImage: "dot.radiowaves.left.and.right",
-                        description: "There aren't any live games right now. Check back soon."
+                        description: "No games are scheduled for today. Check back soon."
                     )
                     .frame(maxWidth: .infinity, minHeight: 420, alignment: .center)
                     .padding(.top, 60)
@@ -1781,7 +1816,10 @@ struct SportSelectorView: View {
                     }
                 }
                 .padding(.horizontal)
-                .padding(.vertical, 10)
+                // Trimmed from 10. The chips keep their own pill padding, so
+                // they are the same size; it is the gap around the row that
+                // was making the pinned header taller than it needs to be.
+                .padding(.vertical, 6)
             }
             // anchor nil = scroll the MINIMUM needed to bring the chip fully
             // into view, and not at all if it's already visible — centring

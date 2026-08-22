@@ -294,6 +294,10 @@ struct NuvioBottomBar: View {
     let active: NuvioTab
     var tint: Color = .white
     let searchMode: Bool
+    /// Glyph on the circle that leaves search. The dock returns you home, so
+    /// that is the default; multi-view has no home to return to, and showing a
+    /// house there says the wrong thing about where the button goes.
+    var searchExitIcon: String = "house.fill"
     @Binding var queryText: String
     var fieldFocused: FocusState<Bool>.Binding
     let onSelect: (NuvioTab) -> Void
@@ -360,7 +364,7 @@ struct NuvioBottomBar: View {
                 ZStack {
                     tabsRow
                         .opacity(searchMode ? 0 : 1)
-                    Image(systemName: "house.fill")
+                    Image(systemName: searchExitIcon)
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(.white)
                         .opacity(searchMode ? 1 : 0)
