@@ -89,6 +89,25 @@ extension View {
     }
 }
 
+/// Interactive close state for a screen that covers the whole app.
+///
+/// The detail pages already work this way; multi-view is the other one, and it
+/// needs its own pair of leaves rather than borrowing the router's — a detail
+/// page can be open underneath multi-view, and the two must not fight over one
+/// offset. Two parallax modifiers stack additively, and a value of 0 contributes
+/// nothing, so having both applied costs nothing while only one is in use.
+final class MultiViewDismiss {
+    static let shared = MultiViewDismiss()
+    private init() {}
+
+    /// 0 = covering the screen, 1 = fully swiped off to the right.
+    let slide = ScrollProgress()
+    /// 1 = covering the screen, 0 = gone. Drives the parallax underneath.
+    let cover = ScrollProgress()
+    /// Set while a close swipe is in flight.
+    let dragLock = FlagBox()
+}
+
 // MARK: - Detail page router
 
 /// Which full-screen detail page is open, if any.

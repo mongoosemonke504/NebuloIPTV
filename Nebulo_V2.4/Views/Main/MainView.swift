@@ -77,6 +77,11 @@ struct MainView: SwiftUI.View {
     // SwiftUI re-initialises this struct on every state mutation, and the
     // previous instance-level `let` was creating (and discarding) a fresh
     // autoconnected publisher each render.
+    /// Multi-view's slide on and off. A flat ease, not a spring: a spring
+    /// overshoots a `.move` transition past the screen edge and back, which
+    /// bares the content underneath for a frame.
+    static let multiViewSlide: Animation = .easeOut(duration: 0.32)
+
     private static let refreshTimer = Timer.publish(every: 86400, on: .main, in: .common).autoconnect()
     var accentColor: Color { Color(hex: customAccentHex) ?? .blue }
     
@@ -139,7 +144,7 @@ struct MainView: SwiftUI.View {
         .onChangeCompat(of: viewModel.triggerMultiView) { nv in
             if nv {
                 selectedChannel = nil
-                withAnimation(.spring()) { showMultiView = true }
+                withAnimation(MainView.multiViewSlide) { showMultiView = true }
                 viewModel.triggerMultiView = false
             }
         }
@@ -182,7 +187,7 @@ struct MainView: SwiftUI.View {
                 contentLayout(isL: isL)
 
                 if viewModel.activeMultiViewCount > 0 && !showMultiView && selectedChannel == nil && dockShowing {
-                    MultiViewIndicator(count: viewModel.activeMultiViewCount, accentColor: nil, action: { withAnimation(.spring()) { showMultiView = true } }).zIndex(5)
+                    MultiViewIndicator(count: viewModel.activeMultiViewCount, accentColor: nil, action: { withAnimation(MainView.multiViewSlide) { showMultiView = true } }).zIndex(5)
                 }
             }
             .modifier(MainViewModifiers(
@@ -236,6 +241,79 @@ struct HeroPageTransform: ViewModifier {
         return content
             .offset(x: -offset * width * parallax)
             .opacity(Double(max(0, min(1, 1 - abs(offset)))))
+    }
+}
+
+/// The lock screen's artwork for a live game: the same diagonal split the Live
+/// Now card uses, with the two crests and nothing else.
+///
+/// Deliberately NOT that card. It carries a LIVE pill, the score and the clock
+/// because it is built to be read in a shelf, and the lock screen draws its own
+/// controls and elapsed time over the top. The colours, the split and the way
+/// each crest sits centred in its OWN half are taken from it exactly.
+///
+/// The crests arrive as already-decoded images rather than URLs: this view is
+/// rendered by `ImageRenderer`, which draws in one synchronous pass, so
+/// anything still loading would come out blank.
+struct NowPlayingMatchupArt: View {
+    let game: ESPNEvent
+    let awayCrest: UIImage?
+    let homeCrest: UIImage?
+
+    private func teamColor(_ c: ESPNCompetitor?) -> Color {
+        guard let hex = c?.team?.color, !hex.isEmpty,
+              let col = Color(hex: hex.hasPrefix("#") ? hex : "#\(hex)") else {
+            return Color(white: 0.16)
+        }
+        return col
+    }
+
+    var body: some View {
+        ZStack {
+            // Hard diagonal split: away's colour on the left, home's on the
+            // right, meeting on a steep edge across the middle.
+            LinearGradient(
+                stops: [
+                    .init(color: teamColor(game.awayCompetitor), location: 0.5),
+                    .init(color: teamColor(game.homeCompetitor), location: 0.5)
+                ],
+                startPoint: UnitPoint(x: 0.02, y: 0),
+                endPoint: UnitPoint(x: 0.98, y: 1)
+            )
+
+            // Each crest centred in its own half, so neither crosses the seam
+            // onto the other club's colour.
+            HStack(spacing: 0) {
+                crest(awayCrest)
+                crest(homeCrest)
+            }
+
+            // The same soft floor the card has, so a pale kit never leaves the
+            // artwork looking washed out.
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0.45),
+                    .init(color: .black.opacity(0.35), location: 1.0)
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func crest(_ image: UIImage?) -> some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                Color.clear
+            }
+        }
+        .frame(width: 190, height: 190)
+        .shadow(color: .black.opacity(0.45), radius: 12, x: 0, y: 6)
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -583,6 +661,9 @@ struct MainViewModifiers: ViewModifier {
             // Pushed aside while a detail page covers this. At rest the value
             // is 0, so this is an offset of zero and costs nothing.
             .modifier(DetailUnderlayParallax(cover: DetailRouter.shared.cover))
+            // The same, for multi-view's close swipe. Additive, and each is 0
+            // unless its own screen is up.
+            .modifier(DetailUnderlayParallax(cover: MultiViewDismiss.shared.cover))
             // "Finding best stream..." — root level for the same reason as
             // the picker below it: the search is kicked off from home shelves
             // and search results too, and used to give no feedback at all
@@ -705,7 +786,9 @@ extension MainView {
     private func overlays(isL: Bool) -> some View {
         if showMultiView {
             MultiViewScreen(viewModel: viewModel, scoreViewModel: scoreViewModel, showMultiView: $showMultiView, accentColor: accentColor, onOpenSettings: { showSettings = true })
-                .transition(.opacity)
+                // Slides in from the trailing edge, the way the detail pages
+                // arrive, rather than fading over what is already there.
+                .transition(.move(edge: .trailing))
                 .zIndex(50)
         }
 
@@ -774,7 +857,7 @@ extension MainView {
         if viewModel.multiViewModeActive { 
             viewModel.addToMultiView(channel)
             viewModel.multiViewModeActive = false
-            withAnimation(.spring()) { showMultiView = true } 
+            withAnimation(MainView.multiViewSlide) { showMultiView = true } 
         } else { 
             viewModel.addToRecent(channel.id)
             viewModel.lastPlayedChannelID = channel.id
@@ -900,6 +983,16 @@ struct StandardLayout: SwiftUI.View {
     /// whole team catalog, which must not happen on every render.
     @State private var cachedFavTeams: [(team: ESPNTeam, sport: SportType?, leagueLabel: String?)] = []
     @State private var cachedFavLeagues: [(sport: SportType, leagueLabel: String?, displayName: String)] = []
+
+    /// Favourite leagues, resolved on the spot rather than read from a cache.
+    ///
+    /// There are only ever a handful of them — the work is a map over a few
+    /// keys — and going through `cachedFavLeagues` meant the shelf depended on
+    /// one of several `.task(id:)` writes having fired first. The Favorites hub
+    /// reads them directly and always showed them; home did not, and did not.
+    private var homeFavLeagues: [(sport: SportType, leagueLabel: String?, displayName: String)] {
+        scoreViewModel.resolvedFavoriteLeagues()
+    }
     /// The interleaved body of the home page: category shelves in threes with
     /// a themed row of big cards between them. Rebuilt only when the shelves
     /// or the themed rows change.
@@ -1091,6 +1184,105 @@ struct StandardLayout: SwiftUI.View {
         (cat.id == -3 || cat.id == -4 || cat.id == -6) ? 32 : 40
     }
 
+    /// The loading state, laid out to the same measurements as the real home
+    /// screen so nothing shifts when the content lands.
+    ///
+    /// Every number here is read from the thing it stands in for — the hero's
+    /// own height, each card type's own `cardWidth`/`cardHeight` — rather than
+    /// approximated, so the two cannot drift apart as those change. The order
+    /// is the page's order too: hero, Continue Watching, Live Now, Favorites,
+    /// then category shelves with a row of big cards among them.
+    private var homeSkeleton: some SwiftUI.View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 30) {
+                // Hero — full bleed, dots OVER the artwork rather than below
+                // it, which is where the carousel draws them.
+                SkeletonBox(height: FeaturedCarousel.heroHeight, cornerRadius: 0)
+                    .frame(maxWidth: .infinity)
+                    .overlay(alignment: .bottom) {
+                        HStack(spacing: 8) {
+                            ForEach(0..<4, id: \.self) { i in
+                                SkeletonBox(width: i == 0 ? 26 : 7, height: 7, cornerRadius: 4)
+                            }
+                        }
+                        .padding(.bottom, 14)
+                    }
+
+                skeletonShelf(titleWidth: 210,
+                              cardWidth: ContinueWatchingCard.cardWidth,
+                              cardHeight: ContinueWatchingCard.cardHeight,
+                              cornerRadius: 12, spacing: 14)
+
+                skeletonShelf(titleWidth: 120,
+                              cardWidth: LiveGameCard.cardWidth,
+                              cardHeight: LiveGameCard.cardHeight,
+                              cornerRadius: 16, spacing: 12)
+
+                skeletonShelf(titleWidth: 140,
+                              cardWidth: FavoriteBadge.cardWidth,
+                              cardHeight: FavoriteBadge.cardHeight,
+                              cornerRadius: 12, spacing: 16)
+
+                skeletonShelf(titleWidth: 160,
+                              cardWidth: HorizontalChannelCardArt.cardWidth,
+                              cardHeight: HorizontalChannelCardArt.cardHeight,
+                              cornerRadius: 12, spacing: 10)
+
+                // A row of big cards, which the page interleaves between the
+                // category shelves.
+                VStack(alignment: .leading, spacing: 14) {
+                    SkeletonBox(width: 150, height: 24).padding(.horizontal, 20)
+                    SkeletonBox(width: SpotlightCard.cardWidth,
+                                height: SpotlightCard.cardHeight,
+                                cornerRadius: 18)
+                        .padding(.horizontal, 20)
+                        .frame(width: Self.screenWidth, alignment: .leading)
+                        .clipped()
+                }
+
+                skeletonShelf(titleWidth: 130,
+                              cardWidth: HorizontalChannelCardArt.cardWidth,
+                              cardHeight: HorizontalChannelCardArt.cardHeight,
+                              cornerRadius: 12, spacing: 10)
+            }
+            .padding(.bottom, 120)
+            .frame(width: Self.screenWidth, alignment: .leading)
+        }
+        // The hero bleeds behind the status bar, exactly as the loaded one does.
+        .ignoresSafeArea(.container, edges: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    /// One shelf: the section header, then a row of cards at that shelf's own
+    /// size. Static — a skeleton never scrolls, so there is no scroll view to
+    /// pay for; the row is simply clipped at the screen edge like the real one.
+    private func skeletonShelf(titleWidth: CGFloat,
+                               cardWidth: CGFloat,
+                               cardHeight: CGFloat,
+                               cornerRadius: CGFloat,
+                               spacing: CGFloat) -> some SwiftUI.View {
+        VStack(alignment: .leading, spacing: 14) {
+            // 24pt is the section title's own line height at 22pt bold.
+            SkeletonBox(width: titleWidth, height: 24).padding(.horizontal)
+            HStack(spacing: spacing) {
+                ForEach(0..<5, id: \.self) { _ in
+                    SkeletonBox(width: cardWidth, height: cardHeight, cornerRadius: cornerRadius)
+                }
+            }
+            .padding(.horizontal)
+            // Pinned to the screen's width and clipped there. Five full-size
+            // cards are much wider than the screen, and left to itself that row
+            // widens the enclosing scroll view's CONTENT — every sibling then
+            // lays out at that width too, which is what blew the whole skeleton
+            // up and pushed the bar off the bottom.
+            .frame(width: Self.screenWidth, alignment: .leading)
+            .clipped()
+        }
+        .frame(width: Self.screenWidth, alignment: .leading)
+    }
+
+    private static var screenWidth: CGFloat { UIScreen.main.bounds.width }
+
     /// Promotes the logos home is about to draw into the memory image cache,
     /// off the main thread.
     ///
@@ -1219,65 +1411,7 @@ struct StandardLayout: SwiftUI.View {
     var body: some SwiftUI.View {
         ZStack(alignment: .bottom) {
             if viewModel.isLoading {
-                VStack(spacing: 0) {
-                    ScrollView(showsIndicators: false) {
-                        VStack(alignment: .leading, spacing: 30) {
-
-                            // 1. Full-bleed hero skeleton, dots included —
-                            //    mirrors the loaded layout so nothing jumps
-                            //    when the real content lands.
-                            VStack(spacing: 14) {
-                                SkeletonBox(height: UIScreen.main.bounds.height * 0.55, cornerRadius: 0)
-                                    .frame(maxWidth: .infinity)
-                                HStack(spacing: 8) {
-                                    ForEach(0..<4, id: \.self) { i in
-                                        SkeletonBox(width: i == 0 ? 26 : 7, height: 7, cornerRadius: 4)
-                                    }
-                                }
-                            }
-
-                            // 2. Continue Watching shelf
-                            VStack(alignment: .leading, spacing: 14) {
-                                SkeletonBox(width: 180, height: 22).padding(.horizontal)
-                                ScrollView(.horizontal, showsIndicators: false) {
-                                    HStack(spacing: 16) {
-                                        ForEach(0..<4, id: \.self) { _ in
-                                            HorizontalCardSkeleton()
-                                        }
-                                    }.padding(.horizontal)
-                                }
-                                .frame(height: 152)
-                            }
-
-                            // 4. Quick Access panel
-                            VStack(alignment: .leading, spacing: 14) {
-                                SkeletonBox(width: 140, height: 22).padding(.horizontal)
-                                SkeletonBox(height: 90, cornerRadius: 20)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.horizontal)
-                            }
-
-                            // 5. Category shelves (2 groups)
-                            ForEach(0..<2, id: \.self) { _ in
-                                VStack(alignment: .leading, spacing: 14) {
-                                    SkeletonBox(width: 120, height: 22).padding(.horizontal)
-                                    ScrollView(.horizontal, showsIndicators: false) {
-                                        HStack(spacing: 12) {
-                                            ForEach(0..<5, id: \.self) { _ in
-                                                SkeletonBox(width: 170, height: 96, cornerRadius: 20)
-                                            }
-                                        }.padding(.horizontal)
-                                    }
-                                }
-                            }
-                        }
-                        .padding(.bottom)
-                    }
-                    // Match the loaded layout: the hero skeleton bleeds
-                    // behind the status bar too.
-                    .ignoresSafeArea(.container, edges: .top)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                homeSkeleton
             } else if !searchText.isEmpty {
                 searchView
                     .modifier(SwipeBackModifier(onBack: { withAnimation(Self.pageAnimation) { searchText = "" } }))
@@ -1316,7 +1450,7 @@ struct StandardLayout: SwiftUI.View {
                             playAction: playAction,
                             onSave: { viewModel.saveCategorySettings() },
                             isSection: true,
-                            openMultiView: { withAnimation { showMultiView = true } }
+                            openMultiView: { withAnimation(MainView.multiViewSlide) { showMultiView = true } }
                         )
                         .transition(.opacity)
                     } else {
@@ -1455,7 +1589,7 @@ struct StandardLayout: SwiftUI.View {
                             // 4. Favorites — every favourited team and league
                             //    as a poster tile. A team opens the full team
                             //    page; a league opens its own page.
-                            if selectedHomeGroup == nil && !(cachedFavTeams.isEmpty && cachedFavLeagues.isEmpty) {
+                            if selectedHomeGroup == nil && !(cachedFavTeams.isEmpty && homeFavLeagues.isEmpty) {
                                 VStack(alignment: .leading, spacing: 14) {
                                     NuvioSectionHeader(
                                         title: "Favorites",
@@ -1467,7 +1601,7 @@ struct StandardLayout: SwiftUI.View {
 
                                     FavoriteTeamsShelf(
                                         teams: cachedFavTeams,
-                                        leagues: cachedFavLeagues,
+                                        leagues: homeFavLeagues,
                                         onTeam: { team, sport, league in
                                             DetailRouter.shared.open(.team(team: team, sport: sport, leagueLabel: league))
                                         },
@@ -1550,6 +1684,11 @@ struct StandardLayout: SwiftUI.View {
                         startingTodayCount = computeStartingToday()
                         favHeader = computeFavoriteHeader()
                         if homeRows.isEmpty { homeRows = computeHomeRows() }
+                        // Favourites were only filled in by the tasks below, so
+                        // the shelf — leagues included — was missing from the
+                        // very first render of the page.
+                        if cachedFavTeams.isEmpty { cachedFavTeams = scoreViewModel.resolvedFavoriteTeams() }
+                        if cachedFavLeagues.isEmpty { cachedFavLeagues = scoreViewModel.resolvedFavoriteLeagues() }
 
                         viewModel.lastSelectedHomeID = nil
                     }
@@ -1730,6 +1869,14 @@ struct StandardLayout: SwiftUI.View {
         // Re-enable detail interaction the moment any forward navigation fires,
         // so the arriving view is always fully tappable even if the user
         // navigates back and forward again within the 0.8 s reset window.
+        // A guide update takes over the screen with its banner and rebuilds
+        // every list underneath it, so it starts from home rather than leaving
+        // the user deep in a category whose contents are being replaced.
+        .onChangeCompat(of: viewModel.isUpdatingEPG) { updating in
+            guard updating, selectedCategory != nil || !searchText.isEmpty else { return }
+            searchText = ""
+            withAnimation(Self.pageAnimation) { selectedCategory = nil }
+        }
         .onChangeCompat(of: selectedCategory) { cat in
             if cat != nil { isDetailInteractive = true }
             sectionTitleProgress.set(0)
@@ -2221,7 +2368,7 @@ struct SidebarLayout: SwiftUI.View {
                             Button(action: { viewModel.triggerSelectionHaptic(); withAnimation { selectedCategory = StreamCategory(id: -4, name: "Favorites") } }) { GlassSidebarRow(title: "Favorites", isSelected: selectedCategory?.id == -4, accentColor: accentColor) }.buttonStyle(.plain)
                             Button(action: { viewModel.triggerSelectionHaptic(); withAnimation { selectedCategory = StreamCategory(id: -3, name: "Sports") } }) { GlassSidebarRow(title: "Sports", isSelected: selectedCategory?.id == -3, accentColor: accentColor) }.buttonStyle(.plain)
                             Button(action: { viewModel.triggerSelectionHaptic(); withAnimation { selectedCategory = StreamCategory(id: -5, name: "Recordings") } }) { GlassSidebarRow(title: "Recordings", isSelected: selectedCategory?.id == -5, accentColor: accentColor) }.buttonStyle(.plain)
-                            Button(action: { viewModel.triggerSelectionHaptic(); withAnimation { showMultiView = true } }) { GlassSidebarRow(title: "Multi-View", isSelected: false, accentColor: accentColor) }.buttonStyle(.plain)
+                            Button(action: { viewModel.triggerSelectionHaptic(); withAnimation(MainView.multiViewSlide) { showMultiView = true } }) { GlassSidebarRow(title: "Multi-View", isSelected: false, accentColor: accentColor) }.buttonStyle(.plain)
                             Button(action: { viewModel.triggerSelectionHaptic(); withAnimation { selectedCategory = StreamCategory(id: -1, name: "All Channels") } }) { GlassSidebarRow(title: "All Channels", isSelected: selectedCategory?.id == -1, accentColor: accentColor) }.buttonStyle(.plain)
                             Divider().background(Color.white.opacity(0.3)).padding(.vertical, 8)
                             ForEach(viewModel.categories.filter { !$0.isHidden }) { cat in Button(action: { viewModel.triggerSelectionHaptic(); withAnimation { selectedCategory = cat } }) { GlassSidebarRow(title: cat.name, isSelected: selectedCategory?.id == cat.id, accentColor: accentColor) }.buttonStyle(.plain).contextMenu { Button { viewModel.triggerRenameCategory(cat) } label: { Label("Rename", systemImage: "pencil") }; Button { viewModel.hideCategory(cat.id) } label: { Label("Hide", systemImage: "eye.slash") } } }

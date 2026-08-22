@@ -371,7 +371,9 @@ struct FavoritesAllTeamsView: View {
     @ObservedObject var scoreViewModel: ScoreViewModel
     let accentColor: Color
     @Environment(\.dismiss) private var dismiss
-    @State private var editMode: EditMode = .inactive
+    /// Opens READY to drag. The reordering was always here, behind an Edit
+    /// button that had to be found first — which is why it read as missing.
+    @State private var editMode: EditMode = .active
 
     var body: some View {
         NavigationView {
@@ -437,7 +439,7 @@ struct FavoritesAllTeamsView: View {
                 }
             }
             .environment(\.editMode, $editMode)
-            .navigationTitle("Teams & Leagues")
+            .navigationTitle("Reorder Favorites")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -548,13 +550,17 @@ struct TeamNextGamesSheet: View {
     }
 
     private func playFromGame(_ game: ESPNEvent) {
-        let home = game.homeCompetitor?.team?.shortDisplayName ?? game.homeCompetitor?.team?.displayName ?? ""
-        let away = game.awayCompetitor?.team?.shortDisplayName ?? game.awayCompetitor?.team?.displayName ?? ""
+        // `searchTerms` rather than the competitors: it already knows that a
+        // golf tournament or a race weekend has no two sides, and returns the
+        // EVENT's name. Reading team names directly gave those two empty
+        // strings — golf competitors are athletes, with no team at all — so a
+        // favourite golfer's Watch searched for nothing.
+        let terms = game.searchTerms
         let sport = scoreViewModel.sportType(for: game)
         viewModel.runSmartSearch(
             gameID: game.id,
-            home: home,
-            away: away,
+            home: terms.home,
+            away: terms.away,
             sport: sport,
             network: game.streamNetworkHint
         )
@@ -859,12 +865,16 @@ struct LeagueGamesSheet: View {
     }
 
     private func playFromGame(_ game: ESPNEvent) {
-        let home = game.homeCompetitor?.team?.shortDisplayName ?? game.homeCompetitor?.team?.displayName ?? ""
-        let away = game.awayCompetitor?.team?.shortDisplayName ?? game.awayCompetitor?.team?.displayName ?? ""
+        // `searchTerms` rather than the competitors: it already knows that a
+        // golf tournament or a race weekend has no two sides, and returns the
+        // EVENT's name. Reading team names directly gave those two empty
+        // strings — golf competitors are athletes, with no team at all — so a
+        // favourite golfer's Watch searched for nothing.
+        let terms = game.searchTerms
         viewModel.runSmartSearch(
             gameID: game.id,
-            home: home,
-            away: away,
+            home: terms.home,
+            away: terms.away,
             sport: sport,
             network: game.streamNetworkHint
         )

@@ -253,7 +253,10 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         }
     }
      
-    public func updateNowPlayingMetadata(title: String, subtitle: String?, imageURL: String?) {
+    /// `artworkImage` wins over `imageURL` when both are given: the lock screen
+    /// card for a live game is drawn in-app rather than fetched, so there is no
+    /// URL to hand over.
+    public func updateNowPlayingMetadata(title: String, subtitle: String?, imageURL: String?, artworkImage: UIImage? = nil) {
         var nowPlayingInfo = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [String: Any]()
         nowPlayingInfo[MPMediaItemPropertyTitle] = title
         if let sub = subtitle { 
@@ -261,8 +264,10 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         } else {
             nowPlayingInfo.removeValue(forKey: MPMediaItemPropertyArtist)
         }
-        
-        if let urlStr = imageURL, let url = URL(string: urlStr) {
+
+        if let artworkImage {
+            nowPlayingInfo[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: artworkImage.size) { _ in artworkImage }
+        } else if let urlStr = imageURL, let url = URL(string: urlStr) {
             URLSession.shared.dataTask(with: url) { data, _, _ in
                 if let data = data, let image = UIImage(data: data) {
                     let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }

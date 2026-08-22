@@ -155,7 +155,12 @@ struct PlayerControlsView: View {
                                     }
                                 }
                             }
-                            .padding(.top, isInlineMode ? 8 : (isLandscape ? 40 : 60))
+                            // Landscape was 40. There is no notch along the top
+                            // edge in landscape — the cut-outs are on the sides —
+                            // so the row can sit considerably higher without
+                            // being clipped, which also frees the band for the
+                            // live score to sit level with it.
+                            .padding(.top, isInlineMode ? 8 : (isLandscape ? 20 : 60))
                             .padding(.horizontal, isInlineMode ? 8 : 16)
                             
                             Spacer()

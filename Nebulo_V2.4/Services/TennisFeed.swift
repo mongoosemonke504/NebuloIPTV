@@ -266,7 +266,15 @@ extension ESPNEvent {
         // also earns the both-sides bonus when a channel matches both.
         if isFieldEvent {
             if isRaceEvent { return (shortName, "") }
-            return (ESPNEvent.golfQueryName(shortName), "golf pga")
+            // The TOURNAMENT, never the field. ESPN's competitors here are the
+            // players, and a leaderboard's top two are whoever happens to be
+            // leading — searching "Scheffler" finds nothing, while the guide
+            // and the channel names carry the event.
+            //
+            // The FULL name, not the trimmed one: golf goes to `runGolfSearch`,
+            // which matches the name as a phrase before falling back to its
+            // individual words, and a phrase needs the whole thing.
+            return (shortName, "golf pga")
         }
         let home = homeCompetitor?.team?.shortDisplayName ?? homeCompetitor?.athlete?.shortName ?? ""
         let away = awayCompetitor?.team?.shortDisplayName ?? awayCompetitor?.athlete?.shortName ?? ""

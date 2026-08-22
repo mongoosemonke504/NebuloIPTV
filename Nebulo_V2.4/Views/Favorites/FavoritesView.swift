@@ -545,7 +545,8 @@ struct FavoritesView: View {
                             },
                             onRemove: {
                                 scoreViewModel.toggleFavoriteTeam(item.team, sport: item.sport)
-                            }
+                            },
+                            onReorder: { guard SwipeTapGuard.tapsAllowed else { return }; showSeeAllTeams = true }
                         )
                     }
 
@@ -589,18 +590,30 @@ struct FavoritesView: View {
                             displayName: item.displayName,
                             scoreViewModel: scoreViewModel,
                             onTap: {
-                                // Every favourited series opens its own page —
-                                // Formula 1 and golf get the season (calendar
-                                // and championships) there, not a single race.
+                                // The row is the league: its page, with the
+                                // season's calendar and championships.
                                 DetailRouter.shared.open(.league(
                                     sport: item.sport,
                                     leagueLabel: item.leagueLabel,
                                     displayName: item.displayName
                                 ))
                             },
+                            onOpenLive: { live in
+                                // The tournament line is the tournament, and
+                                // tapping it opens the card that can play it.
+                                if item.sport == .golf {
+                                    scoreViewModel.presentGolfCard(live)
+                                } else if item.sport == .f1 {
+                                    scoreViewModel.presentRaceCard(live)
+                                } else {
+                                    scoreViewModel.deepLinkRequest =
+                                        scoreViewModel.makeDetailRequest(for: live, sport: item.sport)
+                                }
+                            },
                             onRemove: {
                                 scoreViewModel.toggleFavoriteLeague(sport: item.sport, leagueLabel: item.leagueLabel)
-                            }
+                            },
+                            onReorder: { guard SwipeTapGuard.tapsAllowed else { return }; showSeeAllTeams = true }
                         )
                     }
 
@@ -730,12 +743,16 @@ struct FavoritesView: View {
     /// Resolves a game card tap (Watch button or reminder row) into a stream
     /// search via the channel view model's smart-search.
     private func playFromGame(_ game: ESPNEvent, sport: SportType?) {
-        let home = game.homeCompetitor?.team?.shortDisplayName ?? game.homeCompetitor?.team?.displayName ?? ""
-        let away = game.awayCompetitor?.team?.shortDisplayName ?? game.awayCompetitor?.team?.displayName ?? ""
+        // `searchTerms` rather than the competitors: it already knows that a
+        // golf tournament or a race weekend has no two sides, and returns the
+        // EVENT's name. Reading team names directly gave those two empty
+        // strings — golf competitors are athletes, with no team at all — so a
+        // favourite golfer's Watch searched for nothing.
+        let terms = game.searchTerms
         viewModel.runSmartSearch(
             gameID: game.id,
-            home: home,
-            away: away,
+            home: terms.home,
+            away: terms.away,
             sport: sport ?? scoreViewModel.sportType(for: game),
             network: game.streamNetworkHint
         )
@@ -854,6 +871,10 @@ struct FavoriteChannelTile: View {
     var nowPlaying: String? = nil
     let onTap: () -> Void
     let onRemove: () -> Void
+    /// Opens the reorder editor. These rows sit in a VStack rather than a List,
+    /// so they cannot be dragged in place — the menu points at the screen that
+    /// can do it.
+    var onReorder: () -> Void = {}
 
     private var abbreviation: String {
         let cleaned = channel.name
@@ -943,6 +964,10 @@ struct FavoriteTeamRow: View {
     let onTap: () -> Void
     let onWatch: (ESPNEvent) -> Void
     let onRemove: () -> Void
+    /// Opens the reorder editor. These rows sit in a VStack rather than a List,
+    /// so they cannot be dragged in place — the menu points at the screen that
+    /// can do it.
+    var onReorder: () -> Void = {}
 
     private var liveGame: ESPNEvent? {
         scoreViewModel.liveOrNextGame(forTeamID: ScoreViewModel.teamKey(sport: sport, teamID: team.id))
@@ -1198,7 +1223,13 @@ struct FavoriteLeagueRow: View {
     let displayName: String
     @ObservedObject var scoreViewModel: ScoreViewModel
     let onTap: () -> Void
+    /// Opens the card for the event this series is running.
+    var onOpenLive: ((ESPNEvent) -> Void)? = nil
     let onRemove: () -> Void
+    /// Opens the reorder editor. These rows sit in a VStack rather than a List,
+    /// so they cannot be dragged in place — the menu points at the screen that
+    /// can do it.
+    var onReorder: () -> Void = {}
 
     private var liveCount: Int {
         // When a specific leagueLabel is set (e.g. "Bundesliga"), only count games
@@ -1234,86 +1265,125 @@ struct FavoriteLeagueRow: View {
         return event.status.type.detail
     }
 
-    var body: some View {
-        Button(action: { guard SwipeTapGuard.tapsAllowed else { return }; onTap() }) {
-            HStack(spacing: 12) {
-                FavoriteSquareLogo(
-                    logo: LeagueLogoURL.url(sport: sport, leagueLabel: leagueLabel),
-                    abbreviation: abbreviationFor(displayName),
-                    color: nil
-                )
+    /// The row itself. A plain container rather than a Button: a Button's label
+    /// never routes taps to anything inside it, and the live event line below
+    /// needs its own tap. A nested tap gesture DOES take precedence over the
+    /// one on its ancestor, which is what makes the two targets possible.
+    private var rowBody: some View {
+        HStack(spacing: 12) {
+            FavoriteSquareLogo(
+                logo: LeagueLogoURL.url(sport: sport, leagueLabel: leagueLabel),
+                abbreviation: abbreviationFor(displayName),
+                color: nil
+            )
 
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 6) {
-                        Text(displayName)
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
-                        Text("LEAGUE")
-                            .font(.system(size: 9, weight: .black))
-                            .kerning(0.6)
-                            .foregroundStyle(.white.opacity(0.75))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Capsule().fill(Color.white.opacity(0.12)))
-                    }
-                    // A field series runs ONE event at a time, so "0 live now"
-                    // says nothing useful — name the event and where it is.
-                    if let event = fieldEvent {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(event.shortName)
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.8))
-                                .lineLimit(1)
-                            HStack(spacing: 5) {
-                                if event.isLiveNow {
-                                    Circle().fill(Color.red).frame(width: 6, height: 6)
-                                }
-                                Text(fieldStatus(event))
-                                    .font(.system(size: 12, weight: event.isLiveNow ? .bold : .medium))
-                                    .foregroundStyle(event.isLiveNow ? .red : .white.opacity(0.6))
-                                    .lineLimit(1)
-                            }
-                        }
-                    } else if liveCount > 0 {
-                        HStack(spacing: 6) {
-                            Circle().fill(Color.red).frame(width: 6, height: 6)
-                            Text("\(liveCount) live now")
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundStyle(.red)
-                        }
-                    } else {
-                        Text(sport.rawValue)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.6))
-                    }
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(displayName)
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    Text("LEAGUE")
+                        .font(.system(size: 9, weight: .black))
+                        .kerning(0.6)
+                        .foregroundStyle(.white.opacity(0.75))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.white.opacity(0.12)))
                 }
-
-                Spacer()
-
-                if liveCount > 0 {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.4))
+                // A field series runs ONE event at a time, so "0 live now"
+                // says nothing useful — name the event and where it is.
+                if let event = fieldEvent {
+                    // Its OWN button, not a nested tap gesture: a gesture
+                    // attached inside another view's tap area does not reliably
+                    // win the touch, which is why tapping the tournament was
+                    // opening the league page like the rest of the row.
+                    Button {
+                        guard SwipeTapGuard.tapsAllowed else { return }
+                        ChannelViewModel.shared.triggerSelectionHaptic()
+                        if event.isLiveNow, let onOpenLive {
+                            onOpenLive(event)
+                        } else {
+                            onTap()
+                        }
+                    } label: {
+                        liveEventLine(event)
+                    }
+                    .buttonStyle(.plain)
+                } else if liveCount > 0 {
+                    HStack(spacing: 6) {
+                        Circle().fill(Color.red).frame(width: 6, height: 6)
+                        Text("\(liveCount) live now")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(.red)
+                    }
+                } else {
+                    Text(sport.rawValue)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.6))
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            // The same surface a channel row is drawn on — NuvioTheme.card
-            // with the same hairline — rather than a black wash that all but
-            // disappeared against the black canvas behind it.
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(NuvioTheme.card)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Color.white.opacity(0.06), lineWidth: 0.5)
-            )
+
+            Spacer()
+
+            if liveCount > 0 {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.4))
+            }
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // The same surface a channel row is drawn on — NuvioTheme.card with the
+        // same hairline — rather than a black wash that all but disappeared
+        // against the black canvas behind it.
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(NuvioTheme.card)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.white.opacity(0.06), lineWidth: 0.5)
+        )
+    }
+
+    /// The event this series is running, and its own tap target: tapping the
+    /// tournament opens the card that can play it, while the row around it
+    /// still goes to the league page.
+    @ViewBuilder
+    private func liveEventLine(_ event: ESPNEvent) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(event.shortName)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.8))
+                .lineLimit(1)
+            HStack(spacing: 5) {
+                if event.isLiveNow {
+                    Circle().fill(Color.red).frame(width: 6, height: 6)
+                }
+                Text(fieldStatus(event))
+                    .font(.system(size: 12, weight: event.isLiveNow ? .bold : .medium))
+                    .foregroundStyle(event.isLiveNow ? .red : .white.opacity(0.6))
+                    .lineLimit(1)
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    var body: some View {
+        rowBody
+            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .onTapGesture {
+                guard SwipeTapGuard.tapsAllowed else { return }
+                ChannelViewModel.shared.triggerSelectionHaptic()
+                onTap()
+            }
+
         .contextMenu {
+            Button(action: onReorder) {
+                Label("Reorder Favorites", systemImage: "arrow.up.arrow.down")
+            }
             Button(role: .destructive, action: onRemove) {
                 Label("Remove from Favorites", systemImage: "heart.slash")
             }
@@ -1336,6 +1406,10 @@ struct FavoriteReminderRow: View {
     @ObservedObject var scoreViewModel: ScoreViewModel
     let onWatch: () -> Void
     let onRemove: () -> Void
+    /// Opens the reorder editor. These rows sit in a VStack rather than a List,
+    /// so they cannot be dragged in place — the menu points at the screen that
+    /// can do it.
+    var onReorder: () -> Void = {}
 
     // Re-render each minute so the "in 2h 14m" countdown stays honest without a
     // per-second ticker.

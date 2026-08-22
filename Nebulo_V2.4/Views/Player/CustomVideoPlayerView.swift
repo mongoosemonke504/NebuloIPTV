@@ -293,11 +293,13 @@ struct CustomVideoPlayerView: SwiftUI.View {
             seekBackward: { playerManager.seek(to: max(0, playerManager.currentTime - 10)); resetTimer() }
         )
 
-        // Portrait fullscreen pushes the close/AirPlay/Mini/Multi-view/expand
-        // row to ~60pt + 44pt = 104pt. Landscape fullscreen pushes it to
-        // ~40pt + 44pt = 84pt. Putting the score badge at 80pt overlapped
-        // both — drop it below the buttons.
-        liveScoreOverlay(topInset: isFullscreenInPortrait ? 120 : 90)
+        // Portrait fullscreen puts the close/AirPlay/Mini/Multi-view/expand row
+        // at ~60pt, so the score still sits below it there. LANDSCAPE now shares
+        // the row's band: the buttons start at 20pt (see PlayerControlsView) and
+        // the badge is centred in a 44pt box from the same offset, so the two
+        // line up across the top instead of the score hanging underneath.
+        liveScoreOverlay(topInset: isFullscreenInPortrait ? 120 : 20,
+                         matchesButtonRow: !isFullscreenInPortrait)
     }
 
     /// Wrapper for fullscreen layout with buffering spinner properly positioned
@@ -348,7 +350,9 @@ struct CustomVideoPlayerView: SwiftUI.View {
     /// Live ESPN score badge — only shown when `ScoreViewModel.liveGame(for:)` finds a match.
     /// In portrait bottom mode, always shown. In fullscreen/landscape, only shown when controls are visible.
     @ViewBuilder
-    private func liveScoreOverlay(topInset: CGFloat, isPortraitBottom: Bool = false) -> some View {
+    private func liveScoreOverlay(topInset: CGFloat,
+                                  isPortraitBottom: Bool = false,
+                                  matchesButtonRow: Bool = false) -> some View {
         let shouldShow = isPortraitBottom ? true : showControls
 
         if shouldShow,
@@ -369,6 +373,10 @@ struct CustomVideoPlayerView: SwiftUI.View {
                 // Top position for landscape/fullscreen — shown when controls visible
                 VStack {
                     LiveScoreBadge(game: game)
+                        // 44pt is the button row's own height, so centring in it
+                        // puts the badge on the buttons' centre line without
+                        // either having to know the other's size.
+                        .applyIf(matchesButtonRow) { $0.frame(height: 44) }
                         .padding(.top, topInset)
                     Spacer()
                 }
@@ -565,6 +573,29 @@ struct CustomVideoPlayerView: SwiftUI.View {
 
     func updateMetadata() {
         let activeChannel = currentChannel ?? channel
+
+        // A live game gets the game's own card: the matchup as the title and
+        // the Live Now graphic as the artwork, rather than the programme name
+        // over the channel's logo.
+        if let svm = scoreViewModel,
+           let game = svm.liveGame(for: activeChannel,
+                                   currentEPGTitle: viewModel?.getCurrentProgram(for: activeChannel)?.title) {
+            let title = Self.nowPlayingTitle(for: game)
+            // Title first so the lock screen is never empty, then the artwork
+            // once its crests have loaded.
+            playerManager.updateNowPlayingMetadata(title: title,
+                                                   subtitle: activeChannel.name,
+                                                   imageURL: nil)
+            Task { @MainActor in
+                guard let art = await Self.liveArtwork(for: game) else { return }
+                playerManager.updateNowPlayingMetadata(title: title,
+                                                       subtitle: activeChannel.name,
+                                                       imageURL: nil,
+                                                       artworkImage: art)
+            }
+            return
+        }
+
         let prog = viewModel?.getCurrentProgram(for: activeChannel)?.title
         if let p = prog, !p.isEmpty {
             playerManager.updateNowPlayingMetadata(title: p, subtitle: activeChannel.name, imageURL: activeChannel.icon)
@@ -572,6 +603,68 @@ struct CustomVideoPlayerView: SwiftUI.View {
             playerManager.updateNowPlayingMetadata(title: activeChannel.name, subtitle: nil, imageURL: activeChannel.icon)
         }
     }
+
+    /// What a live event is called on the lock screen.
+    ///
+    /// A race weekend and a golf tournament have no two sides to name, so those
+    /// carry the event itself — the same reasoning the scorelines and the
+    /// stream search use.
+    static func nowPlayingTitle(for game: ESPNEvent) -> String {
+        if game.isRaceEvent || game.isFieldEvent { return game.shortName }
+        // shortDisplayName is the NAME — "Lakers", "Arsenal" — where
+        // displayName carries the city with it ("Los Angeles Lakers"). The feed
+        // gives no separate nickname field, so the abbreviation stands in ahead
+        // of the long form rather than falling back to the place.
+        func name(_ competitor: ESPNCompetitor?) -> String? {
+            let team = competitor?.team
+            if let short = team?.shortDisplayName, !short.isEmpty { return short }
+            if let abbreviation = team?.abbreviation, !abbreviation.isEmpty { return abbreviation }
+            return team?.displayName
+        }
+        guard let away = name(game.awayCompetitor), let home = name(game.homeCompetitor),
+              !away.isEmpty, !home.isEmpty else { return game.shortName }
+        return "\(away) vs \(home)"
+    }
+
+    /// The matchup art, drawn to an image for the lock screen.
+    ///
+    /// ASYNC, because the crests have to be in hand before the render: an
+    /// `ImageRenderer` draws in one synchronous pass, so a view that loads its
+    /// own images would be rendered with none of them. Fetching them first —
+    /// memory, then disk, then network, all off the main thread — is what makes
+    /// the logos actually appear.
+    static func liveArtwork(for game: ESPNEvent) async -> UIImage? {
+        if let cached = await MainActor.run(body: { artworkCache[game.id] }) { return cached }
+
+        func crest(_ competitor: ESPNCompetitor?) async -> UIImage? {
+            let url = competitor?.team?.logo
+                ?? competitor?.athlete?.flag?.href
+                ?? competitor?.athlete?.headshot
+            guard let url, !url.isEmpty else { return nil }
+            return await ImageCache.shared.image(forKey: url, size: CGSize(width: 190, height: 190))
+        }
+
+        let away = await crest(game.awayCompetitor)
+        let home = await crest(game.homeCompetitor)
+
+        return await MainActor.run {
+            let renderer = ImageRenderer(
+                content: NowPlayingMatchupArt(game: game, awayCrest: away, homeCrest: home)
+                    .frame(width: 600, height: 600)
+            )
+            renderer.scale = UIScreen.main.scale
+            guard let image = renderer.uiImage else { return nil }
+            // Only kept once both crests were there to draw; otherwise a card
+            // rendered a moment too early would be the one held all session.
+            if away != nil && home != nil {
+                if artworkCache.count > 24 { artworkCache.removeAll() }
+                artworkCache[game.id] = image
+            }
+            return image
+        }
+    }
+
+    @MainActor private static var artworkCache: [String: UIImage] = [:]
     
     
     

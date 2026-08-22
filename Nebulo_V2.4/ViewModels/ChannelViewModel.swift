@@ -200,6 +200,10 @@ class ChannelViewModel: ObservableObject {
         ("247",    "24/7",    ["24/7", "24-7", "247 ", " 247", "24 7"])
     ]
 
+    /// True only while `updateEPGFromURLs` is actually fetching. Distinct from
+    /// `isUpdatingEPG`, which is the BANNER's state and is set by callers.
+    private var epgFetchInFlight = false
+
     private var epgProgress: Double = 0          // internal only — not published
     @Published var isUpdatingEPG: Bool = false
     @Published var loadingStatus: String = "Loading..."
@@ -328,6 +332,16 @@ class ChannelViewModel: ObservableObject {
     
     func handleAppActivation() async {
         let now = Date()
+
+        // An update already running owns the progress. Coming back to the app
+        // used to call straight through to `loadActiveAccounts`, which cancels
+        // the in-flight load and starts another — and the new one resets both
+        // `epgProgress` and `visualProgress` to zero. The banner was not
+        // counting backwards so much as starting over, which looks the same.
+        if isUpdatingEPG {
+            print("⏳ [ChannelViewModel] EPG update already running — leaving it alone.")
+            return
+        }
         
         
         if self.channels.isEmpty {
@@ -1510,6 +1524,16 @@ class ChannelViewModel: ObservableObject {
             self.prewarmChannel(cached)
             return
         }
+
+        // Golf has its own search. Everything below is built around two named
+        // sides and how many of them a channel matches; a tournament has no
+        // sides, so that scoring could never get past a generic "golf" hit and
+        // never played anything on its own. One delegation here covers every
+        // caller in the app.
+        if sport == .golf {
+            runGolfSearch(tournament: home, gameID: gameID)
+            return
+        }
     
         let inputChannels = self.channels
         let inputHidden = self.hiddenIDs
@@ -1580,11 +1604,17 @@ class ChannelViewModel: ObservableObject {
                 
                 
                 
-                if titleH > 0 { score += 500; isContMatch = true }
+                // Weighted by how MANY of the query's words the guide entry
+                // carries, not merely whether one did. A golf search is the
+                // tournament's name plus the sport, and every golf channel
+                // matches "golf" — so a flat bonus left the channel actually
+                // showing the tournament level with one showing anything else.
+                // The per-word bonus is what separates them.
+                if titleH > 0 { score += 500 + 120 * min(titleH - 1, 3); isContMatch = true }
                 if titleA > 0 { score += 500; isContMatch = true }
                 
                 
-                if descH > 0 { score += 300; isContMatch = true }
+                if descH > 0 { score += 300 + 90 * min(descH - 1, 3); isContMatch = true }
                 if descA > 0 { score += 300; isContMatch = true }
                 
                 
@@ -1598,6 +1628,21 @@ class ChannelViewModel: ObservableObject {
                 
                 
                 
+
+                // EVERY word of the event's name found somewhere on this
+                // channel — its name, its guide title, its description — is the
+                // one signal that says "this is the thing", and it is what a
+                // person does when they type the tournament into search and
+                // pick the obvious hit. Without it a golf search topped out at
+                // the generic +1000 network match plus a single +200 name hit,
+                // which is under the confidence threshold, so it never played
+                // anything by itself.
+                let haystack = "\(channel.name) \(epgTitle) \(epgDesc)".lowercased()
+                if !homeTokens.isEmpty, homeTokens.allSatisfy({ haystack.contains($0) }) {
+                    score += 800
+                    isContMatch = true
+                }
+
                 let fullInfo = "\(channel.name) \(epgTitle) \(epgDesc)"
                 
                 if score > 0 {
@@ -1717,6 +1762,107 @@ class ChannelViewModel: ObservableObject {
         }
     }
     
+    /// Finds the stream for a golf tournament, on its own terms.
+    ///
+    /// The general smart search is built around two named sides and scores a
+    /// channel on how many of them it can find. Golf has no sides — it has one
+    /// event, whose name lives in the GUIDE rather than in a channel called
+    /// "Golf Channel" — so that search kept topping out on the generic sport
+    /// match and never reached the confidence needed to play anything. This
+    /// looks for the one thing that actually identifies the broadcast: the
+    /// tournament's name, in the channel name, the programme title, or the
+    /// programme description.
+    ///
+    /// Ranked strictly, best first:
+    ///   1. the full name as a PHRASE in the programme title
+    ///   2. every word of it in the title
+    ///   3. the phrase in the description
+    ///   4. every word of it in the description
+    ///   5. the phrase, or every word, in the channel's own name
+    ///   6. failing all of that, a channel that is simply about golf
+    /// Anything in the first five is specific enough to play outright; a bare
+    /// golf channel is offered as a choice instead of guessed at.
+    func runGolfSearch(tournament: String, gameID: String? = nil) {
+        let phrase = tournament.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let words = SmartSearchLogic.tokenize(tournament)
+        guard !phrase.isEmpty || !words.isEmpty else { return }
+
+        let inputChannels = self.channels
+        let inputHidden = self.hiddenIDs
+        let hiddenCatIDs = Set(self.categories.filter { $0.isHidden }.map { $0.id })
+        let currentEPG = self.epgData
+        let now = self.currentTime
+
+        self.isSearchingGame = true
+        self.suggestedChannels = []
+        self.channelToAutoPlay = nil
+
+        Task.detached(priority: .userInitiated) { [weak self, inputChannels, inputHidden, hiddenCatIDs, currentEPG, now] in
+            guard let self else { return }
+
+            func allWords(in text: String) -> Bool {
+                guard !words.isEmpty else { return false }
+                let lower = text.lowercased()
+                return words.allSatisfy { lower.contains($0) }
+            }
+            func hasPhrase(in text: String) -> Bool {
+                guard phrase.count > 3 else { return false }
+                return text.lowercased().contains(phrase)
+            }
+
+            var ranked: [(channel: StreamChannel, rank: Int)] = []
+            for channel in inputChannels {
+                if inputHidden.contains(channel.id) || hiddenCatIDs.contains(channel.categoryID) { continue }
+                if SmartSearchLogic.isBanner(channel.name) { continue }
+
+                var title = ""
+                var desc = ""
+                if let eID = channel.epgID, let schedule = currentEPG[eID],
+                   let programme = schedule.first(where: { now >= $0.start && now <= $0.stop }) {
+                    title = programme.title
+                    desc = programme.description ?? ""
+                }
+
+                let rank: Int
+                if hasPhrase(in: title)            { rank = 6 }
+                else if allWords(in: title)        { rank = 5 }
+                else if hasPhrase(in: desc)        { rank = 4 }
+                else if allWords(in: desc)         { rank = 3 }
+                else if hasPhrase(in: channel.name) || allWords(in: channel.name) { rank = 2 }
+                else if channel.name.localizedCaseInsensitiveContains("golf")
+                            || title.localizedCaseInsensitiveContains("golf") { rank = 1 }
+                else { continue }
+
+                ranked.append((channel, rank))
+            }
+
+            // Best rank first, then the app's usual quality preference.
+            let sorted = ranked.sorted {
+                $0.rank != $1.rank ? $0.rank > $1.rank : $0.channel.qualityScore > $1.channel.qualityScore
+            }
+
+            await MainActor.run {
+                self.isSearchingGame = false
+                guard let best = sorted.first else {
+                    self.showNoStreamsAlert = true
+                    return
+                }
+                let picks = Array(sorted.prefix(15).map(\.channel))
+                self.suggestedChannels = picks
+                for channel in picks.prefix(3) { self.prewarmChannel(channel) }
+
+                if best.rank >= 2 {
+                    // Named the tournament somewhere — play it.
+                    withAnimation(.easeInOut(duration: 0.4)) { self.channelToAutoPlay = best.channel }
+                    if let gameID { self.preResolvedCache[gameID] = best.channel }
+                } else {
+                    // Only generic golf channels; let the user choose.
+                    self.showSelectionSheet = true
+                }
+            }
+        }
+    }
+
     func showStreamOptions(home: String, away: String, sport: SportType, network: String? = nil) {
         
         let inputChannels = self.channels
@@ -1782,9 +1928,15 @@ class ChannelViewModel: ObservableObject {
                 let descH = matchCount(epgDesc, tokens: homeTokens)
                 let descA = matchCount(epgDesc, tokens: awayTokens)
                 
-                if titleH > 0 { score += 500; isContMatch = true }
+                // Weighted by how MANY of the query's words the guide entry
+                // carries, not merely whether one did. A golf search is the
+                // tournament's name plus the sport, and every golf channel
+                // matches "golf" — so a flat bonus left the channel actually
+                // showing the tournament level with one showing anything else.
+                // The per-word bonus is what separates them.
+                if titleH > 0 { score += 500 + 120 * min(titleH - 1, 3); isContMatch = true }
                 if titleA > 0 { score += 500; isContMatch = true }
-                if descH > 0 { score += 300; isContMatch = true }
+                if descH > 0 { score += 300 + 90 * min(descH - 1, 3); isContMatch = true }
                 if descA > 0 { score += 300; isContMatch = true }
                 if nameH > 0 { score += 200; isContMatch = true }
                 if nameA > 0 { score += 200; isContMatch = true }
@@ -1793,6 +1945,16 @@ class ChannelViewModel: ObservableObject {
                 let totalA = nameA + titleA + descA
                 if totalH > 0 && totalA > 0 { score += 300 }
                 
+
+                // Same exact-name signal as the smart search above: every word
+                // of the event's name present on this channel is what marks it
+                // as the one, rather than a generic sport match.
+                let haystack = "\(channel.name) \(epgTitle) \(epgDesc)".lowercased()
+                if !homeTokens.isEmpty, homeTokens.allSatisfy({ haystack.contains($0) }) {
+                    score += 800
+                    isContMatch = true
+                }
+
                 let fullInfo = "\(channel.name) \(epgTitle) \(epgDesc)"
                 
                 if score > 0 {
@@ -1952,6 +2114,7 @@ class ChannelViewModel: ObservableObject {
                 if titleH > 0 { score += 500 }; if titleA > 0 { score += 500 }
                 if nameH > 0 { score += 200 }; if nameA > 0 { score += 200 }
                 
+
                 let fullInfo = "\(channel.name) \(epgTitle) \(epgDesc)"
                 
                 if score > 0 {
@@ -2163,6 +2326,14 @@ class ChannelViewModel: ObservableObject {
     }
     
     func updateEPGFromURLs(_ urls: [URL], force: Bool = false, silent: Bool = false) async {
+        // Two fetches must never share one progress value, but the flag for
+        // that CANNOT be `isUpdatingEPG`: callers set that themselves to raise
+        // the banner before calling in, so keying off it made this refuse the
+        // very work the banner was announcing. This one is owned here alone.
+        if await MainActor.run(body: { self.epgFetchInFlight }) {
+            print("⏳ [EPG] A fetch is already in flight — skipping this one.")
+            return
+        }
         let now = Date()
         let isStale = lastEPGUpdateTime == nil || now.timeIntervalSince(lastEPGUpdateTime!) >= Self.epgMaxAge
         
@@ -2182,6 +2353,14 @@ class ChannelViewModel: ObservableObject {
         
         if !shouldForce && !isStale && !self.epgData.isEmpty {
             print("✅ [EPG] Data is fresh. Skipping network fetch.")
+            // The caller raises the banner before calling in, so lower it again
+            // rather than leaving "Checking for updates..." on screen forever.
+            await MainActor.run {
+                if self.isUpdatingEPG {
+                    self.isUpdatingEPG = false
+                    self.stopSmoothingTimer()
+                }
+            }
             return
         }
         
@@ -2190,8 +2369,8 @@ class ChannelViewModel: ObservableObject {
         let effectivelySilent = silent || (!self.epgData.isEmpty && !shouldForce)
         
         await MainActor.run {
-            
-            
+            self.epgFetchInFlight = true
+
             if !silent {
                 self.isLoading = true
             }
@@ -2214,6 +2393,7 @@ class ChannelViewModel: ObservableObject {
         }
         
         await MainActor.run {
+            self.epgFetchInFlight = false
             self.lastEPGUpdateTime = Date()
             self.epgProgress = 1.0
             self.visualProgress = 1.0

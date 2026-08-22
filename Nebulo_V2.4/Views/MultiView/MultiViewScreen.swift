@@ -92,6 +92,11 @@ struct MultiViewScreen: View {
     @State private var focusedIndex: Int = 0
     @State private var layoutMode: MultiViewLayoutMode = .focus
     @State private var showSearchSheet = false
+    /// Close-swipe bookkeeping: claimed once per gesture, and latched while the
+    /// screen is on its way out so a second flick cannot close it twice.
+    @State private var swipeClaimed = false
+    @State private var swipeRejected = false
+    @State private var closingBySwipe = false
     @State private var showFullSearch = false
     /// True once we've picked the auto-default layout for the current
     /// session. Prevents `onChangeCompat(of: multiViewSlots)` from constantly
@@ -362,6 +367,72 @@ struct MultiViewScreen: View {
                 .ignoresSafeArea(.container)
             }
         } // end outer ZStack
+        // Follows the finger off the screen, with the app easing in behind it —
+        // the same close gesture the detail pages use, rather than a canned
+        // slide that plays regardless of what the hand is doing.
+        .modifier(DetailSlideOffset(slide: MultiViewDismiss.shared.slide))
+        .simultaneousGesture(closeSwipe)
+        // ANIMATED. Set flat, the app underneath jumped a quarter of the screen
+        // sideways in one frame while multi-view was still sliding on — which is
+        // the clip before the animation.
+        .onAppear {
+            withAnimation(MainView.multiViewSlide) { MultiViewDismiss.shared.cover.set(1) }
+        }
+    }
+
+    /// Edge swipe that carries the whole screen off to the right.
+    private var closeSwipe: some Gesture {
+        let width = max(UIScreen.main.bounds.width, 1)
+        let state = MultiViewDismiss.shared
+        return DragGesture(minimumDistance: 8, coordinateSpace: .global)
+            .onChanged { value in
+                guard value.startLocation.x <= 32, !closingBySwipe else { return }
+                let dx = value.translation.width
+                let dy = value.translation.height
+                if !swipeClaimed && !swipeRejected {
+                    // Judged once, on the first reported movement.
+                    guard dx > 0, abs(dx) > abs(dy) else { swipeRejected = true; return }
+                    swipeClaimed = true
+                    SwipeTapGuard.suppress()
+                    state.dragLock.set(true)
+                }
+                guard swipeClaimed else { return }
+                let travelled = min(max(dx / width, 0), 1)
+                state.slide.set(travelled)
+                state.cover.set(1 - travelled)
+            }
+            .onEnded { value in
+                let claimed = swipeClaimed
+                swipeClaimed = false
+                swipeRejected = false
+                state.dragLock.set(false)
+                guard claimed, !closingBySwipe else { return }
+                let travelled = max(0, value.translation.width)
+                let flick = value.predictedEndTranslation.width - value.translation.width
+                if travelled > width * 0.3 || travelled + flick > width * 0.6 {
+                    closingBySwipe = true
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        state.slide.set(1)
+                        state.cover.set(0)
+                    }
+                    // Scheduled, not a completion handler — see the note on the
+                    // carousel's auto-advance for why those cannot be trusted
+                    // here. Dropping the screen while it is already off-screen
+                    // means no second animation plays over the top.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        var t = Transaction()
+                        t.disablesAnimations = true
+                        withTransaction(t) { showMultiView = false }
+                        state.slide.set(0)
+                        closingBySwipe = false
+                    }
+                } else {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
+                        state.slide.set(0)
+                        state.cover.set(1)
+                    }
+                }
+            }
     }
 
     /// Show the back / settings chrome and arm the 4-second auto-hide timer.
@@ -452,7 +523,11 @@ struct MultiViewScreen: View {
         // onDisappear still calls releaseAll as the backstop for every other
         // way this screen can go away.
         MultiViewPlayerPool.shared.releaseAll()
-        withAnimation(.easeInOut(duration: 0.35)) { showMultiView = false }
+        MultiViewDismiss.shared.slide.set(0)
+        withAnimation(MainView.multiViewSlide) {
+            showMultiView = false
+            MultiViewDismiss.shared.cover.set(0)
+        }
     }
 
     /// Choose the most efficient layout for `count` active streams:

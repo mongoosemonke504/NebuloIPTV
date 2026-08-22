@@ -212,6 +212,8 @@ struct LeagueDetailPage: View {
     @ObservedObject var scoreViewModel: ScoreViewModel
 
     enum Tab: String, CaseIterable, Identifiable {
+        /// Shown only while something in this competition is actually on.
+        case live = "Live"
         case table = "Table", fixtures = "Fixtures", results = "Results"
         // Series tabs — Formula 1 and golf have a season of one-off events
         // rather than a table and a fixture list. See `isSeries`.
@@ -250,7 +252,14 @@ struct LeagueDetailPage: View {
 
     private var logo: String? { LeagueLogoURL.url(sport: sport, leagueLabel: leagueLabel) }
 
-    private var liveGames: [ESPNEvent] { schedule.filter { $0.status.type.state == "in" } }
+    /// What is on right now, and what the Live tab lists.
+    ///
+    /// `isLiveNow` rather than the raw state: ESPN marks a race weekend "Final"
+    /// as soon as a practice session ends, so a Grand Prix actually being run
+    /// would never appear here.
+    private var liveGames: [ESPNEvent] {
+        schedule.filter { $0.isLiveNow }.sorted { $0.gameDate < $1.gameDate }
+    }
 
     private var upcoming: [ESPNEvent] {
         schedule.filter { $0.status.type.state == "pre" }.sorted { $0.gameDate < $1.gameDate }
@@ -311,6 +320,7 @@ struct LeagueDetailPage: View {
                         Group {
                             switch tab {
                             case .table:   tableTab
+                            case .live:     fixtureList(liveGames, empty: "Nothing live right now")
                             case .fixtures: fixtureList(upcoming, empty: "No fixtures scheduled")
                             case .results:  fixtureList(results, empty: "No results yet", newestFirst: true)
                             case .schedule: seasonScheduleTab
@@ -411,15 +421,21 @@ struct LeagueDetailPage: View {
                     ? await F1DetailService.fetchSeason() : nil
                 calendar = await c
                 self.season = await season
-                tab = .schedule
+                // A tournament or a race weekend in progress is what you opened
+                // this for; the season calendar is still one tap away.
+                tab = liveGames.isEmpty ? .schedule : .live
                 loading = false
                 return
             }
 
             loading = false
-            // Nothing to show a table for — open on the fixtures instead of a
-            // blank tab.
-            if standings.isEmpty { tab = .fixtures }
+            if !liveGames.isEmpty {
+                tab = .live
+            } else if standings.isEmpty {
+                // Nothing to show a table for — open on the fixtures instead of
+                // a blank tab.
+                tab = .fixtures
+            }
         }
     }
 
@@ -525,8 +541,11 @@ struct LeagueDetailPage: View {
     private var isSeries: Bool { sport == .f1 || sport == .golf }
 
     private var availableTabs: [Tab] {
-        guard isSeries else { return [.table, .fixtures, .results] }
-        var tabs: [Tab] = [.schedule]
+        // Live leads when there is something to lead with, for a league table
+        // and a tour season alike — it is the only tab that is ever urgent.
+        var tabs: [Tab] = liveGames.isEmpty ? [] : [.live]
+        guard isSeries else { return tabs + [.table, .fixtures, .results] }
+        tabs.append(.schedule)
         if !(season?.standings.isEmpty ?? true) { tabs.append(.drivers) }
         if !(season?.constructors.isEmpty ?? true) { tabs.append(.constructors) }
         return tabs
@@ -769,8 +788,17 @@ struct LeagueDetailPage: View {
                                 Button(action: {
                                     guard SwipeTapGuard.tapsAllowed else { return }
                                     viewModel.triggerSelectionHaptic()
+                                    // Racing and golf open their own cards, the
+                                    // same ones the hub and the home shelves
+                                    // open — a live tournament tapped here has
+                                    // to land on the card that can play it.
                                     let s = scoreViewModel.sportType(for: game)
-                                    scoreViewModel.deepLinkRequest = scoreViewModel.makeDetailRequest(for: game, sport: s)
+                                    switch s {
+                                    case .f1:   scoreViewModel.presentRaceCard(game)
+                                    case .golf: scoreViewModel.presentGolfCard(game)
+                                    default:
+                                        scoreViewModel.deepLinkRequest = scoreViewModel.makeDetailRequest(for: game, sport: s)
+                                    }
                                     DetailRouter.shared.close()
                                 }) {
                                     TeamGameRow(game: game, dateFormatter: Self.dateFmt)
