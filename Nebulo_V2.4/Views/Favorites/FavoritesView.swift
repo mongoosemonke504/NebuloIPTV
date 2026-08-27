@@ -8,13 +8,12 @@ enum FavoritesFilter: String, CaseIterable, Identifiable {
     case channels = "Channels"
     case teams = "Teams"
     case leagues = "Leagues"
-    case reminders = "Reminders"
     var id: String { rawValue }
 }
 
 // MARK: - Favorites screen
 
-/// Hub for the user's favorited channels, teams, leagues, and game reminders.
+/// Hub for the user's favorited channels, teams and leagues.
 /// Matches the visual language of `MultiViewScreen`'s hub: liquid-glass
 /// back/settings buttons up top, a big title row, scrolling content, and a
 /// pinned search pill at the bottom.
@@ -84,7 +83,7 @@ struct FavoritesView: View {
         isSliding = true
         // Land no lower than the compact anchor — pills pinned, big title gone.
         // The pages are wildly different lengths (a long channel list against
-        // three reminders), so switching while scrolled deep into a long one
+        // three favourites), so switching while scrolled deep into a long one
         // left the offset past the end of a short one: a screen of nothing.
         // Clamping only ever moves the page UP, and never while it already sits
         // above the anchor, so a switch near the top doesn't jump.
@@ -102,11 +101,6 @@ struct FavoritesView: View {
     /// One filter switch per drag — set mid-drag when the swipe fires,
     /// cleared on finger-lift.
     @State private var swipeConsumed = false
-    /// Global frame of the reminders List. Horizontal swipes that begin inside
-    /// it are left to the List's own row swipe-to-remove, so the filter pager
-    /// doesn't steal them and flip to the next chip.
-    @State private var reminderListFrame: CGRect = .zero
-
     /// Steps to the previous/next filter pill. Driven by the horizontal swipe.
     /// No haptic — swipes stay silent; haptics belong to deliberate taps.
     private func advanceFilter(_ delta: Int) {
@@ -123,19 +117,6 @@ struct FavoritesView: View {
     }
     private var favoriteLeagues: [(sport: SportType, leagueLabel: String?, displayName: String)] {
         scoreViewModel.resolvedFavoriteLeagues()
-    }
-    private var reminderGames: [ESPNEvent] {
-        var pool: [ESPNEvent] = []
-        for games in scoreViewModel.filteredGames.values { pool.append(contentsOf: games) }
-        for sections in scoreViewModel.filteredSectionsMap.values {
-            for section in sections { pool.append(contentsOf: section.games) }
-        }
-        var seen = Set<String>()
-        var out: [ESPNEvent] = []
-        for game in pool where scoreViewModel.reminderGameIDs.contains(game.id) {
-            if seen.insert(game.id).inserted { out.append(game) }
-        }
-        return out.sorted { $0.gameDate < $1.gameDate }
     }
 
     var body: some View {
@@ -206,9 +187,6 @@ struct FavoritesView: View {
             .simultaneousGesture(
                 DragGesture(minimumDistance: 10, coordinateSpace: .global)
                     .onChanged { value in
-                        // A swipe that starts on a reminder row belongs to that
-                        // row's swipe-to-remove — don't page the filter.
-                        if reminderListFrame.contains(value.startLocation) { return }
                         let dx = value.translation.width
                         let dy = value.translation.height
                         // As soon as the drag reads as horizontal, open the
@@ -366,7 +344,6 @@ struct FavoritesView: View {
         case .channels:  channelsPageContent
         case .teams:     teamsPageContent
         case .leagues:   leaguesPageContent
-        case .reminders: remindersPageContent
         }
     }
 
@@ -379,13 +356,12 @@ struct FavoritesView: View {
         VStack(alignment: .leading, spacing: 24) {
             // Nothing favorited at all gets the single big empty state — the
             // per-section "add" tiles would otherwise stack three deep above it.
-            if favoriteChannels.isEmpty && favoriteTeams.isEmpty && favoriteLeagues.isEmpty && reminderGames.isEmpty {
+            if favoriteChannels.isEmpty && favoriteTeams.isEmpty && favoriteLeagues.isEmpty {
                 emptyState.padding(.top, 60)
             } else {
                 channelsSection
                 teamsSection
                 leaguesSection
-                if !reminderGames.isEmpty { remindersSection }
             }
             pageVerticalPadding
         }
@@ -414,24 +390,6 @@ struct FavoritesView: View {
     @ViewBuilder private var leaguesPageContent: some View {
         VStack(alignment: .leading, spacing: 24) {
             leaguesSection
-            pageVerticalPadding
-        }
-        .padding(.top, 4)
-        .padding(.bottom, 16)
-    }
-
-    @ViewBuilder private var remindersPageContent: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            if reminderGames.isEmpty {
-                FavoritesEmptyTile(
-                    icon: "bell.fill",
-                    title: "No reminders set",
-                    subtitle: "Set a reminder on a game from the Sports section."
-                )
-                .padding(.horizontal, 20)
-            } else {
-                remindersSection
-            }
             pageVerticalPadding
         }
         .padding(.top, 4)
@@ -658,55 +616,6 @@ struct FavoritesView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: Reminders section
-
-    @ViewBuilder private var remindersSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            FavoritesSectionHeader(
-                title: "Reminders",
-                count: reminderGames.count,
-                trailingIcon: nil,
-                accentColor: accentColor,
-                onTrailingTap: nil
-            )
-            .padding(.horizontal, 20)
-
-            // Same native List swipe as the scheduled recordings / channel-hide
-            // gesture: swipe a reminder to reveal Remove, same reveal and
-            // row-collapse. Scroll-disabled and sized to its rows so it nests
-            // in the outer scroll view.
-            List {
-                ForEach(reminderGames) { game in
-                    FavoriteReminderRow(
-                        game: game,
-                        scoreViewModel: scoreViewModel,
-                        onWatch: { playFromGame(game, sport: scoreViewModel.sportType(for: game)) },
-                        onRemove: { scoreViewModel.toggleReminder(game) }
-                    )
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 5, leading: 20, bottom: 5, trailing: 20))
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        Button(role: .destructive) {
-                            scoreViewModel.toggleReminder(game)
-                        } label: {
-                            Label("Remove", systemImage: "trash.fill")
-                        }
-                    }
-                }
-            }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .scrollDisabled(true)
-            .environment(\.defaultMinListRowHeight, 0)
-            .frame(height: CGFloat(reminderGames.count) * 86)
-            .captureGlobalFrame { reminderListFrame = $0 }
-            // Cleared when the section isn't shown, so its old frame can't
-            // create a dead zone on another filter page.
-            .onDisappear { reminderListFrame = .zero }
-        }
-    }
-
     // MARK: Empty state
 
     @ViewBuilder private var emptyState: some View {
@@ -740,7 +649,7 @@ struct FavoritesView: View {
 
     // MARK: Helpers
 
-    /// Resolves a game card tap (Watch button or reminder row) into a stream
+    /// Resolves a game card tap (its Watch button) into a stream
     /// search via the channel view model's smart-search.
     private func playFromGame(_ game: ESPNEvent, sport: SportType?) {
         // `searchTerms` rather than the competitors: it already knows that a
@@ -1396,168 +1305,6 @@ struct FavoriteLeagueRow: View {
         return String(s.prefix(3)).uppercased()
     }
 }
-
-// MARK: - Reminder row
-
-struct FavoriteReminderRow: View {
-    let game: ESPNEvent
-    @ObservedObject var scoreViewModel: ScoreViewModel
-    let onWatch: () -> Void
-    let onRemove: () -> Void
-    /// Opens the reorder editor. These rows sit in a VStack rather than a List,
-    /// so they cannot be dragged in place — the menu points at the screen that
-    /// can do it.
-    var onReorder: () -> Void = {}
-
-    // Re-render each minute so the "in 2h 14m" countdown stays honest without a
-    // per-second ticker.
-    @State private var now = Date()
-    private let minuteTick = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
-
-    private static let timeFmt: DateFormatter = {
-        let f = DateFormatter(); f.timeStyle = .short; return f
-    }()
-    private static let dayFmt: DateFormatter = {
-        let f = DateFormatter(); f.dateFormat = "EEE, MMM d"; return f
-    }()
-
-    /// Full team names ("Los Angeles Lakers at Boston Celtics") rather than the
-    /// three-letter shortName, falling back to shortName if names are missing.
-    private var matchupName: String {
-        let away = game.awayCompetitor?.team?.displayName
-        let home = game.homeCompetitor?.team?.displayName
-        if let away, let home, !away.isEmpty, !home.isEmpty { return "\(away) at \(home)" }
-        return game.shortName
-    }
-
-    /// The live/upcoming/final state as a coloured status word.
-    private var statusPill: (text: String, color: Color)? {
-        switch game.status.type.state {
-        case "in":   return ("LIVE", .red)
-        case "post": return ("FINAL", .white.opacity(0.5))
-        default:     return nil
-        }
-    }
-
-    /// Rich schedule line: exact time plus a relative countdown for upcoming
-    /// games ("Today · 7:10 PM · in 2h"), or the day for anything further out.
-    private var scheduleLine: String {
-        let date = game.gameDate
-        let cal = Calendar.current
-        switch game.status.type.state {
-        case "in":   return "Started " + Self.timeFmt.string(from: date)
-        case "post": return "Ended " + Self.dayFmt.string(from: date)
-        default: break
-        }
-        let time = Self.timeFmt.string(from: date)
-        let dayPrefix: String
-        if cal.isDateInToday(date) { dayPrefix = "Today" }
-        else if cal.isDateInTomorrow(date) { dayPrefix = "Tomorrow" }
-        else { dayPrefix = Self.dayFmt.string(from: date) }
-
-        let delta = date.timeIntervalSince(now)
-        guard delta > 0 else { return "\(dayPrefix) · \(time)" }
-        let mins = Int(delta / 60)
-        let countdown: String
-        if mins < 60 { countdown = "in \(max(1, mins))m" }
-        else if mins < 24 * 60 { countdown = "in \(mins / 60)h \(mins % 60)m" }
-        else { countdown = "in \(mins / (24 * 60))d" }
-        return "\(dayPrefix) · \(time) · \(countdown)"
-    }
-
-    /// The broadcast channel's logo, resolved from the game's network name to
-    /// one of the user's channels. Same leading visual as a scheduled
-    /// recording row, so the two cards read identically.
-    private var channelLogoURL: String? {
-        guard let broadcast = game.broadcastName, !broadcast.isEmpty else { return nil }
-        return ChannelViewModel.shared.channels.first {
-            $0.name.localizedCaseInsensitiveContains(broadcast)
-                || broadcast.localizedCaseInsensitiveContains($0.name)
-        }?.icon
-    }
-
-    /// Leading logo chip — the channel the game is on, matching the recordings
-    /// section's card exactly.
-    private var logoChip: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.white.opacity(0.08))
-            if let url = channelLogoURL, !url.isEmpty {
-                CachedAsyncImage(urlString: url, size: CGSize(width: 40, height: 40))
-                    .padding(6)
-            } else {
-                Image(systemName: "bell.fill")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(.yellow)
-            }
-        }
-        .frame(width: 48, height: 48)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-
-    var body: some View {
-        HStack(spacing: 12) {
-            logoChip
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Text(matchupName)
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                    if let pill = statusPill {
-                        Text(pill.text)
-                            .font(.system(size: 9, weight: .black))
-                            .foregroundStyle(pill.color == .red ? .white : .black.opacity(0.7))
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1.5)
-                            .background(Capsule().fill(pill.color == .red ? Color.red : Color.white.opacity(0.6)))
-                    }
-                }
-                Text(scheduleLine)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.6))
-                    .lineLimit(1)
-            }
-
-            Spacer()
-
-            if game.status.type.state == "in" {
-                Button(action: { guard SwipeTapGuard.tapsAllowed else { return }; onWatch() }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "play.fill").font(.system(size: 11, weight: .bold))
-                        Text("Watch").font(.system(size: 14, weight: .semibold))
-                    }
-                    .foregroundStyle(.black)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(Capsule().fill(.white))
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.black.opacity(0.45))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
-        )
-        .onReceive(minuteTick) { now = $0 }
-        .contextMenu {
-            Button(role: .destructive, action: onRemove) {
-                Label("Remove reminder", systemImage: "bell.slash")
-            }
-        }
-    }
-}
-
-// MARK: - Squared logo (team or league)
 
 struct FavoriteSquareLogo: View {
     let logo: String?
