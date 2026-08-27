@@ -19,22 +19,45 @@ nonisolated enum LeagueDetailService {
         return sport.apiPath
     }
 
-    /// Schedule window: two weeks back for results, seven weeks forward for
-    /// fixtures — wide enough to cover a whole tournament in one request.
+    /// Schedule window, sized to how busy the competition is.
+    ///
+    /// Seven weeks of a tour or a cup is a handful of events; seven weeks of
+    /// baseball is the better part of a thousand games, which overruns the
+    /// endpoint's cap and comes back empty — which is why the MLB league page
+    /// showed no games at all. Daily-schedule leagues therefore ask for a much
+    /// shorter span, and any request that comes back with nothing falls back to
+    /// today alone rather than leaving the page blank.
     static func fetchSchedule(sport: SportType, leagueLabel: String?) async -> [ESPNEvent] {
         guard let path = apiPath(sport: sport, leagueLabel: leagueLabel) else { return [] }
         let fmt = DateFormatter()
         fmt.locale = Locale(identifier: "en_US_POSIX")
         fmt.timeZone = TimeZone(identifier: "UTC")
         fmt.dateFormat = "yyyyMMdd"
-        let from = fmt.string(from: Date().addingTimeInterval(-14 * 86400))
-        let to   = fmt.string(from: Date().addingTimeInterval(49 * 86400))
-        guard let url = URL(string: "https://site.api.espn.com/apis/site/v2/sports/\(path)/scoreboard?dates=\(from)-\(to)&limit=500")
-        else { return [] }
-        guard let (data, _) = try? await URLSession.shared.data(from: url),
-              let res = try? JSONDecoder().decode(ESPNResponse.self, from: data)
-        else { return [] }
-        return (res.events ?? []).sorted { $0.gameDate < $1.gameDate }
+
+        // A tour stop or a cup tie is one event a week; a baseball league is
+        // fifteen a day.
+        let wideWindow = sport.isSoccer || sport == .f1 || sport == .golf
+        let back: TimeInterval = wideWindow ? 14 : 6
+        let forward: TimeInterval = wideWindow ? 49 : 12
+
+        func events(from: String, to: String) async -> [ESPNEvent] {
+            guard let url = URL(string: "https://site.api.espn.com/apis/site/v2/sports/\(path)/scoreboard?dates=\(from)-\(to)&limit=500")
+            else { return [] }
+            guard let (data, _) = try? await URLSession.shared.data(from: url),
+                  let res = try? JSONDecoder().decode(ESPNResponse.self, from: data)
+            else { return [] }
+            return res.events ?? []
+        }
+
+        let from = fmt.string(from: Date().addingTimeInterval(-back * 86400))
+        let to   = fmt.string(from: Date().addingTimeInterval(forward * 86400))
+        var found = await events(from: from, to: to)
+
+        if found.isEmpty {
+            let today = fmt.string(from: Date())
+            found = await events(from: today, to: today)
+        }
+        return found.sorted { $0.gameDate < $1.gameDate }
     }
 
     // MARK: - Standings

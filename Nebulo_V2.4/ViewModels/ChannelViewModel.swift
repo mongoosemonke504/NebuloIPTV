@@ -508,7 +508,29 @@ class ChannelViewModel: ObservableObject {
             
             if shouldUpdateEPG {
                 print("🔄 [ChannelViewModel] Starting Full EPG Update...")
-                await self.updateEPGFromURLs(epgUrls, force: force, silent: silentEpg)
+                // NOT awaited before the home screen is released. A full guide
+                // download and parse is the ten seconds people were staring at
+                // a skeleton for, and the home screen does not need it: the
+                // channels are already in, and the guide only fills in what is
+                // ON each of them. The banner exists to report exactly this, so
+                // the page appears immediately with the update running behind
+                // it and the programme lines landing as it finishes.
+                //
+                // The disk cache below is still awaited — it is a local read,
+                // it is quick, and having yesterday's guide beats having none
+                // while the new one downloads.
+                if self.epgData.isEmpty, let cached = await Task.detached(priority: .userInitiated, operation: {
+                    await EPGService().loadFromDisk()
+                }).value, !cached.epg.isEmpty {
+                    await MainActor.run {
+                        self.epgData = cached.epg
+                        self.epgNameMap = cached.map
+                    }
+                }
+                Task { [weak self] in
+                    guard let self else { return }
+                    await self.updateEPGFromURLs(epgUrls, force: force, silent: silentEpg)
+                }
             } else {
                 print("✅ [ChannelViewModel] Skipping EPG Update (Fresh or Not Requested).")
                 
@@ -543,10 +565,9 @@ class ChannelViewModel: ObservableObject {
 
                 self.lastFullLoadTime = Date()
                 self.isLoading = false
-                if shouldUpdateEPG {
-                    self.isUpdatingEPG = false
-                    self.stopSmoothingTimer()
-                }
+                // The EPG update is no longer part of this load, so its banner
+                // is left alone here — `updateEPGFromURLs` lowers it when the
+                // guide is actually in.
             }
             
             if !silent && self.isLoading {
@@ -1354,7 +1375,14 @@ class ChannelViewModel: ObservableObject {
     }
 
     func preResolveGames(_ games: [ESPNEvent]) {
-        
+        // Golf is EXCLUDED. The generic resolver scores a channel largely on
+        // the broadcaster, and a tournament's broadcaster is a whole network —
+        // "ESPN" matches "24/7 ESPN 30 for 30" for the full network bonus, and
+        // that got cached as the answer for the BMW Championship. Since
+        // runSmartSearch consults this cache first, a poisoned entry beat the
+        // golf search every time. Golf resolves through runGolfSearch alone.
+        let games = games.filter { !($0.isFieldEvent && !$0.isRaceEvent) }
+
         let infos: [GameSearchInfo] = games.map {
             let terms = $0.searchTerms
             return GameSearchInfo(id: $0.id, home: terms.home, away: terms.away, network: $0.streamNetworkHint)
@@ -1490,6 +1518,10 @@ class ChannelViewModel: ObservableObject {
 
     func resolveChannel(forGame game: ESPNEvent) -> StreamChannel? {
         if let cached = preResolvedCache[game.id] { return cached }
+        // Same reasoning as preResolveGames: this scores on the broadcaster and
+        // on team names a tournament does not have, so for golf it would cache
+        // a network's channel as the answer.
+        if game.isFieldEvent && !game.isRaceEvent { return nil }
         let targetNetwork = (game.broadcastName ?? "").trimmingCharacters(in: .whitespaces).lowercased()
         let home = (game.homeCompetitor?.team?.shortDisplayName ?? game.homeCompetitor?.team?.displayName ?? "").lowercased()
         let away = (game.awayCompetitor?.team?.shortDisplayName ?? game.awayCompetitor?.team?.displayName ?? "").lowercased()
@@ -1517,21 +1549,19 @@ class ChannelViewModel: ObservableObject {
     }
 
     func runSmartSearch(gameID: String? = nil, home: String, away: String, sport: SportType, network: String? = nil) {
+        // Golf has its own search, and it goes FIRST — ahead of the resolved
+        // cache, which the generic resolver may have filled with a channel
+        // picked for carrying the right broadcaster rather than the right
+        // event. One delegation here covers every caller in the app.
+        if sport == .golf {
+            runGolfSearch(tournament: home, gameID: gameID)
+            return
+        }
 
         if let gid = gameID, let cached = preResolvedCache[gid] {
             self.isSearchingGame = false
             withAnimation(.easeInOut(duration: 0.4)) { self.channelToAutoPlay = cached }
             self.prewarmChannel(cached)
-            return
-        }
-
-        // Golf has its own search. Everything below is built around two named
-        // sides and how many of them a channel matches; a tournament has no
-        // sides, so that scoring could never get past a generic "golf" hit and
-        // never played anything on its own. One delegation here covers every
-        // caller in the app.
-        if sport == .golf {
-            runGolfSearch(tournament: home, gameID: gameID)
             return
         }
     
@@ -1851,14 +1881,16 @@ class ChannelViewModel: ObservableObject {
                 self.suggestedChannels = picks
                 for channel in picks.prefix(3) { self.prewarmChannel(channel) }
 
-                if best.rank >= 2 {
-                    // Named the tournament somewhere — play it.
-                    withAnimation(.easeInOut(duration: 0.4)) { self.channelToAutoPlay = best.channel }
-                    if let gameID { self.preResolvedCache[gameID] = best.channel }
-                } else {
-                    // Only generic golf channels; let the user choose.
-                    self.showSelectionSheet = true
-                }
+                // ALWAYS plays the top of the ranking, including the bare
+                // golf-channel tier. Holding that tier back for the picker was
+                // the remaining reason golf did not play by itself: plenty of
+                // providers carry a tournament on a channel whose guide entry
+                // says nothing more specific than "PGA TOUR Golf", and there is
+                // no better answer to offer than the best of those. The rest of
+                // the ranking is still in `suggestedChannels`, so Stream List
+                // shows the alternatives.
+                withAnimation(.easeInOut(duration: 0.4)) { self.channelToAutoPlay = best.channel }
+                if let gameID { self.preResolvedCache[gameID] = best.channel }
             }
         }
     }

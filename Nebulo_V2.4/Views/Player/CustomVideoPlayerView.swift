@@ -246,6 +246,22 @@ struct CustomVideoPlayerView: SwiftUI.View {
         .onChangeCompat(of: epgTime) { _ in
             updateMetadata()
         }
+        // Builds the lock screen's card the moment the player knows which game
+        // is on — not when the phone is locked, and not when the metadata is
+        // first pushed. Fetching two crests and rendering takes a beat, and
+        // that beat used to be spent AFTER the user had already looked at the
+        // screen. Doing it here means the finished card is sitting in the cache
+        // long before it is needed, so `updateMetadata` finds it complete on
+        // its first pass and pushes it whole.
+        //
+        // Keyed on the event, so switching channels to another game builds that
+        // one and a channel with no game does nothing at all.
+        .task(id: currentLiveGame?.id) {
+            guard let game = currentLiveGame else { return }
+            _ = await Self.liveArtwork(for: game)
+            guard !Task.isCancelled else { return }
+            updateMetadata()
+        }
         .onChangeCompat(of: switcherCategory) { _ in
             switcherChannels = getChannelsForSwitcher()
         }
@@ -581,17 +597,25 @@ struct CustomVideoPlayerView: SwiftUI.View {
            let game = svm.liveGame(for: activeChannel,
                                    currentEPGTitle: viewModel?.getCurrentProgram(for: activeChannel)?.title) {
             let title = Self.nowPlayingTitle(for: game)
-            // Title first so the lock screen is never empty, then the artwork
-            // once its crests have loaded.
+            // TWO passes, because waiting for two crests to download before
+            // showing anything is what made the card arrive late. The first is
+            // drawn from whatever is already in memory — often both crests,
+            // always the colours and the split — and goes out immediately. The
+            // second replaces it once anything missing has been fetched, and
+            // is skipped entirely when the first was already complete.
+            let (immediate, complete) = Self.liveArtworkFromMemory(for: game)
             playerManager.updateNowPlayingMetadata(title: title,
                                                    subtitle: activeChannel.name,
-                                                   imageURL: nil)
-            Task { @MainActor in
-                guard let art = await Self.liveArtwork(for: game) else { return }
-                playerManager.updateNowPlayingMetadata(title: title,
-                                                       subtitle: activeChannel.name,
-                                                       imageURL: nil,
-                                                       artworkImage: art)
+                                                   imageURL: nil,
+                                                   artworkImage: immediate)
+            if !complete {
+                Task { @MainActor in
+                    guard let art = await Self.liveArtwork(for: game) else { return }
+                    playerManager.updateNowPlayingMetadata(title: title,
+                                                           subtitle: activeChannel.name,
+                                                           imageURL: nil,
+                                                           artworkImage: art)
+                }
             }
             return
         }
@@ -626,6 +650,67 @@ struct CustomVideoPlayerView: SwiftUI.View {
         return "\(away) vs \(home)"
     }
 
+    /// One crest, or nil when there is no URL for it.
+    static func crest(_ url: String?, size: CGSize) async -> UIImage? {
+        guard let url else { return nil }
+        return await ImageCache.shared.image(forKey: url, size: size)
+    }
+
+    /// Lock-screen artwork size. Deliberately modest: at 600pt and the device's
+    /// own scale this was rendering 1800 x 1800 for a thumbnail the system draws
+    /// small, and that render is the wait before the card appears. 512 at 2x is
+    /// 1024 square — more than the lock screen ever shows — for a quarter of the
+    /// pixels.
+    static let artworkEdge: CGFloat = 512
+    static let artworkScale: CGFloat = 2
+
+    /// The live game showing on the channel being watched, if any. The score
+    /// badge resolves the same thing; this names it so the artwork can be built
+    /// ahead of time from the same answer.
+    private var currentLiveGame: ESPNEvent? {
+        guard let svm = scoreViewModel else { return nil }
+        let active = currentChannel ?? channel
+        return svm.liveGame(for: active,
+                            currentEPGTitle: viewModel?.getCurrentProgram(for: active)?.title)
+    }
+
+    /// The crest URLs for a matchup, in the order the art draws them.
+    static func crestURLs(for game: ESPNEvent) -> (away: String?, home: String?) {
+        func url(_ competitor: ESPNCompetitor?) -> String? {
+            let value = competitor?.team?.logo
+                ?? competitor?.athlete?.flag?.href
+                ?? competitor?.athlete?.headshot
+            guard let value, !value.isEmpty else { return nil }
+            return value
+        }
+        return (url(game.awayCompetitor), url(game.homeCompetitor))
+    }
+
+    /// The art drawn right now, from images already resident. Returns whether
+    /// every crest it wanted was available, so the caller knows whether a
+    /// second pass is worth running.
+    @MainActor
+    static func liveArtworkFromMemory(for game: ESPNEvent) -> (image: UIImage?, complete: Bool) {
+        if let cached = artworkCache[game.id] { return (cached, true) }
+        let urls = crestURLs(for: game)
+        let size = CGSize(width: Self.artworkEdge * 0.32, height: Self.artworkEdge * 0.32)
+        let away = urls.away.flatMap { ImageCache.shared.getMemoryCache(forKey: $0, size: size) }
+        let home = urls.home.flatMap { ImageCache.shared.getMemoryCache(forKey: $0, size: size) }
+        let complete = (urls.away == nil || away != nil) && (urls.home == nil || home != nil)
+
+        let renderer = ImageRenderer(
+            content: NowPlayingMatchupArt(game: game, awayCrest: away, homeCrest: home, edge: Self.artworkEdge)
+                .frame(width: Self.artworkEdge, height: Self.artworkEdge)
+        )
+        renderer.scale = Self.artworkScale
+        guard let image = renderer.uiImage else { return (nil, false) }
+        if complete {
+            if artworkCache.count > 24 { artworkCache.removeAll() }
+            artworkCache[game.id] = image
+        }
+        return (image, complete)
+    }
+
     /// The matchup art, drawn to an image for the lock screen.
     ///
     /// ASYNC, because the crests have to be in hand before the render: an
@@ -636,23 +721,20 @@ struct CustomVideoPlayerView: SwiftUI.View {
     static func liveArtwork(for game: ESPNEvent) async -> UIImage? {
         if let cached = await MainActor.run(body: { artworkCache[game.id] }) { return cached }
 
-        func crest(_ competitor: ESPNCompetitor?) async -> UIImage? {
-            let url = competitor?.team?.logo
-                ?? competitor?.athlete?.flag?.href
-                ?? competitor?.athlete?.headshot
-            guard let url, !url.isEmpty else { return nil }
-            return await ImageCache.shared.image(forKey: url, size: CGSize(width: 190, height: 190))
-        }
-
-        let away = await crest(game.awayCompetitor)
-        let home = await crest(game.homeCompetitor)
+        let urls = crestURLs(for: game)
+        let size = CGSize(width: Self.artworkEdge * 0.32, height: Self.artworkEdge * 0.32)
+        // Both at once — one waiting on the other doubled the wait.
+        async let awayLoad = Self.crest(urls.away, size: size)
+        async let homeLoad = Self.crest(urls.home, size: size)
+        let away = await awayLoad
+        let home = await homeLoad
 
         return await MainActor.run {
             let renderer = ImageRenderer(
-                content: NowPlayingMatchupArt(game: game, awayCrest: away, homeCrest: home)
-                    .frame(width: 600, height: 600)
+                content: NowPlayingMatchupArt(game: game, awayCrest: away, homeCrest: home, edge: Self.artworkEdge)
+                    .frame(width: Self.artworkEdge, height: Self.artworkEdge)
             )
-            renderer.scale = UIScreen.main.scale
+            renderer.scale = Self.artworkScale
             guard let image = renderer.uiImage else { return nil }
             // Only kept once both crests were there to draw; otherwise a card
             // rendered a moment too early would be the one held all session.

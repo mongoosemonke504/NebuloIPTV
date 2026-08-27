@@ -1294,22 +1294,7 @@ struct FavoriteLeagueRow: View {
                 // A field series runs ONE event at a time, so "0 live now"
                 // says nothing useful — name the event and where it is.
                 if let event = fieldEvent {
-                    // Its OWN button, not a nested tap gesture: a gesture
-                    // attached inside another view's tap area does not reliably
-                    // win the touch, which is why tapping the tournament was
-                    // opening the league page like the rest of the row.
-                    Button {
-                        guard SwipeTapGuard.tapsAllowed else { return }
-                        ChannelViewModel.shared.triggerSelectionHaptic()
-                        if event.isLiveNow, let onOpenLive {
-                            onOpenLive(event)
-                        } else {
-                            onTap()
-                        }
-                    } label: {
-                        liveEventLine(event)
-                    }
-                    .buttonStyle(.plain)
+                    liveEventLine(event)
                 } else if liveCount > 0 {
                     HStack(spacing: 6) {
                         Circle().fill(Color.red).frame(width: 6, height: 6)
@@ -1372,15 +1357,28 @@ struct FavoriteLeagueRow: View {
     }
 
     var body: some View {
-        rowBody
-            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .onTapGesture {
-                guard SwipeTapGuard.tapsAllowed else { return }
-                ChannelViewModel.shared.triggerSelectionHaptic()
+        Button {
+            guard SwipeTapGuard.tapsAllowed else { return }
+            ChannelViewModel.shared.triggerSelectionHaptic()
+            // A tournament or race weekend this series is running IS what the
+            // row is showing, so that is what the row opens. The league page —
+            // calendar, championships — is on the long press.
+            if let event = fieldEvent, let onOpenLive {
+                onOpenLive(event)
+            } else {
                 onTap()
             }
+        } label: {
+            rowBody
+        }
+        .buttonStyle(.plain)
 
         .contextMenu {
+            if fieldEvent != nil {
+                Button(action: onTap) {
+                    Label("League Page", systemImage: "calendar")
+                }
+            }
             Button(action: onReorder) {
                 Label("Reorder Favorites", systemImage: "arrow.up.arrow.down")
             }

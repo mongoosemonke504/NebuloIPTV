@@ -868,15 +868,10 @@ struct FavoriteTeamsShelf: View {
         TouchPassingHorizontalScroll {
             LazyHStack(alignment: .top, spacing: 16) {
                 // Positional ids — a team id alone can repeat across sports.
-                ForEach(Array(teams.enumerated()), id: \.offset) { _, item in
-                    FavoriteBadge(
-                        logo: item.team.logo,
-                        name: item.team.shortDisplayName ?? item.team.displayName ?? "Team",
-                        colorHex: item.team.color
-                    ) {
-                        onTeam(item.team, item.sport, item.leagueLabel)
-                    }
-                }
+                // Leagues FIRST. This is one horizontal row, and with a
+                // few favourite teams ahead of them the leagues sat off the
+                // right-hand edge — present, but never seen without scrolling.
+                // There are only ever a handful of leagues, so they lead.
                 ForEach(Array(leagues.enumerated()), id: \.offset) { _, item in
                     FavoriteBadge(
                         logo: LeagueLogoURL.url(sport: item.sport, leagueLabel: item.leagueLabel),
@@ -884,6 +879,15 @@ struct FavoriteTeamsShelf: View {
                         colorHex: nil
                     ) {
                         onLeague(item.sport, item.leagueLabel, item.displayName)
+                    }
+                }
+                ForEach(Array(teams.enumerated()), id: \.offset) { _, item in
+                    FavoriteBadge(
+                        logo: item.team.logo,
+                        name: item.team.shortDisplayName ?? item.team.displayName ?? "Team",
+                        colorHex: item.team.color
+                    ) {
+                        onTeam(item.team, item.sport, item.leagueLabel)
                     }
                 }
             }

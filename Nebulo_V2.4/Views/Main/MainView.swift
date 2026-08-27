@@ -77,10 +77,12 @@ struct MainView: SwiftUI.View {
     // SwiftUI re-initialises this struct on every state mutation, and the
     // previous instance-level `let` was creating (and discarding) a fresh
     // autoconnected publisher each render.
-    /// Multi-view's slide on and off. A flat ease, not a spring: a spring
-    /// overshoots a `.move` transition past the screen edge and back, which
-    /// bares the content underneath for a frame.
-    static let multiViewSlide: Animation = .easeOut(duration: 0.32)
+    /// Multi-view's slide on and off, matched to a navigation push — which is
+    /// what the Settings sub-pages get from UIKit, and the pace the rest of the
+    /// app is measured against. 0.35s on an ease-in-out curve is that
+    /// animation. Not a spring: a spring overshoots a `.move` transition past
+    /// the screen edge and back, baring the content underneath for a frame.
+    static let multiViewSlide: Animation = .easeInOut(duration: 0.35)
 
     private static let refreshTimer = Timer.publish(every: 86400, on: .main, in: .common).autoconnect()
     var accentColor: Color { Color(hex: customAccentHex) ?? .blue }
@@ -259,6 +261,8 @@ struct NowPlayingMatchupArt: View {
     let game: ESPNEvent
     let awayCrest: UIImage?
     let homeCrest: UIImage?
+    /// The square this is drawn into; the crests size themselves from it.
+    var edge: CGFloat = 512
 
     private func teamColor(_ c: ESPNCompetitor?) -> Color {
         guard let hex = c?.team?.color, !hex.isEmpty,
@@ -311,8 +315,10 @@ struct NowPlayingMatchupArt: View {
                 Color.clear
             }
         }
-        .frame(width: 190, height: 190)
-        .shadow(color: .black.opacity(0.45), radius: 12, x: 0, y: 6)
+        // A share of the canvas rather than a fixed size, so the crests keep
+        // their proportions whatever the artwork is rendered at.
+        .frame(width: edge * 0.32, height: edge * 0.32)
+        .shadow(color: .black.opacity(0.45), radius: edge * 0.02, x: 0, y: edge * 0.01)
         .frame(maxWidth: .infinity)
     }
 }
