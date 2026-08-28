@@ -2793,22 +2793,30 @@ struct MiniPlayerView: SwiftUI.View {
 
 struct SwipeBackModifier: ViewModifier {
     let onBack: () -> Void
+    /// Off when the screen has nothing of its own to go back to. The strip is
+    /// a `highPriorityGesture` on the leading edge, so leaving it installed on
+    /// a screen that was PUSHED (Recordings, opened from Settings) beats
+    /// UIKit's interactive pop to the touch and then does nothing with it —
+    /// the page just sits there under your finger.
+    var isEnabled: Bool = true
+
     func body(content: Content) -> some View {
         ZStack(alignment: .leading) {
             content
-            
-            
-            Color.clear
-                .frame(width: 25)
-                .contentShape(Rectangle())
-                .highPriorityGesture(
-                    DragGesture()
-                        .onEnded { value in
-                            if value.translation.width > 60 {
-                                onBack()
+
+            if isEnabled {
+                Color.clear
+                    .frame(width: 25)
+                    .contentShape(Rectangle())
+                    .highPriorityGesture(
+                        DragGesture()
+                            .onEnded { value in
+                                if value.translation.width > 60 {
+                                    onBack()
+                                }
                             }
-                        }
-                )
+                    )
+            }
         }
     }
 }

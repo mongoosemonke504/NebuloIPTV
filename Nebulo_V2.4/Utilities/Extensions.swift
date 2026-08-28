@@ -223,3 +223,78 @@ final class DetailRouter: ObservableObject {
         cover.set(1 - travelled)
     }
 }
+
+/// Restores the native interactive pop (the edge swipe that follows your
+/// finger) inside a `NavigationStack` whose navigation bar is hidden.
+///
+/// The main stack hides its bar unconditionally — `.toolbar(.hidden, for:
+/// .navigationBar)` in `MainViewModifiers` — and Settings nests its own
+/// `NavigationStack` inside that content, so the sub-pages inherit the hidden
+/// bar. UIKit's default delegate for `interactivePopGestureRecognizer` refuses
+/// to begin while the bar is hidden, so the edge swipe never starts tracking:
+/// the page sits still under your finger and only reacts once SwiftUI's own
+/// fallback dismiss decides the drag counted. Handing the recognizer a
+/// permissive delegate is the standard fix.
+///
+/// The delegate only lets the gesture begin when there is actually something
+/// to pop. Clearing the delegate outright (the usual shortcut) lets a swipe
+/// start on the root page, which pops nothing and wedges the stack.
+fileprivate final class PopGestureDelegate: NSObject, UIGestureRecognizerDelegate {
+    weak var navigationController: UINavigationController?
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        (navigationController?.viewControllers.count ?? 0) > 1
+    }
+
+    /// The pages are lists and scroll views. Without this the scroll pan and
+    /// the edge pan both track and the page shears sideways while scrolling.
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        false
+    }
+}
+
+struct NavigationPopGestureUnlock: UIViewControllerRepresentable {
+    final class Coordinator {
+        /// Held strongly: `UIGestureRecognizer.delegate` is weak, and a
+        /// deallocated delegate reads as "no delegate", which is the
+        /// always-allow behaviour this type exists to avoid.
+        fileprivate let delegate = PopGestureDelegate()
+    }
+
+    final class Host: UIViewController {
+        var coordinator: Coordinator?
+
+        override func didMove(toParent parent: UIViewController?) {
+            super.didMove(toParent: parent)
+            adopt()
+        }
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            adopt()
+        }
+
+        /// `navigationController` resolves to the NEAREST enclosing stack, so
+        /// this must be planted inside the stack it means to fix.
+        private func adopt() {
+            guard let nav = navigationController,
+                  let recognizer = nav.interactivePopGestureRecognizer,
+                  let coordinator else { return }
+            coordinator.delegate.navigationController = nav
+            recognizer.delegate = coordinator.delegate
+            recognizer.isEnabled = true
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIViewController(context: Context) -> Host {
+        let host = Host()
+        host.coordinator = context.coordinator
+        host.view.isUserInteractionEnabled = false
+        return host
+    }
+
+    func updateUIViewController(_ uiViewController: Host, context: Context) {}
+}

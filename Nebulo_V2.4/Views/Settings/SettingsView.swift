@@ -148,6 +148,11 @@ struct SettingsView: View {
             // whenever the tab goes away instead.
             .onDisappear { if isSection { onSave() } }
             .sheet(isPresented: $showAddPlaylist) { AddPlaylistSheet(accountToEdit: accountToEdit) }
+            // Inside the stack, so it reaches THIS navigation
+            // controller rather than the main one outside it. The main
+            // stack hides its bar, these sub-pages inherit that, and a
+            // hidden bar is what stops the edge swipe tracking.
+            .background(NavigationPopGestureUnlock())
         }
     }
 

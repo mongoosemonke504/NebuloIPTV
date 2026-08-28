@@ -245,7 +245,11 @@ struct RecordingsView: View {
             } else {
                 onBack?()
             }
-        }))
+        },
+        // Opened from Settings there is no `onBack` and no overlay, so the
+        // strip would swallow the swipe and go nowhere. Stand down and let
+        // the navigation stack's own pop take it.
+        isEnabled: navigateToCategoryView || onBack != nil))
         .overlay(alignment: .bottom) {
             if let onSearch = onOpenSearch, !navigateToCategoryView {
                 FavoritesSearchPill(onTap: onSearch)
