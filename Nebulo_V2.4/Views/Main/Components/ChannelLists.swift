@@ -801,6 +801,26 @@ struct FavoriteBadge: View {
     static let cardWidth: CGFloat = 99
     static let cardHeight: CGFloat = 153
 
+    /// Stand-in for a missing crest: the first letters of the name, on the
+    /// team's own colour.
+    private var initialsTile: some View {
+        Text(Self.initials(from: name))
+            .font(.system(size: 22, weight: .black))
+            .foregroundStyle(.white)
+            .minimumScaleFactor(0.6)
+            .lineLimit(1)
+            .frame(width: 58, height: 58)
+            .background(Circle().fill(fill.opacity(0.9)))
+            .overlay(Circle().stroke(Color.white.opacity(0.18), lineWidth: 0.5))
+    }
+
+    private static func initials(from name: String) -> String {
+        let letters = name.split(separator: " ").prefix(2)
+            .compactMap { $0.first.map(String.init) }
+            .joined()
+        return letters.isEmpty ? "?" : letters.uppercased()
+    }
+
     private var fill: Color {
         guard let hex = colorHex, !hex.isEmpty,
               let c = Color(hex: hex.hasPrefix("#") ? hex : "#\(hex)") else {
@@ -816,12 +836,24 @@ struct FavoriteBadge: View {
             action()
         }) {
             ZStack(alignment: .bottom) {
-                CachedAsyncImage(urlString: logo ?? "", size: nil)
-                    .padding(20)
-                    .frame(width: Self.cardWidth, height: Self.cardHeight)
-                    // Lifted clear of the caption, the way the reference's
-                    // poster art sits above its genre line.
-                    .offset(y: -10)
+                Group {
+                    if let logo, !logo.isEmpty {
+                        CachedAsyncImage(urlString: logo,
+                                         size: CGSize(width: 58, height: 58),
+                                         failurePlaceholder: AnyView(initialsTile))
+                    } else {
+                        // No crest to draw. Without this the tile was empty
+                        // apart from its caption — a favourite that looked as
+                        // though it had never been added. A team always has
+                        // initials, and they go on its own colour.
+                        initialsTile
+                    }
+                }
+                .padding(20)
+                .frame(width: Self.cardWidth, height: Self.cardHeight)
+                // Lifted clear of the caption, the way the reference's
+                // poster art sits above its genre line.
+                .offset(y: -10)
 
                 // Legibility wash under the caption, so a pale kit colour
                 // can't swallow the name.
@@ -864,31 +896,55 @@ struct FavoriteTeamsShelf: View {
     let onTeam: (ESPNTeam, SportType?, String?) -> Void
     let onLeague: (SportType, String?, String) -> Void
 
+    /// One tile, with an id that is unique across the WHOLE row.
+    ///
+    /// This is why a favourite kept going missing here. The row was two
+    /// `ForEach`s over `enumerated()`, each keyed by `\.offset` — so the first
+    /// league and the first team both had identity `0` inside one lazy stack,
+    /// and SwiftUI drew one of them. Whichever list came second lost: teams
+    /// first meant the leagues disappeared, leagues first meant the teams did.
+    /// Prefixing the kind makes every tile distinct.
+    private struct Badge: Identifiable {
+        let id: String
+        let logo: String?
+        let name: String
+        let colorHex: String?
+        let open: () -> Void
+    }
+
+    private var badges: [Badge] {
+        // Leagues lead: there are only ever a handful, and with the teams ahead
+        // of them they sat off the right-hand edge of a row nobody scrolls.
+        let leagueBadges = leagues.enumerated().map { index, item in
+            Badge(id: "league-\(index)-\(item.sport.rawValue)-\(item.leagueLabel ?? "")",
+                  logo: LeagueLogoURL.url(sport: item.sport, leagueLabel: item.leagueLabel),
+                  name: item.displayName,
+                  colorHex: nil,
+                  open: { onLeague(item.sport, item.leagueLabel, item.displayName) })
+        }
+        let teamBadges = teams.enumerated().map { index, item in
+            Badge(id: "team-\(index)-\(item.team.id)",
+                  logo: item.team.logo,
+                  // A favourite whose catalog entry has not arrived yet has no
+                  // name of its own; its sport stands in until it does.
+                  name: item.team.shortDisplayName
+                      ?? item.team.displayName
+                      ?? item.sport?.rawValue
+                      ?? "Team",
+                  colorHex: item.team.color,
+                  open: { onTeam(item.team, item.sport, item.leagueLabel) })
+        }
+        return leagueBadges + teamBadges
+    }
+
     var body: some View {
         TouchPassingHorizontalScroll {
             LazyHStack(alignment: .top, spacing: 16) {
-                // Positional ids — a team id alone can repeat across sports.
-                // Leagues FIRST. This is one horizontal row, and with a
-                // few favourite teams ahead of them the leagues sat off the
-                // right-hand edge — present, but never seen without scrolling.
-                // There are only ever a handful of leagues, so they lead.
-                ForEach(Array(leagues.enumerated()), id: \.offset) { _, item in
-                    FavoriteBadge(
-                        logo: LeagueLogoURL.url(sport: item.sport, leagueLabel: item.leagueLabel),
-                        name: item.displayName,
-                        colorHex: nil
-                    ) {
-                        onLeague(item.sport, item.leagueLabel, item.displayName)
-                    }
-                }
-                ForEach(Array(teams.enumerated()), id: \.offset) { _, item in
-                    FavoriteBadge(
-                        logo: item.team.logo,
-                        name: item.team.shortDisplayName ?? item.team.displayName ?? "Team",
-                        colorHex: item.team.color
-                    ) {
-                        onTeam(item.team, item.sport, item.leagueLabel)
-                    }
+                ForEach(badges) { badge in
+                    FavoriteBadge(logo: badge.logo,
+                                  name: badge.name,
+                                  colorHex: badge.colorHex,
+                                  action: badge.open)
                 }
             }
             .padding(.horizontal)

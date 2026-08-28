@@ -420,6 +420,26 @@ struct TennisDetailContentView: View {
                 .modifier(WatchButtonGlass())
             }
             .buttonStyle(.plain)
+            // Press and hold for the full list instead of the app's pick.
+            // A plain long press, not a `.contextMenu`: these cards are shown
+            // over the app and their own scroll and dismiss gestures win the
+            // long press before a menu can open, so the menu never appeared.
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: 0.4)
+                    .onEnded { _ in
+                        ChannelViewModel.shared.triggerHaptic(.medium)
+                        let game = detail.game
+                        let (home, away) = game.searchTerms
+                        dismiss()
+                        viewModel.showStreamOptions(
+                            home: home,
+                            away: away,
+                            sport: .tennis,
+                            network: game.streamNetworkHint
+                        )
+                    }
+            )
+
 
             if isLive {
                 LiveActivityPillButton(

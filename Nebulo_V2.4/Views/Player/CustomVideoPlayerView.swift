@@ -674,6 +674,15 @@ struct CustomVideoPlayerView: SwiftUI.View {
                             currentEPGTitle: viewModel?.getCurrentProgram(for: active)?.title)
     }
 
+    /// The tour's emblem for a field event — the PGA Tour or Formula 1 mark
+    /// that LeagueLogoURL already resolves for the league rows.
+    nonisolated static func tourEmblemURL(for game: ESPNEvent) -> String? {
+        guard game.isFieldEvent else { return nil }
+        // A field event is either a race weekend (it carries a circuit) or a
+        // tournament; nothing else reaches this.
+        return LeagueLogoURL.url(sport: game.isRaceEvent ? .f1 : .golf, leagueLabel: nil)
+    }
+
     /// The crest URLs for a matchup, in the order the art draws them.
     static func crestURLs(for game: ESPNEvent) -> (away: String?, home: String?) {
         func url(_ competitor: ESPNCompetitor?) -> String? {
@@ -692,8 +701,24 @@ struct CustomVideoPlayerView: SwiftUI.View {
     @MainActor
     static func liveArtworkFromMemory(for game: ESPNEvent) -> (image: UIImage?, complete: Bool) {
         if let cached = artworkCache[game.id] { return (cached, true) }
-        let urls = crestURLs(for: game)
         let size = CGSize(width: Self.artworkEdge * 0.32, height: Self.artworkEdge * 0.32)
+        if let emblemURL = tourEmblemURL(for: game) {
+            let emblem = ImageCache.shared.getMemoryCache(forKey: emblemURL, size: size)
+            let renderer = ImageRenderer(
+                content: NowPlayingMatchupArt(game: game, awayCrest: nil, homeCrest: nil,
+                                              tourEmblem: emblem, edge: Self.artworkEdge)
+                    .frame(width: Self.artworkEdge, height: Self.artworkEdge)
+            )
+            renderer.scale = Self.artworkScale
+            guard let image = renderer.uiImage else { return (nil, false) }
+            if emblem != nil {
+                if artworkCache.count > 24 { artworkCache.removeAll() }
+                artworkCache[game.id] = image
+            }
+            return (image, emblem != nil)
+        }
+
+        let urls = crestURLs(for: game)
         let away = urls.away.flatMap { ImageCache.shared.getMemoryCache(forKey: $0, size: size) }
         let home = urls.home.flatMap { ImageCache.shared.getMemoryCache(forKey: $0, size: size) }
         let complete = (urls.away == nil || away != nil) && (urls.home == nil || home != nil)
@@ -721,8 +746,27 @@ struct CustomVideoPlayerView: SwiftUI.View {
     static func liveArtwork(for game: ESPNEvent) async -> UIImage? {
         if let cached = await MainActor.run(body: { artworkCache[game.id] }) { return cached }
 
-        let urls = crestURLs(for: game)
         let size = CGSize(width: Self.artworkEdge * 0.32, height: Self.artworkEdge * 0.32)
+        let emblemURL = tourEmblemURL(for: game)
+        if let emblemURL {
+            let emblem = await Self.crest(emblemURL, size: size)
+            return await MainActor.run {
+                let renderer = ImageRenderer(
+                    content: NowPlayingMatchupArt(game: game, awayCrest: nil, homeCrest: nil,
+                                                  tourEmblem: emblem, edge: Self.artworkEdge)
+                        .frame(width: Self.artworkEdge, height: Self.artworkEdge)
+                )
+                renderer.scale = Self.artworkScale
+                guard let image = renderer.uiImage else { return nil }
+                if emblem != nil {
+                    if artworkCache.count > 24 { artworkCache.removeAll() }
+                    artworkCache[game.id] = image
+                }
+                return image
+            }
+        }
+
+        let urls = crestURLs(for: game)
         // Both at once — one waiting on the other doubled the wait.
         async let awayLoad = Self.crest(urls.away, size: size)
         async let homeLoad = Self.crest(urls.home, size: size)

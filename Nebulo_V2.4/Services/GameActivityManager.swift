@@ -107,7 +107,9 @@ final class GameActivityManager: ObservableObject {
                 leagueName: leagueName,
                 homeLogoFile: homeLogoFile,
                 awayLogoFile: awayLogoFile,
-                sportKind: Self.surfaceKind(for: sport)
+                sportKind: Self.surfaceKind(for: sport),
+                isFieldEvent: game.isFieldEvent,
+                eventName: game.shortName
             )
 
             do {
@@ -219,6 +221,36 @@ final class GameActivityManager: ObservableObject {
         }
     }
 
+    /// The top of a field event's leaderboard, already formatted for display.
+    ///
+    /// A tournament or a race weekend has a field, not two sides — reporting it
+    /// as "player vs player" picks two entrants arbitrarily and says nothing
+    /// about the event. Racing reads its order from the session being run;
+    /// golf from the leaderboard itself.
+    private static func leaderboardLines(for game: ESPNEvent, limit: Int = 3) -> [String]? {
+        guard game.isFieldEvent else { return nil }
+
+        let entrants: [ESPNCompetitor]
+        if game.isRaceEvent {
+            let current = game.currentRaceSession
+            let session = current?.state == "in" ? current : (game.latestFinishedRaceSession ?? current)
+            entrants = session?.order ?? []
+        } else {
+            entrants = (game.allCompetitions.first?.competitors ?? [])
+                .sorted { ($0.order ?? 999) < ($1.order ?? 999) }
+        }
+        guard !entrants.isEmpty else { return nil }
+
+        return entrants.prefix(limit).enumerated().map { index, entrant in
+            let name = entrant.athlete?.shortName
+                ?? entrant.athlete?.displayName
+                ?? entrant.team?.shortDisplayName
+                ?? "—"
+            let score = entrant.score.map { $0.isEmpty ? "" : "  \($0)" } ?? ""
+            return "\(index + 1)  \(name)\(score)"
+        }
+    }
+
     private func contentState(for game: ESPNEvent) -> GameActivityAttributes.ContentState {
         let situation = game.allCompetitions.first?.situation
         // Football: "3rd & 4 · DAL 35" reads better with possession spot.
@@ -237,7 +269,8 @@ final class GameActivityManager: ObservableObject {
             balls: situation?.balls,
             strikes: situation?.strikes,
             outs: situation?.outs,
-            situationText: situationText
+            situationText: situationText,
+            leaderboard: Self.leaderboardLines(for: game)
         )
     }
 }

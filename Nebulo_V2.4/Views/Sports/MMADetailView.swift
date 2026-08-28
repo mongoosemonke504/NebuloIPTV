@@ -339,6 +339,26 @@ struct MMADetailContentView: View {
                 .modifier(WatchButtonGlass())
             }
             .buttonStyle(.plain)
+            // Press and hold for the full list instead of the app's pick.
+            // A plain long press, not a `.contextMenu`: these cards are shown
+            // over the app and their own scroll and dismiss gestures win the
+            // long press before a menu can open, so the menu never appeared.
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: 0.4)
+                    .onEnded { _ in
+                        ChannelViewModel.shared.triggerHaptic(.medium)
+                        let terms = detail.searchTerms
+                        let game = request.game
+                        dismiss()
+                        viewModel.showStreamOptions(
+                            home: terms.home,
+                            away: terms.away,
+                            sport: .mma,
+                            network: game.streamNetworkHint
+                        )
+                    }
+            )
+
 
             if isLive {
                 LiveActivityPillButton(game: request.game, leagueName: "UFC", sport: .mma)

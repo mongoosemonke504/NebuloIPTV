@@ -21,6 +21,10 @@ struct GameActivityAttributes: ActivityAttributes {
         var outs: Int?
         /// One-line situation for other sports (football down & distance).
         var situationText: String?
+        /// FIELD EVENTS (a golf tournament, a race weekend): a leaderboard has
+        /// no two sides, so it carries its top entrants instead of two scores.
+        /// Each line is already formatted — "1  Scheffler   −12".
+        var leaderboard: [String]?
     }
 
     var gameID: String
@@ -40,10 +44,16 @@ struct GameActivityAttributes: ActivityAttributes {
     /// Playing surface drawn faintly behind the card: "basketball",
     /// "soccer", "football", "hockey", "baseball", "tennis", "octagon".
     var sportKind: String?
+    /// True for a tournament or a race weekend. Those have a field rather than
+    /// two sides, so the card shows the event and its leaderboard instead of
+    /// two crests either side of a score.
+    var isFieldEvent: Bool = false
+    /// The event's own name, for field events — "BMW Championship".
+    var eventName: String?
 }
 
 extension GameActivityAttributes {
-    static let appGroupID = "group.personal.Nebulo-V2-4"
+    static let appGroupID = "group.Nebulo"
 
     /// Resolves a stored logo filename to its file URL in the shared
     /// container. Nil when the app group isn't provisioned.

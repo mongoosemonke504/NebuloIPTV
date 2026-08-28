@@ -8,6 +8,9 @@ struct AddPlaylistSheet: View {
     @State private var passwordInput = ""
     @State private var playlistNameInput = ""
     @State private var showError = false
+    /// True while the source is being checked, so the button can say so and
+    /// cannot be pressed twice.
+    @State private var isValidating = false
     @State private var errorMessage = ""
     @State private var selectedLoginType: LoginType = .xtream
 
@@ -93,15 +96,25 @@ struct AddPlaylistSheet: View {
                             
                             
                             Button(action: save) {
-                                Text(accountToEdit != nil ? "Save Changes" : "Add Playlist")
-                                    .font(.headline)
-                                    .foregroundColor(.black)
-                                    .frame(maxWidth: .infinity)
-                                    .frame(height: 54)
-                                    .background(Color.white)
-                                    .cornerRadius(16)
-                                    .shadow(color: .white.opacity(0.2), radius: 15)
+                                Group {
+                                    if isValidating {
+                                        HStack(spacing: 10) {
+                                            CustomSpinner(color: .black.opacity(0.7), lineWidth: 2, size: 18)
+                                            Text("Checking playlist…")
+                                        }
+                                    } else {
+                                        Text(accountToEdit != nil ? "Save Changes" : "Add Playlist")
+                                    }
+                                }
+                                .font(.headline)
+                                .foregroundColor(.black)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 54)
+                                .background(Color.white)
+                                .cornerRadius(16)
+                                .shadow(color: .white.opacity(0.2), radius: 15)
                             }
+                            .disabled(isValidating)
                             .padding(.top, 8)
                         }
                         .padding(24)
@@ -117,7 +130,7 @@ struct AddPlaylistSheet: View {
                         .foregroundStyle(.primary)
                 }
             }
-            .alert("Input Error", isPresented: $showError) {
+            .alert("Playlist Problem", isPresented: $showError) {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(errorMessage)
@@ -149,6 +162,28 @@ struct AddPlaylistSheet: View {
             guard !safe.isEmpty else { errorMessage = "Please enter a valid Playlist URL."; showError = true; return }
         }
         
+        // Ask the source for its channels BEFORE saving it. Details that are
+        // merely well-formed still save an account that loads nothing, and the
+        // app then sits on an empty home screen with no explanation.
+        isValidating = true
+        Task { @MainActor in
+            let failure = await PlaylistValidator.validate(type: selectedLoginType,
+                                                           url: safe,
+                                                           username: usernameInput,
+                                                           password: passwordInput)
+            isValidating = false
+            if let failure {
+                errorMessage = failure.errorDescription ?? "Couldn't load that playlist."
+                showError = true
+                return
+            }
+            commit(url: safe)
+        }
+    }
+
+    /// Writes the account. Only reached once the source has answered with
+    /// something to play.
+    private func commit(url safe: String) {
         if let existing = accountToEdit {
             var updated = existing
             updated.name = playlistNameInput.isEmpty ? "Playlist" : playlistNameInput

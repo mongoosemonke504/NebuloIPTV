@@ -41,6 +41,19 @@ struct GameActivityWidget: Widget {
                 }
                 DynamicIslandExpandedRegion(.center) {
                     VStack(spacing: 4) {
+                        if context.attributes.isFieldEvent {
+                            Text(context.attributes.eventName ?? context.attributes.leagueName)
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                            if let leader = context.state.leaderboard?.first {
+                                Text(leader)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(.white.opacity(0.8))
+                                    .lineLimit(1)
+                            }
+                        }
                         liveClock(context: context, size: 13)
                         situationLine(context.state)
                         Text(context.attributes.leagueName.uppercased())
@@ -109,6 +122,68 @@ struct LockScreenGameView: View {
     let context: ActivityViewContext<GameActivityAttributes>
 
     var body: some View {
+        if context.attributes.isFieldEvent {
+            fieldEventCard
+        } else {
+            matchupCard
+        }
+    }
+
+    /// A tournament or race weekend: the event, where it is up to, and who is
+    /// on top. There are no two sides here to put crests either side of.
+    private var fieldEventCard: some View {
+        ZStack {
+            LinearGradient(
+                colors: [color(from: context.attributes.awayColorHex).opacity(0.35), .clear],
+                startPoint: .topLeading, endPoint: .bottomTrailing
+            )
+
+            if let kind = context.attributes.sportKind {
+                SportSurfaceView(kind: kind)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(context.attributes.eventName ?? context.attributes.leagueName)
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Spacer(minLength: 8)
+                    liveClock(context: context, size: 12)
+                }
+
+                if let board = context.state.leaderboard, !board.isEmpty {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(Array(board.prefix(3).enumerated()), id: \.offset) { index, line in
+                            Text(line)
+                                .font(.system(size: index == 0 ? 14 : 12,
+                                              weight: index == 0 ? .bold : .medium))
+                                .foregroundStyle(.white.opacity(index == 0 ? 1 : 0.7))
+                                .lineLimit(1)
+                        }
+                    }
+                } else {
+                    Text(context.state.statusDetail)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .lineLimit(1)
+                }
+
+                Text(context.attributes.leagueName.uppercased())
+                    .font(.system(size: 10, weight: .semibold))
+                    .kerning(1.2)
+                    .foregroundStyle(.white.opacity(0.45))
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 20)
+        }
+        .frame(minHeight: 142)
+    }
+
+    private var matchupCard: some View {
         ZStack {
             HStack(spacing: 0) {
                 LinearGradient(

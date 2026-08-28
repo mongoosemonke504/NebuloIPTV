@@ -261,8 +261,13 @@ struct NowPlayingMatchupArt: View {
     let game: ESPNEvent
     let awayCrest: UIImage?
     let homeCrest: UIImage?
+    /// The tour's own emblem, for field events. The away/home crests are the
+    /// leaders' flags there, which is not what the event looks like.
+    var tourEmblem: UIImage? = nil
     /// The square this is drawn into; the crests size themselves from it.
     var edge: CGFloat = 512
+
+    private var isFieldEvent: Bool { game.isFieldEvent }
 
     private func teamColor(_ c: ESPNCompetitor?) -> Color {
         guard let hex = c?.team?.color, !hex.isEmpty,
@@ -273,6 +278,38 @@ struct NowPlayingMatchupArt: View {
     }
 
     var body: some View {
+        if isFieldEvent {
+            fieldEventArt
+        } else {
+            matchupArt
+        }
+    }
+
+    /// A tournament or a race weekend. There is no matchup here: the two
+    /// "competitors" are whoever happens to lead, and their flags say nothing
+    /// about the event. One emblem for the tour, on a plain ground.
+    private var fieldEventArt: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color(white: 0.16), Color(white: 0.07)],
+                startPoint: .topLeading, endPoint: .bottomTrailing
+            )
+
+            if let emblem = tourEmblem {
+                Image(uiImage: emblem)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: edge * 0.52, height: edge * 0.52)
+                    .shadow(color: .black.opacity(0.45), radius: edge * 0.02, x: 0, y: edge * 0.01)
+            } else {
+                Image(systemName: game.isRaceEvent ? "flag.checkered" : "figure.golf")
+                    .font(.system(size: edge * 0.34, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+            }
+        }
+    }
+
+    private var matchupArt: some View {
         ZStack {
             // Hard diagonal split: away's colour on the left, home's on the
             // right, meeting on a steep edge across the middle.
@@ -990,6 +1027,16 @@ struct StandardLayout: SwiftUI.View {
     @State private var cachedFavTeams: [(team: ESPNTeam, sport: SportType?, leagueLabel: String?)] = []
     @State private var cachedFavLeagues: [(sport: SportType, leagueLabel: String?, displayName: String)] = []
 
+    /// Favourite teams, resolved on the spot for the same reason as the
+    /// leagues below: through the cache, the shelf only changed when one of
+    /// several `.task(id:)` writes fired, and those keys are COUNTS — removing
+    /// one favourite and adding another leaves the count identical, so the
+    /// shelf kept showing the old pair. Resolving here is a walk over a handful
+    /// of ids and updates the moment a favourite changes.
+    private var homeFavTeams: [(team: ESPNTeam, sport: SportType?, leagueLabel: String?)] {
+        scoreViewModel.resolvedFavoriteTeams()
+    }
+
     /// Favourite leagues, resolved on the spot rather than read from a cache.
     ///
     /// There are only ever a handful of them — the work is a map over a few
@@ -1595,7 +1642,7 @@ struct StandardLayout: SwiftUI.View {
                             // 4. Favorites — every favourited team and league
                             //    as a poster tile. A team opens the full team
                             //    page; a league opens its own page.
-                            if selectedHomeGroup == nil && !(cachedFavTeams.isEmpty && homeFavLeagues.isEmpty) {
+                            if selectedHomeGroup == nil && !(homeFavTeams.isEmpty && homeFavLeagues.isEmpty) {
                                 VStack(alignment: .leading, spacing: 14) {
                                     NuvioSectionHeader(
                                         title: "Favorites",
@@ -1606,7 +1653,7 @@ struct StandardLayout: SwiftUI.View {
                                     }
 
                                     FavoriteTeamsShelf(
-                                        teams: cachedFavTeams,
+                                        teams: homeFavTeams,
                                         leagues: homeFavLeagues,
                                         onTeam: { team, sport, league in
                                             DetailRouter.shared.open(.team(team: team, sport: sport, leagueLabel: league))
@@ -1769,6 +1816,10 @@ struct StandardLayout: SwiftUI.View {
                     .task(id: "\(scoreViewModel.favoriteTeamIDs.count)-\(scoreViewModel.favoriteLeagueKeys.count)") {
                         cachedFavTeams = scoreViewModel.resolvedFavoriteTeams()
                         cachedFavLeagues = scoreViewModel.resolvedFavoriteLeagues()
+                        // A favourite that will not resolve means the cached
+                        // team catalog is missing its league — rebuild it now
+                        // rather than let the badge sit blank for a week.
+                        scoreViewModel.refreshCatalogIfFavoritesUnresolved()
                     }
                     // Header counts depend on the score maps, which stream in
                     // sport-by-sport after launch. `filteredGames.count` bumps

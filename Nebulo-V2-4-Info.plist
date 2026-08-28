@@ -88,11 +88,11 @@
 		</dict>
 	</dict>
 	<key>CFBundleIdentifier</key>
-	<string>personal.Nebulo-V2-4</string>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Nebulo_V2.4</string>
+	<string>Nebulo</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

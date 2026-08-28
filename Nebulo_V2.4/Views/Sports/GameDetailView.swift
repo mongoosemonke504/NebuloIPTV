@@ -1526,6 +1526,29 @@ struct GameDetailContentView: View {
                 .modifier(WatchButtonGlass())
             }
             .buttonStyle(.plain)
+            // Press and hold for the full list instead of the app's pick.
+            //
+            // A plain long press, NOT a `.contextMenu`: the card is presented
+            // over the app and its own scroll and dismiss gestures were winning
+            // the long press before the menu could ever open, so holding the
+            // button did nothing at all. `simultaneousGesture` runs alongside
+            // the button's own tap rather than competing with it.
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: 0.4)
+                    .onEnded { _ in
+                        ChannelViewModel.shared.triggerHaptic(.medium)
+                        let terms = isFieldEvent
+                            ? request.game.searchTerms
+                            : (home: detail.homeSide.name, away: detail.awaySide.name)
+                        dismiss()
+                        viewModel.showStreamOptions(
+                            home: terms.home,
+                            away: terms.away,
+                            sport: request.sport,
+                            network: request.game.streamNetworkHint
+                        )
+                    }
+            )
 
             if detail.statusState == "pre" {
                 // Reminder toggle — mirrors the app's chip language: glass

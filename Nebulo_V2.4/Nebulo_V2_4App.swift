@@ -109,12 +109,15 @@ struct Nebulo_V2_4App: App {
 
     init() {
         AppDefaults.register()
-        // The home shelves used to be UIScrollViews with this switched off,
-        // so a card highlighted the instant it was touched. Native SwiftUI
-        // scroll views default it on, which puts a ~150ms delay before a card
-        // reacts. Not an appearance selector, so this is best-effort — if it
-        // stops applying, taps get the system default rather than breaking.
-        UIScrollView.appearance().delaysContentTouches = false
+        // NOTE: `UIScrollView.appearance().delaysContentTouches = false` used to
+        // be set here, to restore the instant press feedback the old UIKit shelf
+        // wrapper had. It was costing far more than it bought: with the delay
+        // off, a list's own pan recogniser claims a touch immediately, and the
+        // screen-edge pop gesture then has to wait for that pan to fail before
+        // it can begin — which is why swiping back out of a Settings sub-page
+        // sat still for about a second before it started following the finger.
+        // Cards taking the system's standard highlight delay is the better
+        // trade.
         BackgroundManager.shared.register()
         // Re-arm at every launch too, not just on backgrounding — a reboot,
         // app update, or force-quit wipes pending BGTask submissions, and

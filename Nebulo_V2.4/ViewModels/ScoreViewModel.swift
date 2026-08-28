@@ -233,6 +233,35 @@ class ScoreViewModel: ObservableObject {
         Task { await fetchScores() }
     }
 
+    /// True once a forced catalog refresh has been asked for this session, so
+    /// an unresolvable favourite cannot start one on every render.
+    private var didForceCatalogRefresh = false
+
+    /// Re-fetches the team catalog when a favourite cannot be found in it.
+    ///
+    /// The catalog is only refreshed WEEKLY. A favourite whose league was
+    /// missing from the cached copy — a unit that failed the last time the
+    /// catalog was built — therefore resolves to a nameless, crestless stub for
+    /// up to seven days, which is a favourite that looks like it was never
+    /// added. A favourite that will not resolve is good evidence the catalog is
+    /// incomplete, so it is rebuilt rather than waited out.
+    func refreshCatalogIfFavoritesUnresolved() {
+        guard !didForceCatalogRefresh, !favoriteTeamIDs.isEmpty else { return }
+        let unresolved = resolvedFavoriteTeams().contains { entry in
+            (entry.team.displayName ?? entry.team.shortDisplayName) == nil
+                && (entry.team.logo ?? "").isEmpty
+        }
+        guard unresolved else { return }
+        didForceCatalogRefresh = true
+        let previous = teamCatalog
+        Task { [weak self] in
+            let entries = await TeamCatalogService.fetch(previous: previous)
+            guard let self, !entries.isEmpty else { return }
+            self.teamCatalog = entries
+            self.migrateLegacyTeamKeys()
+        }
+    }
+
     private func loadTeamCatalog() {
         let cached = TeamCatalogService.loadCached()
         if let cached {
@@ -608,11 +637,20 @@ class ScoreViewModel: ObservableObject {
                         if let secs = sections { newSections[sport] = secs }
                     }
                     await MainActor.run {
+                        // An EMPTY result never replaces games we already have.
+                        // A feed that answers with nothing — a blip, a rate
+                        // limit, a scoreboard between days — used to wipe that
+                        // sport until the next refresh, which is games vanishing
+                        // and having to wait for them to come back. Keeping the
+                        // last known list means the screen always shows the most
+                        // recent thing the app actually knows.
                         for (sport, events) in newGames {
+                            if events.isEmpty, !(self.masterGames[sport] ?? []).isEmpty { continue }
                             self.masterGames[sport] = events
                             self.filteredGames[sport] = events
                         }
                         for (sport, secs) in newSections {
+                            if secs.isEmpty, !(self.masterSectionsMap[sport] ?? []).isEmpty { continue }
                             self.masterSectionsMap[sport] = secs
                             self.filteredSectionsMap[sport] = secs
                         }
@@ -732,12 +770,21 @@ class ScoreViewModel: ObservableObject {
 
     /// Recompute `allLiveGames` from the current `filteredGames` /
     /// `filteredSectionsMap`. Call after either of those publishes.
+    /// Whether a sport is one the Sports hub actually offers.
+    ///
+    /// The hub's chips are `sportTabOrder` minus the hidden ones, so a sport
+    /// missing from that order has no chip at all — and used to turn up in the
+    /// All list anyway, since that only checked the hidden set.
+    func isSportVisible(_ sport: SportType) -> Bool {
+        !hiddenSportTabs.contains(sport) && sportTabOrder.contains(sport)
+    }
+
     private func recomputeLiveGames() {
         var pool: [ESPNEvent] = []
-        for (sport, games) in filteredGames where !hiddenSportTabs.contains(sport) {
+        for (sport, games) in filteredGames where isSportVisible(sport) {
             pool.append(contentsOf: games)
         }
-        for (sport, sections) in filteredSectionsMap where !hiddenSportTabs.contains(sport) {
+        for (sport, sections) in filteredSectionsMap where isSportVisible(sport) {
             for section in sections { pool.append(contentsOf: section.games) }
         }
         // Fresh scores in hand — push them into any running Live Activities.

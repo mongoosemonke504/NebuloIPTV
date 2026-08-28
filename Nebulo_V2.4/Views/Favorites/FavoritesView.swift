@@ -1269,23 +1269,23 @@ struct FavoriteLeagueRow: View {
         Button {
             guard SwipeTapGuard.tapsAllowed else { return }
             ChannelViewModel.shared.triggerSelectionHaptic()
-            // A tournament or race weekend this series is running IS what the
-            // row is showing, so that is what the row opens. The league page —
-            // calendar, championships — is on the long press.
-            if let event = fieldEvent, let onOpenLive {
-                onOpenLive(event)
-            } else {
-                onTap()
-            }
+            // The league's own page, always — the general view of the series
+            // rather than whichever event happens to be on. That page opens on
+            // its Live tab when something is running, so the tournament card is
+            // one tap further and nothing is lost.
+            onTap()
         } label: {
             rowBody
         }
         .buttonStyle(.plain)
 
         .contextMenu {
-            if fieldEvent != nil {
-                Button(action: onTap) {
-                    Label("League Page", systemImage: "calendar")
+            if let event = fieldEvent, let onOpenLive {
+                Button {
+                    onOpenLive(event)
+                } label: {
+                    Label(event.isLiveNow ? "Watch \(event.shortName)" : event.shortName,
+                          systemImage: "sportscourt")
                 }
             }
             Button(action: onReorder) {
