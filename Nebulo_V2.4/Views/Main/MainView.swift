@@ -545,6 +545,20 @@ struct MainViewModifiers: ViewModifier {
     let playAction: (StreamChannel) -> Void
     var zoomNS: Namespace.ID? = nil
 
+    /// What the user is typing into the Rename alert.
+    ///
+    /// Deliberately LOCAL. It used to bind straight to `viewModel.renameInput`,
+    /// which is `@Published`: every keystroke republished the view model and
+    /// re-evaluated this whole modifier, alert content included — and SwiftUI
+    /// rebuilding an alert's body out from under a live `TextField` throws the
+    /// edit away. The field looked like it accepted the new name, then Save
+    /// wrote back whatever `renameInput` still held, which was the ORIGINAL
+    /// name. Renaming a channel appeared to do nothing at all.
+    ///
+    /// Kept here, typing touches no published state, and Save hands the final
+    /// string over once.
+    @State private var renameDraft: String = ""
+
     /// The search field's text lives HERE (the field is part of the bottom
     /// bar so it can morph out of the dock); SearchView receives a binding
     /// and keeps its own debounce.
@@ -809,11 +823,16 @@ struct MainViewModifiers: ViewModifier {
             }
             .alert("No Streams Found", isPresented: showNoStreamsAlert) { Button("OK", role: .cancel) { } } message: { Text("No streams were found. Please search for the channel manually.") }
             .alert("Rename", isPresented: showRenameAlert) {
-                TextField("New Name", text: renameInput)
+                TextField("New Name", text: $renameDraft)
                 Button("Save") {
-                    viewModel.confirmRename()
+                    viewModel.confirmRename(with: renameDraft)
                 }
                 Button("Cancel", role: .cancel) {}
+            }
+            // Seed the field from whatever opened the alert (the channel's or
+            // category's current name), once, as it appears.
+            .onChangeCompat(of: viewModel.showRenameAlert) { showing in
+                if showing { renameDraft = viewModel.renameInput }
             }
             .alert("Support Project", isPresented: $showSupportAlert) {
                 Button("Donate") { if let url = URL(string: "https://buymeacoffee.com/mongoosemonke") { UIApplication.shared.open(url) } }
@@ -971,7 +990,10 @@ struct StandardLayout: SwiftUI.View {
     @State private var channelsByCategory: [Int: [StreamChannel]] = [:]
 
     private var categoryShelfCacheKey: String {
-        "\(viewModel.channels.count)|\(viewModel.hiddenIDs.count)"
+        // channelRevision included because a rename changes a channel's NAME
+        // without changing how many there are — and these shelves hold copies
+        // of the structs, so without it they keep rendering the old name.
+        "\(viewModel.channels.count)|\(viewModel.hiddenIDs.count)|\(viewModel.channelRevision)"
     }
 
     private func computeChannelsByCategory() -> [Int: [StreamChannel]] {
@@ -1780,7 +1802,7 @@ struct StandardLayout: SwiftUI.View {
                         setGroupedCategories(groupedCategories)
                         homeRows = computeHomeRows()
                     }
-                    .task(id: viewModel.channels.count) {
+                    .task(id: "\(viewModel.channels.count)-\(viewModel.channelRevision)") {
                         // Build the id → channel lookup. Done off the body so
                         // recent/featured filtering can use O(1) lookups.
                         var map = [Int: StreamChannel]()
@@ -2076,14 +2098,14 @@ struct StandardLayout: SwiftUI.View {
         let ids = viewModel.featuredChannels.map { String($0.id) }.joined(separator: ",")
         let live = scoreViewModel.allLiveGameIDsKey
         let favCount = scoreViewModel.favoriteTeamIDs.count + scoreViewModel.favoriteLeagueKeys.count
-        return "\(g)|\(ids)|\(live)|\(favCount)"
+        return "\(g)|\(ids)|\(live)|\(favCount)|\(viewModel.channelRevision)"
     }
 
     /// Cache key for `cachedRecent`. Triggers a refresh when the user's
     /// recent list mutates or when the global channel list reloads.
     private var recentCacheKey: String {
         viewModel.recentIDs.map { String($0) }.joined(separator: ",")
-            + "|\(viewModel.channels.count)"
+            + "|\(viewModel.channels.count)|\(viewModel.channelRevision)"
     }
 
     /// Featured carousel content for the current chip selection. Called only
@@ -2559,7 +2581,7 @@ struct SidebarLayout: SwiftUI.View {
                 idToChannel = map
             }
         }
-        .task(id: viewModel.channels.count) {
+        .task(id: "\(viewModel.channels.count)-\(viewModel.channelRevision)") {
             var map = [Int: StreamChannel]()
             map.reserveCapacity(viewModel.channels.count)
             for c in viewModel.channels { map[c.id] = c }

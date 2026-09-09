@@ -33,6 +33,58 @@ private enum SportsTab: Hashable {
     }
 }
 
+/// One tempo for every fold in the hub, so a league, a tennis draw and a
+/// sport in the All tab all open and close identically.
+enum SectionFold {
+    static let animation: Animation = .easeInOut(duration: 0.28)
+}
+
+/// The rows under a collapsible section header.
+///
+/// Folding is ONE view appearing and disappearing, not N rows each running
+/// their own transition — a `ForEach` of a dozen game rows animating
+/// individually read as a flicker rather than a movement.
+///
+/// The motion is a roll-up, and deliberately only that: the container's
+/// height animates to nothing while `clipped()` wipes the rows away towards
+/// their header, and they fade as it passes over them. An earlier version
+/// also slid the content with `.move(edge: .top)`, which translates the whole
+/// section by its OWN height — on a twelve-game league that is a long, fast
+/// jump running at the same time as the collapse, and two motions at once is
+/// what made it look snatched. The rows now hold still and are simply
+/// revealed or covered, which is what a disclosure should look like.
+private struct CollapsibleSection<Content: View>: View {
+    let collapsed: Bool
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        VStack(spacing: 12) {
+            if !collapsed {
+                content()
+                    .transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // Anchored to the TOP so the height animation eats the section from
+        // the bottom up, towards its header, rather than from the middle out.
+        .frame(maxHeight: collapsed ? 0 : nil, alignment: .top)
+        .clipped()
+    }
+}
+
+/// Slides the floating header up with the page it belongs to, stopping once
+/// the chip row reaches the top. A leaf: it observes the box, the hub does
+/// not, so a scroll frame re-renders this modifier and nothing else.
+private struct HubHeaderShift: ViewModifier {
+    @ObservedObject var offset: ScrollProgress
+    /// How far it may travel — the height of the band above the chips.
+    let limit: CGFloat
+
+    func body(content: Content) -> some View {
+        content.offset(y: -min(max(offset.value, 0), max(limit, 0)))
+    }
+}
+
 /// Watches a hub's visibility flag without pulling the hub's own body into it:
 /// a zero-size view that observes the box and reports transitions.
 private struct HubActivationProbe: View {
@@ -102,83 +154,26 @@ struct SportsHubView: View {
         [.all] + orderedSports.map { SportsTab.sport($0) }
     }
 
-    /// True while a slide transition is in flight. Tab changes are ignored
-    /// during this window: interrupting a `.move` transition mid-animation
-    /// can leave the incoming view stuck offscreen (a fully blank section)
-    /// — rapid swipes must wait ~0.3s for the previous slide to settle.
-    @State private var isSliding = false
+    /// Live vertical scroll offset of the ACTIVE page, for the floating
+    /// header to ride on. A LEAF, so a scroll frame moves the header and
+    /// re-renders nothing else.
+    @State private var headerScroll = ScrollProgress()
+    /// Measured heights of the two header bands. `@State` (unlike
+    /// the live scroll offset) because each page reserves exactly this much
+    /// space at its top, so a change has to lay the pages out again — but
+    /// they only change when the header itself resizes, never while scrolling.
+    @State private var statsHeight: CGFloat = 96
+    @State private var chipRowHeight: CGFloat = 44
 
-    /// Which side the incoming games list enters from. `true` when moving to
-    /// a chip further right ("All" → NFL → …), so content slides in from the
-    /// trailing edge like a page turn. Set BEFORE the animated tab change so
-    /// the transition reads the correct direction.
-    @State private var slideFromTrailing = true
 
-    /// One tab switch per drag: set the moment the swipe fires (mid-drag,
-    /// in `.onChanged`), cleared when the finger lifts.
-    @State private var swipeConsumed = false
 
-    /// Global frame of the pinned chip row. Drags starting inside it scroll
-    /// the chips instead of flipping the page.
-    @State private var chipBarFrame: CGRect = .zero
-
-    /// Set the instant a drag reads as horizontal, which disables the hub's
-    /// vertical scroll for the rest of that gesture — a sideways swipe then
-    /// travels purely sideways instead of also dragging the page up or down.
-    /// A leaf box, so flipping it re-renders the scroll modifier alone.
-    @State private var scrollLock = FlagBox()
-
-    /// Offset-based scroll control for the hub's single scroll view.
-    /// `scrollTo(id:)` was a silent no-op whenever the target row wasn't
-    /// materialised by the LazyVStack (always the case when scrolled deep),
-    /// so tab switches never actually reset — ScrollPosition works on raw
-    /// offsets and is independent of lazy materialisation.
-    @State private var hubScrollPos = ScrollPosition()
-
-    /// Measured height of the stats-header block (title + counts + padding).
-    /// Scrolling to exactly this offset lands on the "compact" state where
-    /// the chip bar pins. Class box: layout writes must not re-render.
-    final class HubMetrics {
-        var headerHeight: CGFloat = 96
-        /// Live vertical scroll offset. Kept here (not in @State) for the same
-        /// reason as headerHeight: it updates every scroll frame and must not
-        /// re-render the hub.
-        var scrollY: CGFloat = 0
-    }
-    @State private var hubMetrics = HubMetrics()
-
-    /// Central tab switch: derives the slide direction from chip order and
-    /// swaps with a flat easeOut — deliberately no spring, no bounce.
-    /// The page snaps INSTANTLY (no animation) to the new tab's top before
-    /// the slide begins. If the header was already collapsed (user was
-    /// scrolled down), it lands on the compact anchor instead so the chip
-    /// bar stays pinned rather than the big title reappearing.
+    /// Central tab switch, used by the chip row. The pager animates the page
+    /// move itself, so this is only a selection change now — no manual slide
+    /// direction, and no vertical reset: each page keeps its own scroll
+    /// position, which is the thing the old shared scroll could not do.
     private func selectTab(_ newTab: SportsTab) {
-        guard newTab != sportsTab, !isSliding else { return }
-        let tabs = orderedTabs
-        let oldIdx = tabs.firstIndex(of: sportsTab) ?? 0
-        let newIdx = tabs.firstIndex(of: newTab) ?? 0
-        slideFromTrailing = newIdx > oldIdx
-        isSliding = true
-        // Land no lower than the compact anchor (chips pinned, big title gone)
-        // and otherwise stay exactly where we are, so the page never moves
-        // vertically while it's sliding horizontally.
-        //
-        // This used to key off statsProgress >= 0.99, which saturates at 40pt
-        // scrolled while the compact anchor sits at headerHeight (~96pt): every
-        // switch between those two points yanked the page DOWN to 96, and every
-        // switch below 40pt yanked it UP to 0. That vertical jump landing on
-        // the same frame as the horizontal slide was the jank.
-        let targetY = min(hubMetrics.scrollY, hubMetrics.headerHeight)
-        var t = Transaction()
-        t.disablesAnimations = true
-        withTransaction(t) {
-            hubScrollPos.scrollTo(y: targetY)
-        }
-        withAnimation(.easeOut(duration: 0.25)) { sportsTab = newTab }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            isSliding = false
-        }
+        guard newTab != sportsTab else { return }
+        withAnimation(.easeInOut(duration: 0.25)) { sportsTab = newTab }
     }
 
     /// Warms the crests for the chips either side of the current one.
@@ -205,9 +200,6 @@ struct SportsHubView: View {
     /// What used to run in `onAppear`: now on every arrival at the tab, since
     /// the hub itself only appears once.
     private func arrive() {
-        // No swipe can be in flight on arrival, so never inherit a frozen
-        // scroll from a gesture that was cancelled on the way out.
-        scrollLock.set(false)
         // The remembered tab was restored without knowing which sports are
         // visible (that needs the view model). Drop back to All if it names
         // a sport the user has since hidden, so the hub can't open on a tab
@@ -224,162 +216,157 @@ struct SportsHubView: View {
         warmAdjacentTabs()
     }
 
-    /// Steps to the previous/next chip. Driven by the horizontal swipe.
-    /// No haptic here — the buzz on every page swipe broke the immersion;
-    /// haptics stay on deliberate chip taps only.
-    private func advanceSportsTab(_ delta: Int) {
+    /// One sport tab's list.
+    @ViewBuilder
+    private func pageContent(for tab: SportsTab) -> some View {
+        Group {
+            if tab == .all {
+                AllLiveSportsView(
+                    scoreViewModel: scoreViewModel,
+                    viewModel: viewModel,
+                    accentColor: accentColor
+                )
+            } else if case .sport(let s) = tab {
+                SportGamesListView(
+                    sport: s,
+                    scoreViewModel: scoreViewModel,
+                    viewModel: viewModel
+                )
+            }
+        }
+    }
+
+    /// Whether this tab's list should actually be BUILT.
+    ///
+    /// The pager keeps every page alive, and a games list is not a cheap view
+    /// — fifteen sports' worth mounted at once is a lot of rows nobody is
+    /// looking at. Only the current page and the two you can reach from it
+    /// (which is all an interactive swipe can ever reveal) get real content;
+    /// the rest are empty until you come near them.
+    private func isMounted(_ tab: SportsTab) -> Bool {
         let tabs = orderedTabs
-        guard let idx = tabs.firstIndex(of: sportsTab) else { return }
-        let next = idx + delta
-        guard tabs.indices.contains(next) else { return }
-        selectTab(tabs[next])
+        guard let here = tabs.firstIndex(of: sportsTab),
+              let there = tabs.firstIndex(of: tab) else { return tab == sportsTab }
+        return abs(here - there) <= 1
+    }
+
+    /// One sport tab as its own independently scrolling page.
+    ///
+    /// The spacer at the top is the space the floating header occupies. The
+    /// header is NOT part of this scroll any more — it sits above every page
+    /// so it can stay put while the pages move sideways underneath it.
+    private func pageScroll(for tab: SportsTab) -> some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                Color.clear
+                    .frame(height: statsHeight + chipRowHeight)
+                if isMounted(tab) {
+                    pageContent(for: tab)
+                        .padding(.top, 10)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        // Read straight off this scroll view rather than through a preference.
+        // A paged TabView hosts each page in its own controller, and
+        // preferences do not reliably cross that boundary — the header would
+        // simply stop collapsing, with nothing to show why. This callback is
+        // local to the scroll view that produced it.
+        .onScrollGeometryChange(for: CGFloat.self) { geo in
+            geo.contentOffset.y + geo.contentInsets.top
+        } action: { _, y in
+            // Only the page you are on moves the header; the neighbours are
+            // mounted and reporting too.
+            guard tab == sportsTab else { return }
+            let scrolled = max(0, y)
+            headerScroll.set(scrolled)
+            statsProgress.set(min(max(scrolled / 40, 0), 1))
+        }
+    }
+
+    /// Title, stats and chips, drawn ABOVE the pager rather than inside it.
+    ///
+    /// It rides up with the active page as that page scrolls, until the chip
+    /// row reaches the top of the screen and stops — which is what the pinned
+    /// section header used to do when everything shared one scroll view. The
+    /// difference is that it no longer travels sideways with the pages, so a
+    /// swipe moves the lists and leaves the chrome alone.
+    private var headerChrome: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            statsHeader
+                .padding(.horizontal, 20)
+                .padding(.bottom, 10)
+                .scrollProgressOpacity(statsProgress) { 1 - Double($0) }
+                .background(
+                    GeometryReader { g in
+                        Color.clear
+                            .onAppear { statsHeight = g.size.height }
+                            .onChangeCompat(of: g.size.height) { statsHeight = $0 }
+                    }
+                )
+
+            pinnedChipHeader
+                .background(
+                    GeometryReader { g in
+                        Color.clear
+                            .onAppear { chipRowHeight = g.size.height }
+                            .onChangeCompat(of: g.size.height) { chipRowHeight = $0 }
+                    }
+                )
+        }
+        // Rides up by however far the page has scrolled, but never past the
+        // point where the chips reach the top. A LEAF reads the live offset,
+        // so a scroll frame moves this and re-renders nothing else.
+        .modifier(HubHeaderShift(offset: headerScroll, limit: statsHeight))
     }
 
     var body: some View {
         ZStack(alignment: .top) {
-            // One scroll for the whole screen, exactly like Recordings: the
-            // big "Sports" title is scroll content and physically scrolls
-            // away with the games. The chip selector rides in a PINNED
-            // section header — it scrolls as part of the page but sticks at
-            // the top once it reaches it, so it's always available.
-            ScrollView(showsIndicators: false) {
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    statsHeader
-                        .padding(.horizontal, 20)
-                        .padding(.bottom, 10)
-                        .scrollProgressOpacity(statsProgress) { 1 - Double($0) }
-                        .background(ScrollOffsetProbe(space: "sportsScroll", id: "sports"))
-                        // Height of the header block == the compact scroll
-                        // offset used by selectTab's reset.
-                        .background(
-                            GeometryReader { g in
-                                Color.clear
-                                    .onAppear { hubMetrics.headerHeight = g.size.height }
-                                    .onChangeCompat(of: g.size.height) { hubMetrics.headerHeight = $0 }
-                            }
-                        )
+            // The pages are SIBLINGS in a real pager now, not one slot in a
+            // shared scroll view swapped by identity.
+            //
+            // That shared scroll is what made a good swipe impossible: there
+            // was only ever ONE page in the tree, so showing the next one
+            // meant rendering a stand-in copy over the top and hand-animating
+            // both — which never lines up, because a stand-in cannot
+            // reproduce a scrolled page's position, height or scroll state.
+            // Every fix for one artefact produced another.
+            //
+            // `TabView(.page)` is UIPageViewController underneath: real
+            // interactive paging, both pages genuinely on screen and tracking
+            // the finger, correct rubber-banding at the ends, and the
+            // release physics for free. Each page also keeps its own scroll
+            // position, which the single scroll could not do at all.
+            TabView(selection: $sportsTab) {
+                ForEach(orderedTabs, id: \.self) { tab in
+                    pageScroll(for: tab)
+                        .tag(tab)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
 
-                    Section(header: pinnedChipHeader) {
-                        // ZStack so the outgoing and incoming lists overlap
-                        // during the directional slide instead of stacking
-                        // vertically. `.id(sportsTab)` gives each sport's
-                        // list distinct identity so the transition fires.
-                        ZStack(alignment: .top) {
-                            Group {
-                                if sportsTab == .all {
-                                    AllLiveSportsView(
-                                        scoreViewModel: scoreViewModel,
-                                        viewModel: viewModel,
-                                        accentColor: accentColor
-                                    )
-                                } else if case .sport(let s) = sportsTab {
-                                    SportGamesListView(
-                                        sport: s,
-                                        scoreViewModel: scoreViewModel,
-                                        viewModel: viewModel
-                                    )
-                                }
-                            }
-                            .id(sportsTab)
-                            // Resolves the whole page's geometry as ONE unit
-                            // while it slides. Without this a child whose own
-                            // layout settles mid-transition — a logo that has
-                            // just finished loading and now has a size — is
-                            // positioned against the page's FINAL geometry
-                            // rather than its animating one, so it sits still
-                            // while everything around it travels. That is what
-                            // stops the switch reading as a single movement.
-                            .geometryGroup()
-                            // Same slide as the Favorites section: move +
-                            // opacity, NO opaque backdrop. The backdrop's dark
-                            // fill clashed with the header gradient and the
-                            // nebula behind the games; the fade keeps the
-                            // brief overlap of outgoing/incoming lists subtle
-                            // instead.
-                            .transition(.asymmetric(
-                                insertion: .move(edge: slideFromTrailing ? .trailing : .leading).combined(with: .opacity),
-                                removal: .move(edge: slideFromTrailing ? .leading : .trailing).combined(with: .opacity)
-                            ))
-                        }
-                        .padding(.top, 10)
-                    }
+            headerChrome
+        }
+        // Sync selectedSport when the chip selection changes so the
+        // existing fetch/pre-resolution observers fire correctly.
+        // Deferred past the slide: the observers kick off score fetches,
+        // channel pre-resolution and crest prefetches — running those in
+        // the same frames as the slide animation is what made the chip
+        // switch look choppy.
+        .onChangeCompat(of: sportsTab) { tab in
+            // Remembered here rather than in selectTab, so a swipe between
+            // tabs is recorded the same as a chip tap.
+            UserDefaults.standard.set(tab.storedValue, forKey: SportsTab.storageKey)
+            // The chips this one can now be swiped to, warmed while the
+            // slide that just landed here is still finishing.
+            warmAdjacentTabs()
+            guard case .sport(let s) = tab else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                guard sportsTab == tab else { return }
+                if s != scoreViewModel.selectedSport {
+                    scoreViewModel.selectedSport = s
                 }
-            }
-            .coordinateSpace(name: "sportsScroll")
-            .scrollPosition($hubScrollPos)
-            // Frozen for the duration of a horizontal swipe (see scrollLock).
-            .scrollLocked(scrollLock)
-            .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
-                guard let y = offsets["sports"] else { return }
-                hubMetrics.scrollY = max(0, -y)
-                statsProgress.set(min(max(-y / 40, 0), 1))
-            }
-            // Horizontal swipe anywhere on the list turns the page. Fires
-            // DURING the drag the moment it clearly reads as a deliberate
-            // horizontal swipe — the slide itself is the manual two-page
-            // animation (both sports visible), it just doesn't track the
-            // finger. Drags that start on the chip row scroll the chips
-            // instead, and left-edge swipes stay reserved for back
-            // navigation.
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 10, coordinateSpace: .global)
-                    .onChanged { value in
-                        let dx = value.translation.width
-                        let dy = value.translation.height
-                        // As soon as the drag reads as horizontal, open the
-                        // tap-suppression window so the game row under the
-                        // finger doesn't ALSO fire on release.
-                        if abs(dx) > abs(dy) * 1.4 {
-                            SwipeTapGuard.suppress()
-                        }
-                        // ...and FREEZE the vertical scroll, so a sideways
-                        // swipe travels purely sideways instead of also
-                        // dragging the page up or down. Drags on the chip row
-                        // (which scroll the chips) and left-edge back swipes
-                        // are left alone. A drag that turns decisively VERTICAL
-                        // before a page flip releases the lock again, so this
-                        // can never strand the page unscrollable.
-                        if value.startLocation.x > 44,
-                           !chipBarFrame.contains(value.startLocation) {
-                            if abs(dx) > abs(dy) * 1.4 {
-                                scrollLock.set(true)
-                            } else if !swipeConsumed, abs(dy) > abs(dx) * 1.4 {
-                                scrollLock.set(false)
-                            }
-                        }
-                        guard !swipeConsumed, !isSliding,
-                              value.startLocation.x > 44,
-                              !chipBarFrame.contains(value.startLocation),
-                              abs(dx) > 38, abs(dx) > abs(dy) * 1.4 else { return }
-                        swipeConsumed = true
-                        advanceSportsTab(dx < 0 ? 1 : -1)
-                    }
-                    .onEnded { _ in
-                        swipeConsumed = false
-                        scrollLock.set(false)
-                    }
-            )
-            // Sync selectedSport when the chip selection changes so the
-            // existing fetch/pre-resolution observers fire correctly.
-            // Deferred past the slide: the observers kick off score fetches,
-            // channel pre-resolution and crest prefetches — running those in
-            // the same frames as the slide animation is what made the chip
-            // switch look choppy.
-            .onChangeCompat(of: sportsTab) { tab in
-                // Remembered here rather than in selectTab, so a swipe between
-                // tabs is recorded the same as a chip tap.
-                UserDefaults.standard.set(tab.storedValue, forKey: SportsTab.storageKey)
-                // The chips this one can now be swiped to, warmed while the
-                // slide that just landed here is still finishing.
-                warmAdjacentTabs()
-                guard case .sport(let s) = tab else { return }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    guard sportsTab == tab else { return }
-                    if s != scoreViewModel.selectedSport {
-                        scoreViewModel.selectedSport = s
-                    }
-                    scoreViewModel.prefetchLogos(for: s)
-                }
+                scoreViewModel.prefetchLogos(for: s)
             }
         }
         .overlay(alignment: .bottom) {
@@ -520,7 +507,6 @@ struct SportsHubView: View {
             Task { await scoreViewModel.fetchScores() }
         }
         .padding(.vertical, 2)
-        .captureGlobalFrame { chipBarFrame = $0 }
         // Home-style dark gradient. As part of the pinned header it renders
         // ABOVE the scrolling games (dimming them as they pass under) but
         // BEHIND the chips themselves, which stay at full contrast. The tall
@@ -761,9 +747,16 @@ struct SportGamesListView: View {
             ForEach(group.draws, id: \.league) { draw in
                 let remaining = draw.games.filter { !scoreViewModel.pinnedGameIDs.contains($0.id) }
                 if !remaining.isEmpty {
-                    subCategoryHeader(tennisDrawTitle(draw.league))
-                    ForEach(remaining) { game in
-                        scoreButton(game: game, sport: sport)
+                    // Keyed on the FULL draw label, not the display title —
+                    // two tournaments both running a "Singles" draw must fold
+                    // independently.
+                    subCategoryHeader(tennisDrawTitle(draw.league),
+                                      key: draw.league,
+                                      count: remaining.count)
+                    CollapsibleSection(collapsed: scoreViewModel.isSectionCollapsed(draw.league)) {
+                        ForEach(remaining) { game in
+                            scoreButton(game: game, sport: sport)
+                        }
                     }
                 }
             }
@@ -796,20 +789,44 @@ struct SportGamesListView: View {
     private func soccerSection(_ s: SoccerGameSection) -> some View {
         let remainingGames = s.games.filter { !scoreViewModel.pinnedGameIDs.contains($0.id) }
         if !remainingGames.isEmpty {
-            Section(header: leagueHeader(s.league)) {
-                ForEach(remainingGames) { game in
-                    scoreButton(game: game, sport: sport)
+            Section(header: leagueHeader(s.league, count: remainingGames.count)) {
+                CollapsibleSection(collapsed: scoreViewModel.isSectionCollapsed(s.league)) {
+                    ForEach(remainingGames) { game in
+                        scoreButton(game: game, sport: sport)
+                    }
                 }
             }
         }
     }
 
-    private func subCategoryHeader(_ title: String) -> some View {
-        Text(title.uppercased())
-            .font(.system(size: 10, weight: .black))
-            .foregroundStyle(.tertiary)
+    private func subCategoryHeader(_ title: String, key: String? = nil, count: Int = 0) -> some View {
+        let foldKey = key ?? title
+        let collapsed = scoreViewModel.isSectionCollapsed(foldKey)
+        return Button {
+            withAnimation(SectionFold.animation) {
+                scoreViewModel.toggleSectionCollapsed(foldKey)
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Text(title.uppercased())
+                    .font(.system(size: 10, weight: .black))
+                    .foregroundStyle(.tertiary)
+                if collapsed, count > 0 {
+                    Text("\(count)")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.tertiary)
+                }
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .black))
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(collapsed ? -90 : 0))
+                Spacer(minLength: 0)
+            }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
     
     /// Sports whose scoreboard renders as titled sections instead of one
@@ -834,20 +851,49 @@ struct SportGamesListView: View {
     
     private func soccerSectionsView(sections: [SoccerGameSection]) -> some View {
         ForEach(sections, id: \.league) { s in
-            Section(header: leagueHeader(s.league)) {
-                ForEach(s.games) { game in
-                    scoreButton(game: game, sport: sport)
+            Section(header: leagueHeader(s.league, count: s.games.count)) {
+                CollapsibleSection(collapsed: scoreViewModel.isSectionCollapsed(s.league)) {
+                    ForEach(s.games) { game in
+                        scoreButton(game: game, sport: sport)
+                    }
                 }
             }
         }
     }
     
-    private func leagueHeader(_ title: String) -> some View {
-        Text(title.uppercased())
-            .font(.caption.bold())
-            .foregroundStyle(.secondary)
+    /// The league header IS the collapse control — tap it to fold the
+    /// section away. A twelve-league soccer tab is a lot of scrolling to get
+    /// past competitions you don't follow, and the fold is remembered.
+    private func leagueHeader(_ title: String, count: Int = 0) -> some View {
+        let collapsed = scoreViewModel.isSectionCollapsed(title)
+        return Button {
+            withAnimation(SectionFold.animation) {
+                scoreViewModel.toggleSectionCollapsed(title)
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Text(title.uppercased())
+                    .font(.caption.bold())
+                    .foregroundStyle(.secondary)
+                if collapsed, count > 0 {
+                    Text("\(count)")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Color.primary.opacity(0.08)))
+                }
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .black))
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(collapsed ? -90 : 0))
+                Spacer(minLength: 0)
+            }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
     
     private func scoreButton(game: ESPNEvent, sport: SportType) -> some View {
@@ -1121,25 +1167,50 @@ struct AllLiveSportsView: View {
             .padding(.horizontal)
             .padding(.top, 6)
 
-            // One VStack per sport — header shown once, games beneath.
+            // One VStack per sport — header shown once, games beneath. The
+            // header folds the sport away, same as the league headers on the
+            // individual sport tabs. Keyed per BLOCK ("Live Now"/"Upcoming"/
+            // "Finished") as well as sport, so folding finished NFL games
+            // doesn't also hide the ones in play.
             VStack(spacing: 20) {
                 ForEach(groups) { group in
+                    let foldKey = "all:\(title):\(group.sport.rawValue)"
+                    let collapsed = scoreViewModel.isSectionCollapsed(foldKey)
                     VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "trophy.fill")
-                                .font(.system(size: 9, weight: .bold))
-                                .foregroundStyle(.tertiary)
-                            Text(group.name.uppercased())
-                                .font(.system(size: 10, weight: .black))
-                                .kerning(0.6)
-                                .foregroundStyle(.secondary)
-                            Spacer()
+                        Button {
+                            withAnimation(SectionFold.animation) {
+                                scoreViewModel.toggleSectionCollapsed(foldKey)
+                            }
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "trophy.fill")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(.tertiary)
+                                Text(group.name.uppercased())
+                                    .font(.system(size: 10, weight: .black))
+                                    .kerning(0.6)
+                                    .foregroundStyle(.secondary)
+                                if collapsed {
+                                    Text("\(group.games.count)")
+                                        .font(.system(size: 9, weight: .bold))
+                                        .foregroundStyle(.tertiary)
+                                }
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 8, weight: .black))
+                                    .foregroundStyle(.tertiary)
+                                    .rotationEffect(.degrees(collapsed ? -90 : 0))
+                                Spacer()
+                            }
+                            .padding(.leading, 4)
+                            .contentShape(Rectangle())
                         }
-                        .padding(.leading, 4)
+                        .buttonStyle(.plain)
 
-                        VStack(spacing: 10) {
-                            ForEach(group.games) { game in
-                                gameButton(game: game, sport: group.sport)
+                        CollapsibleSection(collapsed: collapsed) {
+                            VStack(spacing: 10) {
+                                ForEach(group.games) { game in
+                                    gameButton(game: game, sport: group.sport)
+                                }
                             }
                         }
                     }

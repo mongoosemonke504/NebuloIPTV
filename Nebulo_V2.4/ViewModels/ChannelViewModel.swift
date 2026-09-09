@@ -334,6 +334,16 @@ class ChannelViewModel: ObservableObject {
     /// rename doesn't change — so without a separate signal the renamed name
     /// only appeared after a relaunch rebuilt the cache from scratch.
     @Published var categoryRevision: Int = 0
+    /// Bumped whenever a channel's CONTENT changes without the list's length
+    /// changing — a rename, principally.
+    ///
+    /// The home screen caches its derived lists (`idToChannel`, the shelves,
+    /// Continue Watching) behind `.task(id:)` keys built from
+    /// `channels.count`. A rename leaves the count alone, so none of those
+    /// keys moved and every cached shelf kept showing the OLD name — the
+    /// rename landed in the model and nothing on screen changed. Anything
+    /// keyed on the channel list keys on this too.
+    @Published var channelRevision: Int = 0
     private var searchTask: Task<Void, Never>?
     private var settingsPrefix: String = ""
     var activeMultiViewCount: Int { multiViewSlots.compactMap { $0 }.count }
@@ -677,7 +687,11 @@ class ChannelViewModel: ObservableObject {
                 let (data, _) = try await URLSession.shared.data(from: baseURL)
                 if let content = String(data: data, encoding: .utf8) {
                     let (pChannels, pCategories, epgUrl) = await ChannelViewModel.parseM3U(content: content, idOffset: offset, accountID: account.id)
-                    fetchedChannels = pChannels
+                    // parseM3U builds its channels directly, so unlike the
+                    // Xtream path nothing here had ever applied the user's
+                    // renames. Names typed on an M3U playlist reverted on the
+                    // next load every time.
+                    fetchedChannels = ChannelViewModel.applyChannelRenames(pChannels)
                     fetchedCategories = await ChannelViewModel.processCategories(pCategories, prefix: prefix, idOffset: offset)
                     if let eURL = epgUrl, let u = URL(string: eURL) { fetchedEPGs.append(u) }
                 }
@@ -719,7 +733,11 @@ class ChannelViewModel: ObservableObject {
         let categories = (try? JSONDecoder().decode([StreamCategory].self, from: categoriesData)) ?? []
         
         if channels.isEmpty { return nil }
-        return (channels, categories)
+        // Re-apply renames on the way out of the cache too. A rename only
+        // mutates the in-memory list, so a cache written before it still
+        // holds the old name — and this is the list a cold launch shows
+        // first, before any network refresh runs.
+        return (ChannelViewModel.applyChannelRenames(channels), categories)
     }
     
     func reset() {
@@ -2313,7 +2331,22 @@ class ChannelViewModel: ObservableObject {
     func addToMultiView(_ channel: StreamChannel) { if let firstEmpty = multiViewSlots.firstIndex(where: { $0 == nil }) { multiViewSlots[firstEmpty] = channel } else { multiViewSlots[3] = channel } }
     func triggerMultiViewFromPlayer(with channel: StreamChannel) { if let firstEmpty = multiViewSlots.firstIndex(where: { $0 == nil }) { multiViewSlots[firstEmpty] = channel } else { multiViewSlots[0] = channel }; triggerMultiView = true }
     func promptRename(name: String, onConfirm: @escaping (String) -> Void) { self.renameInput = name; self.onRenameConfirm = onConfirm; self.showRenameAlert = true }
-    func confirmRename() { onRenameConfirm?(renameInput); showRenameAlert = false; renameInput = "" }
+    /// Commits a rename with the text the alert actually collected.
+    ///
+    /// The no-argument version read `renameInput`, which the alert's TextField
+    /// was supposed to be writing into — but binding a live text field to a
+    /// `@Published` property meant every keystroke rebuilt the alert and
+    /// discarded the edit, so this read back the ORIGINAL name and the rename
+    /// silently did nothing. The view now owns the draft and passes it here.
+    func confirmRename(with newName: String) {
+        let clean = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        showRenameAlert = false
+        renameInput = ""
+        guard !clean.isEmpty else { return }
+        onRenameConfirm?(clean)
+    }
+
+    func confirmRename() { confirmRename(with: renameInput) }
     func triggerRenameChannel(_ c: StreamChannel) { promptRename(name: c.name) { [weak self] n in self?.renameChannel(id: c.id, newName: n) } }
     func triggerRenameCategory(_ c: StreamCategory) { promptRename(name: c.name) { [weak self] n in self?.renameCategory(id: c.id, newName: n) } }
     
@@ -2572,11 +2605,59 @@ class ChannelViewModel: ObservableObject {
     }
 
     func renameChannel(id: Int, newName: String) {
-        renamedChannels[id] = newName
+        let clean = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        renamedChannels[id] = clean
         if let encoded = try? JSONEncoder().encode(renamedChannels) { UserDefaults.standard.set(encoded, forKey: settingsPrefix + "renamedChannels") }
-        if let index = channels.firstIndex(where: { $0.id == id }) { channels[index].name = newName; performSearch(); categorizeSports(); objectWillChange.send() }
+        if let index = channels.firstIndex(where: { $0.id == id }) {
+            channels[index].name = clean
+            applyRenameToCachedCopies(id: id, newName: clean)
+            channelRevision += 1
+            performSearch(); categorizeSports(); objectWillChange.send()
+            // Push the new name into the channel cache as well, so the list a
+            // cold launch shows is already correct rather than relying on the
+            // rename being re-applied on the way out.
+            saveToCache()
+        }
     }
     
+    /// Rewrites a renamed channel in the derived lists the HOME screen draws
+    /// from.
+    ///
+    /// `featuredChannels`, `popularChannels` and `spotlightGroups` hold
+    /// COPIES of the structs — snapshots taken by `refreshFeaturedChannels`,
+    /// not references into `channels`. Renaming updated the master list and
+    /// nothing else, so the category page (which reads `channels` directly)
+    /// showed the new name while every home shelf and the hero kept the old
+    /// one. Patching the copies here is instant; rebuilding them would mean
+    /// re-running the whole carousel pick for a rename.
+    private func applyRenameToCachedCopies(id: Int, newName: String) {
+        for i in featuredChannels.indices where featuredChannels[i].id == id {
+            featuredChannels[i].name = newName
+        }
+        for i in popularChannels.indices where popularChannels[i].id == id {
+            popularChannels[i].name = newName
+        }
+        for gi in spotlightGroups.indices {
+            guard spotlightGroups[gi].channels.contains(where: { $0.id == id }) else { continue }
+            var updated = spotlightGroups[gi].channels
+            for ci in updated.indices where updated[ci].id == id { updated[ci].name = newName }
+            spotlightGroups[gi] = SpotlightGroup(id: spotlightGroups[gi].id,
+                                                 title: spotlightGroups[gi].title,
+                                                 channels: updated)
+        }
+        for (key, list) in sportsChannels {
+            guard list.contains(where: { $0.id == id }) else { continue }
+            var updated = list
+            for ci in updated.indices where updated[ci].id == id { updated[ci].name = newName }
+            sportsChannels[key] = updated
+        }
+        for i in multiViewSlots.indices where multiViewSlots[i]?.id == id {
+            multiViewSlots[i]?.name = newName
+        }
+        if miniPlayerChannel?.id == id { miniPlayerChannel?.name = newName }
+    }
+
     func renameCategory(id: Int, newName: String) {
         renamedCategories[id] = newName
         if let encoded = try? JSONEncoder().encode(renamedCategories) { UserDefaults.standard.set(encoded, forKey: settingsPrefix + "renamedCategories") }
@@ -2691,9 +2772,42 @@ class ChannelViewModel: ObservableObject {
         return mutable.sorted { $0.order < $1.order }
     }
     
+    /// The user's saved channel renames, exactly as `renameChannel` writes
+    /// them: under the GLOBAL key (its `settingsPrefix` is empty), keyed by
+    /// the DISPLAYED id (raw + idOffset).
+    ///
+    /// Both halves used to be wrong on the read side — an account-prefixed
+    /// key that nothing ever writes, looked up by the provider's raw id — so
+    /// a channel rename never survived a reload. `processCategories` above
+    /// carries the same two fixes for categories; channels were missed.
+    nonisolated static func loadChannelRenames() -> [Int: String] {
+        let data = UserDefaults.standard.data(forKey: "renamedChannels") ?? Data()
+        return (try? JSONDecoder().decode([Int: String].self, from: data)) ?? [:]
+    }
+
+    /// Looks a rename up for a processed channel. The raw-id fallback honours
+    /// anything stored by a build that keyed on the provider's own id.
+    nonisolated static func renamedName(for channel: StreamChannel, in renames: [Int: String]) -> String? {
+        renames[channel.id] ?? channel.originalID.flatMap { renames[$0] }
+    }
+
+    /// Applies saved renames to already-processed channels. Used by the M3U
+    /// path, which builds its channels in `parseM3U` and so never went
+    /// through `processChannels` — meaning renames were not merely lost on
+    /// reload there, they were never applied at all.
+    nonisolated static func applyChannelRenames(_ channels: [StreamChannel]) -> [StreamChannel] {
+        let renames = loadChannelRenames()
+        guard !renames.isEmpty else { return channels }
+        return channels.map { channel in
+            guard let custom = renamedName(for: channel, in: renames) else { return channel }
+            var c = channel
+            c.name = custom
+            return c
+        }
+    }
+
     nonisolated static func processChannels(_ raw: [StreamChannel], safeURL: String, user: String, pass: String, prefix: String, idOffset: Int, accountID: UUID) async -> [StreamChannel] {
-        let data = UserDefaults.standard.data(forKey: prefix + "renamedChannels") ?? Data()
-        let renames = (try? JSONDecoder().decode([Int: String].self, from: data)) ?? [:]
+        let renames = loadChannelRenames()
         return raw.map { 
             var c = $0
             c.originalID = c.id
@@ -2702,7 +2816,7 @@ class ChannelViewModel: ObservableObject {
             c.categoryID = c.categoryID + idOffset 
             c.streamURL = "\(safeURL)/live/\(user)/\(pass)/\($0.id).m3u8"
             c.originalName = c.name
-            if let custom = renames[c.originalID ?? 0] { c.name = custom } 
+            if let custom = ChannelViewModel.renamedName(for: c, in: renames) { c.name = custom }
             else { c.name = NameCleaner.clean(c.name) }
             return c 
         }

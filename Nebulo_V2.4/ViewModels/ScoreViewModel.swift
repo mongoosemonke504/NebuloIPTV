@@ -27,6 +27,30 @@ class ScoreViewModel: ObservableObject {
     /// sports, or `"<SportType.rawValue>|<leagueLabel>"` for the soccer/cup
     /// buckets where multiple leagues share one tab (Premier League, La Liga…).
     @Published var favoriteLeagueKeys: Set<String> = []
+
+    /// League/draw sections the user has collapsed in the Sports hub, by
+    /// section label. Persisted, because a section you folded away should
+    /// stay folded — the point of collapsing a twelve-league soccer tab is
+    /// not having to do it again on the next launch.
+    @Published var collapsedSections: Set<String> = [] {
+        didSet {
+            guard collapsedSections != oldValue else { return }
+            UserDefaults.standard.set(Array(collapsedSections), forKey: "collapsedSportSections")
+        }
+    }
+
+    func isSectionCollapsed(_ label: String) -> Bool {
+        collapsedSections.contains(label)
+    }
+
+    func toggleSectionCollapsed(_ label: String) {
+        ChannelViewModel.shared.triggerSelectionHaptic()
+        if collapsedSections.contains(label) {
+            collapsedSections.remove(label)
+        } else {
+            collapsedSections.insert(label)
+        }
+    }
     @Published var favoriteLeagueOrder: [String] = []
     /// Full team catalog from the ESPN team-list endpoints — every team in
     /// every covered league (clubs, national soccer sides, the F1 grid),
@@ -351,6 +375,7 @@ class ScoreViewModel: ObservableObject {
         if let teams = UserDefaults.standard.stringArray(forKey: "favoriteTeamIDs") { self.favoriteTeamIDs = Set(teams) }
         if let teamOrder = UserDefaults.standard.stringArray(forKey: "favoriteTeamOrder") { self.favoriteTeamOrder = teamOrder }
         if let leagues = UserDefaults.standard.stringArray(forKey: "favoriteLeagueKeys") { self.favoriteLeagueKeys = Set(leagues) }
+        if let collapsed = UserDefaults.standard.stringArray(forKey: "collapsedSportSections") { self.collapsedSections = Set(collapsed) }
         if let leagueOrder = UserDefaults.standard.stringArray(forKey: "favoriteLeagueOrder") { self.favoriteLeagueOrder = leagueOrder }
         
         if let savedOrder = UserDefaults.standard.stringArray(forKey: "sportTabOrder") {

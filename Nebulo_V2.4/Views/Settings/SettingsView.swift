@@ -241,7 +241,18 @@ struct ContentManagementCard: View {
     
     @ObservedObject var accountManager = AccountManager.shared
     @Environment(\.dismiss) private var dismiss
-    
+
+    /// Hidden channels the Hidden Channels page can actually show. `hiddenIDs`
+    /// outlives the channels it names — a dropped stream, a removed account —
+    /// and counting the raw set made the badge promise rows that weren't
+    /// there. See `HiddenChannelsSettingsView.allHidden`.
+    private var hiddenChannelCount: Int {
+        guard !viewModel.hiddenIDs.isEmpty else { return 0 }
+        return viewModel.channels.reduce(into: 0) { count, channel in
+            if viewModel.hiddenIDs.contains(channel.id) { count += 1 }
+        }
+    }
+
     var body: some View {
         SettingsCard {
             VStack(spacing: 0) {
@@ -400,7 +411,10 @@ struct ContentManagementCard: View {
                 .foregroundStyle(.primary)
 
                 NavigationLink(destination: HiddenChannelsSettingsView(viewModel: viewModel)) {
-                    SettingsRow(icon: "eye.slash.fill", title: "Hidden Channels", subtitle: !viewModel.hiddenIDs.isEmpty ? "\(viewModel.hiddenIDs.count)" : nil, iconColor: .gray)
+                    // Counted against the loaded channels, not the raw id set:
+                    // an id whose channel is gone must not show up here as a
+                    // hidden channel the page can't display.
+                    SettingsRow(icon: "eye.slash.fill", title: "Hidden Channels", subtitle: hiddenChannelCount > 0 ? "\(hiddenChannelCount)" : nil, iconColor: .gray)
                 }
                 .foregroundStyle(.primary)
             }
@@ -867,8 +881,22 @@ struct HiddenChannelsSettingsView: View {
     @AppStorage("nebX3") private var nebX3 = 0.5
     @AppStorage("nebY3") private var nebY3 = 1.0
 
+    /// Every hidden id that still resolves to a channel in the loaded
+    /// playlist. `hiddenIDs` can outlive the channels it names — a provider
+    /// drops a stream, an account is removed — and the badge, the empty
+    /// state and this list all used to disagree about that: the badge and
+    /// the empty state counted raw ids while the rows resolved them, so one
+    /// stale id showed "Hidden Channels 1" opening onto a blank page with no
+    /// empty state at all.
+    ///
+    /// Stale ids are deliberately NOT pruned: a channel the provider drops
+    /// for a day should still be hidden when it comes back.
+    var allHidden: [StreamChannel] {
+        viewModel.channels.filter { viewModel.hiddenIDs.contains($0.id) }
+    }
+
     var hidden: [StreamChannel] {
-        let h = viewModel.channels.filter { viewModel.hiddenIDs.contains($0.id) }
+        let h = allHidden
         if searchText.isEmpty { return h }
         return h.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
     }
@@ -885,13 +913,13 @@ struct HiddenChannelsSettingsView: View {
             )
 
             List {
-                if viewModel.hiddenIDs.isEmpty {
+                if hidden.isEmpty {
                     Section {
                         VStack(spacing: 10) {
                             Image(systemName: "eye")
                                 .font(.system(size: 32, weight: .light))
                                 .foregroundStyle(.white.opacity(0.35))
-                            Text("No hidden channels")
+                            Text(allHidden.isEmpty ? "No hidden channels" : "No matches")
                                 .font(.system(size: 14, weight: .semibold))
                                 .foregroundStyle(.white.opacity(0.55))
                         }
@@ -935,9 +963,11 @@ struct HiddenChannelsSettingsView: View {
         .toolbarBackground(.hidden, for: .navigationBar)
         .tint(.white)
         .toolbar {
-            if !viewModel.hiddenIDs.isEmpty {
+            if !allHidden.isEmpty {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Unhide All") {
+                        // Clears stale ids along with the visible ones —
+                        // "unhide everything" should leave nothing behind.
                         withAnimation { viewModel.hiddenIDs.forEach { viewModel.unhideChannel($0) } }
                     }
                     .foregroundStyle(.white)
@@ -957,10 +987,20 @@ struct HeroChannelsSettingsView: View {
     let accentColor: Color
     @State private var query = ""
 
+    /// Channel id → channel. Built with `reduce` rather than
+    /// `Dictionary(uniqueKeysWithValues:)`, which TRAPS on a duplicate key —
+    /// a provider returning the same stream id twice would take the whole app
+    /// down on the way into this page.
+    private var channelsByID: [Int: StreamChannel] {
+        viewModel.channels.reduce(into: [Int: StreamChannel]()) { map, channel in
+            if map[channel.id] == nil { map[channel.id] = channel }
+        }
+    }
+
     /// Chosen channels first, in the user's own order, then everything else —
     /// so what you've picked is never buried under ten thousand rows.
     private var rows: [StreamChannel] {
-        let byID = Dictionary(uniqueKeysWithValues: viewModel.channels.map { ($0.id, $0) })
+        let byID = channelsByID
         let chosen = viewModel.customHeroIDs.compactMap { byID[$0] }
         let chosenIDs = Set(viewModel.customHeroIDs)
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -969,6 +1009,19 @@ struct HeroChannelsSettingsView: View {
             .filter { !chosenIDs.contains($0.id) && !viewModel.hiddenIDs.contains($0.id) }
             .filter { $0.name.lowercased().contains(trimmed) }
         return chosen + Array(matches.prefix(60))
+    }
+
+    /// Picks that no longer resolve to a channel in the loaded playlist.
+    ///
+    /// These used to be dropped on the floor by the `compactMap` above: the
+    /// pick was still saved and still counted in the Settings subtitle, but
+    /// this page showed nothing for it, so a chosen channel appeared to have
+    /// vanished with no way to tell what had happened or to clear it. Now they
+    /// are shown for what they are, and can be removed.
+    private var unresolvedPicks: [Int] {
+        guard !viewModel.channels.isEmpty else { return [] }
+        let byID = channelsByID
+        return viewModel.customHeroIDs.filter { byID[$0] == nil }
     }
 
     var body: some View {
@@ -1046,7 +1099,46 @@ struct HeroChannelsSettingsView: View {
                         }
                     }
 
-                    if rows.isEmpty {
+                    if !unresolvedPicks.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("NO LONGER IN YOUR PLAYLIST")
+                                .font(.system(size: 10, weight: .black))
+                                .kerning(0.8)
+                                .foregroundStyle(.white.opacity(0.45))
+                                .padding(.horizontal, 4)
+                                .padding(.top, 6)
+                            ForEach(unresolvedPicks, id: \.self) { id in
+                                HStack(spacing: 12) {
+                                    Image(systemName: "questionmark.square.dashed")
+                                        .font(.system(size: 17))
+                                        .foregroundStyle(.white.opacity(0.4))
+                                        .frame(width: 44, height: 44)
+                                        .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .fill(Color(white: 0.15)))
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Channel #\(id)")
+                                            .font(.system(size: 15, weight: .medium))
+                                            .foregroundStyle(.white.opacity(0.75))
+                                            .lineLimit(1)
+                                        Text("Not in the current playlist")
+                                            .font(.system(size: 12))
+                                            .foregroundStyle(.white.opacity(0.45))
+                                    }
+                                    Spacer(minLength: 0)
+                                    Button("Remove") {
+                                        withAnimation { viewModel.toggleHeroChannel(id) }
+                                    }
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(accentColor)
+                                    .buttonStyle(.plain)
+                                }
+                                .padding(10)
+                                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(NuvioTheme.card))
+                            }
+                        }
+                    }
+
+                    if rows.isEmpty && unresolvedPicks.isEmpty {
                         Text(query.isEmpty ? "Search for a channel to add it." : "No channels match “\(query)”.")
                             .font(.system(size: 14))
                             .foregroundStyle(.white.opacity(0.5))
