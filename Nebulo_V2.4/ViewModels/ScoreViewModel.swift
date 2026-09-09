@@ -226,6 +226,45 @@ class ScoreViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var lastFetchTime = Date.distantPast
     private var fetchTask: Task<Void, Never>?
+    /// Fingerprint of the fixtures at the last `saveGamesCache()` write, so a
+    /// refresh that came back identical doesn't re-encode the lot.
+    private var lastSavedGamesFingerprint: Int?
+    /// Fingerprint of the fixtures the logo prefetch last walked, for the
+    /// same reason.
+    private var lastPreloadedImagesFingerprint: Int?
+    /// Whether the crest-heavy tabs have been warmed yet this session. The
+    /// first refresh always warms them even if it came back matching the
+    /// cache — the point of that pass is promoting DISK copies into MEMORY,
+    /// and on a cold launch memory is empty however familiar the fixtures are.
+    private var didWarmTabLogos = false
+
+    // Memoised catalog derivations. `allKnownTeams()` / `allKnownLeagues()`
+    // are pure functions of the team catalog and the loaded scoreboards, and
+    // both are called from view bodies — see the note on `allKnownTeams()`.
+    private var knownTeamsCache: [(team: ESPNTeam, sport: SportType, leagueLabel: String?)]?
+    private var knownTeamsStamp: Int?
+    private var knownLeaguesCache: [(sport: SportType, leagueLabel: String?, displayName: String)]?
+    private var knownLeaguesStamp: Int?
+    /// Cheap identity for "what the catalog derivations were built from".
+    /// Counts only — a refresh that swaps a fixture's score without changing
+    /// how many there are cannot add or remove a team or a league.
+    private func catalogStamp() -> Int {
+        var hasher = Hasher()
+        hasher.combine(teamCatalog.count)
+        hasher.combine(sportTabOrder)
+        for sport in masterGames.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
+            hasher.combine(sport.rawValue)
+            hasher.combine(masterGames[sport]?.count ?? 0)
+        }
+        for sport in masterSectionsMap.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
+            hasher.combine(sport.rawValue)
+            for section in masterSectionsMap[sport] ?? [] {
+                hasher.combine(section.league)
+                hasher.combine(section.games.count)
+            }
+        }
+        return hasher.finalize()
+    }
     
     init() {
         loadCachedData()
@@ -343,25 +382,16 @@ class ScoreViewModel: ObservableObject {
         self.preloadImages()
     }
     
+    /// Writes the small stuff only: pins, reminders, tab order, favourites.
+    /// A handful of arrays of short strings — cheap enough to do inline on
+    /// every toggle, which is what nearly every caller actually wants.
+    ///
+    /// The scoreboard payload is NOT written here. It used to be, and that
+    /// made every heart tap, pin, and tab drag JSON-encode the entire day's
+    /// fixtures for every sport on the main thread. Use `saveGamesCache()`
+    /// for that — once per successful refresh, off-main, and only when the
+    /// fixtures actually changed.
     private func saveToCache() {
-        var cacheableGames: [String: [ESPNEvent]] = [:]
-        for (key, value) in masterGames {
-            cacheableGames[key.rawValue] = value
-        }
-        
-        var cacheableMap: [String: [SoccerGameSection]] = [:]
-        for (key, value) in masterSectionsMap {
-            cacheableMap[key.rawValue] = value
-        }
-        
-        if let encoded = try? JSONEncoder().encode(cacheableGames) {
-            UserDefaults.standard.set(encoded, forKey: "cachedSportsData")
-        }
-        
-        if let encoded = try? JSONEncoder().encode(cacheableMap) {
-            UserDefaults.standard.set(encoded, forKey: "cachedSectionsMap")
-        }
-        
         UserDefaults.standard.set(Array(pinnedGameIDs), forKey: "pinnedGameIDs")
         UserDefaults.standard.set(Array(hiddenScoreGameIDs), forKey: "hiddenScoreGameIDs")
         UserDefaults.standard.set(Array(reminderGameIDs), forKey: "reminderGameIDs")
@@ -372,6 +402,62 @@ class ScoreViewModel: ObservableObject {
         UserDefaults.standard.set(favoriteTeamOrder, forKey: "favoriteTeamOrder")
         UserDefaults.standard.set(Array(favoriteLeagueKeys), forKey: "favoriteLeagueKeys")
         UserDefaults.standard.set(favoriteLeagueOrder, forKey: "favoriteLeagueOrder")
+    }
+
+    /// Fingerprint of the currently-held fixtures. Cheap to build (ids and
+    /// scores, no encoding) and enough to tell a refresh that changed
+    /// something from one that came back identical — which, outside the
+    /// minutes around a live game, is most of them.
+    private func gamesFingerprint() -> Int {
+        var hasher = Hasher()
+        // Deliberately reads `competitions` directly rather than the
+        // `homeCompetitor` / `awayCompetitor` helpers — those are computed
+        // properties that scan the competitor list on every access, and this
+        // runs over every fixture in every sport.
+        func combine(_ game: ESPNEvent, into hasher: inout Hasher) {
+            hasher.combine(game.id)
+            hasher.combine(game.status.type.state)
+            hasher.combine(game.status.type.detail)
+            for competitor in game.competitions.first?.competitors ?? [] {
+                hasher.combine(competitor.score ?? "")
+            }
+        }
+        for sport in masterGames.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
+            hasher.combine(sport.rawValue)
+            for game in masterGames[sport] ?? [] { combine(game, into: &hasher) }
+        }
+        for sport in masterSectionsMap.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
+            hasher.combine(sport.rawValue)
+            for section in masterSectionsMap[sport] ?? [] {
+                hasher.combine(section.league)
+                for game in section.games { combine(game, into: &hasher) }
+            }
+        }
+        return hasher.finalize()
+    }
+
+    /// Persists the scoreboard payload — encoding and writing on a background
+    /// task so a refresh landing mid-scroll can't stall a frame. No-ops when
+    /// nothing has moved since the last write.
+    private func saveGamesCache(fingerprint: Int? = nil) {
+        let fingerprint = fingerprint ?? gamesFingerprint()
+        guard fingerprint != lastSavedGamesFingerprint else { return }
+        lastSavedGamesFingerprint = fingerprint
+
+        var cacheableGames: [String: [ESPNEvent]] = [:]
+        for (key, value) in masterGames { cacheableGames[key.rawValue] = value }
+
+        var cacheableMap: [String: [SoccerGameSection]] = [:]
+        for (key, value) in masterSectionsMap { cacheableMap[key.rawValue] = value }
+
+        Task.detached(priority: .utility) {
+            if let encoded = try? JSONEncoder().encode(cacheableGames) {
+                UserDefaults.standard.set(encoded, forKey: "cachedSportsData")
+            }
+            if let encoded = try? JSONEncoder().encode(cacheableMap) {
+                UserDefaults.standard.set(encoded, forKey: "cachedSectionsMap")
+            }
+        }
     }
     
     func moveSportTab(from source: IndexSet, to destination: Int) {
@@ -483,7 +569,18 @@ class ScoreViewModel: ObservableObject {
         }
     }
 
-    private func preloadImages() {
+    @discardableResult
+    private func preloadImages(fingerprint: Int? = nil) -> Bool {
+        // Every refresh used to re-walk every fixture in every sport and then
+        // fire a prefetch per crest — hundreds of them, each hopping onto the
+        // main actor to check the memory cache. With scores refreshing once a
+        // minute while anything is live, that was a steady main-thread tax for
+        // work that had already been done. Skip it outright when the fixtures
+        // haven't changed since the last walk.
+        let fingerprint = fingerprint ?? gamesFingerprint()
+        guard fingerprint != lastPreloadedImagesFingerprint else { return false }
+        lastPreloadedImagesFingerprint = fingerprint
+
         var urls = Set<String>()
         for games in masterGames.values {
             for game in games {
@@ -515,6 +612,7 @@ class ScoreViewModel: ObservableObject {
                 }
             }
         }
+        return true
     }
     
     /// Warm the logo cache for one sport's games at user-initiated priority,
@@ -550,7 +648,18 @@ class ScoreViewModel: ObservableObject {
         let toLoad = urls
         Task.detached(priority: .userInitiated) {
             await withTaskGroup(of: Void.self) { group in
-                for url in toLoad { group.addTask { await ImageCache.prefetchAndWait(urlString: url) } }
+                // Bounded. This still visits every crest — the point of this
+                // pass is promoting DISK copies into memory, so an
+                // already-downloaded logo must not be skipped — but a soccer
+                // tab holds well over a hundred, and firing them all at once
+                // put that many tasks in flight against the main actor.
+                var active = 0
+                let limit = 16
+                for url in toLoad {
+                    if active >= limit { await group.next(); active -= 1 }
+                    group.addTask { await ImageCache.prefetchAndWait(urlString: url) }
+                    active += 1
+                }
             }
         }
     }
@@ -660,9 +769,13 @@ class ScoreViewModel: ObservableObject {
                 await MainActor.run {
                     self.updatePinnedGames()
                     self.saveToCache()
+                    // One walk of the fixtures, shared by the cache write and
+                    // the logo warm-up — both only care whether anything moved.
+                    let fingerprint = self.gamesFingerprint()
+                    self.saveGamesCache(fingerprint: fingerprint)
                     self.lastFetchTime = Date()
                     self.applyFilter(text: self.currentSearchText)
-                    self.preloadImages()
+                    let fixturesChanged = self.preloadImages(fingerprint: fingerprint)
                     self.migrateLegacyTeamKeys()
                     self.isLoading = false
                     // Warm the crest-heavy tabs at high priority the moment
@@ -670,8 +783,16 @@ class ScoreViewModel: ObservableObject {
                     // shelf) — by the time the user opens the Sports hub and
                     // swipes to a soccer tab the logos are already cached
                     // instead of streaming in mid-transition.
-                    self.prefetchLogos(for: self.selectedSport)
-                    self.prefetchLogos(for: .soccerLeagues)
+                    //
+                    // Only when the fixtures actually moved, though: on a
+                    // quiet refresh the crests are the same ones warmed a
+                    // minute ago, and re-walking them every cycle was work
+                    // with no possible result.
+                    if fixturesChanged || !self.didWarmTabLogos {
+                        self.didWarmTabLogos = true
+                        self.prefetchLogos(for: self.selectedSport)
+                        self.prefetchLogos(for: .soccerLeagues)
+                    }
                 }
             }
         }
@@ -1166,6 +1287,16 @@ class ScoreViewModel: ObservableObject {
     /// plus anything on today's scoreboards the catalog doesn't know yet
     /// (e.g. MMA fighters, which have no team-list endpoint).
     func allKnownTeams() -> [(team: ESPNTeam, sport: SportType, leagueLabel: String?)] {
+        // Memoised. This walks the whole catalog, every scoreboard and every
+        // soccer section and then SORTS the result — and it is called from
+        // view bodies: the Add-to-Favorites sheet ran it three times per body
+        // evaluation and once more per keystroke, and `resolvedFavoriteTeams`
+        // (which the Favorites shelf and the home screen both use) runs it
+        // again on every render. The inputs only change when a refresh or a
+        // catalog load brings something new in.
+        let stamp = catalogStamp()
+        if stamp == knownTeamsStamp, let cached = knownTeamsCache { return cached }
+
         var seen = Set<String>()
         var out: [(team: ESPNTeam, sport: SportType, leagueLabel: String?)] = []
         func add(_ team: ESPNTeam, _ sport: SportType, _ label: String?) {
@@ -1194,7 +1325,10 @@ class ScoreViewModel: ObservableObject {
                 }
             }
         }
-        return out.sorted { ($0.team.displayName ?? "") < ($1.team.displayName ?? "") }
+        let sorted = out.sorted { ($0.team.displayName ?? "") < ($1.team.displayName ?? "") }
+        knownTeamsCache = sorted
+        knownTeamsStamp = stamp
+        return sorted
     }
 
     /// The user's Sports-hub tab order with any newly-added sports appended
@@ -1211,6 +1345,9 @@ class ScoreViewModel: ObservableObject {
     /// continental → international, then the standalone sports in the same
     /// order as the Sports-hub tabs.
     func allKnownLeagues() -> [(sport: SportType, leagueLabel: String?, displayName: String)] {
+        let stamp = catalogStamp()
+        if stamp == knownLeaguesStamp, let cached = knownLeaguesCache { return cached }
+
         var seen = Set<String>()
         var out: [(SportType, String?, String)] = []
         for (bucket, competitions) in SportType.soccerCompetitionGroups {
@@ -1235,7 +1372,162 @@ class ScoreViewModel: ObservableObject {
                 }
             }
         }
+        knownLeaguesCache = out
+        knownLeaguesStamp = stamp
         return out
+    }
+
+    // MARK: - Favouritable search index
+
+    /// One searchable thing the user can favourite — a team or a whole league.
+    struct FavoritableHit: Identifiable, Hashable {
+        enum Kind: Hashable { case team, league }
+
+        let kind: Kind
+        let key: String
+        let displayName: String
+        /// League for a team, sport name for a league — the second line.
+        let subtitle: String
+        let logo: String?
+        /// Team brand colour, for the tile fill. Nil for leagues.
+        let color: String?
+        let sport: SportType
+        let leagueLabel: String?
+        /// Carried so a tap can call `toggleFavoriteTeam` with the real thing.
+        let team: ESPNTeam?
+
+        var id: String { (kind == .team ? "t:" : "l:") + key }
+    }
+
+    /// Pre-lowercased haystack for one favouritable, built once per catalog
+    /// load rather than per keystroke.
+    private struct IndexedFavoritable {
+        let hit: FavoritableHit
+        let name: String
+        let terms: [String]
+    }
+
+    private var favoritableIndex: [IndexedFavoritable] = []
+    /// What the index was built from, so it is rebuilt only when the catalog
+    /// or the scoreboards bring in something new.
+    private var favoritableIndexStamp: Int?
+
+    private func rebuildFavoritableIndexIfNeeded() {
+        let key = catalogStamp()
+        guard key != favoritableIndexStamp || favoritableIndex.isEmpty else { return }
+        favoritableIndexStamp = key
+
+        var index: [IndexedFavoritable] = []
+        index.reserveCapacity(teamCatalog.count + 64)
+
+        for hit in allKnownTeams() {
+            guard let name = hit.team.displayName ?? hit.team.shortDisplayName, !name.isEmpty else { continue }
+            // Every string a person might type for this team: the full name,
+            // the short name, the abbreviation, and the league it plays in.
+            var terms = [name.lowercased()]
+            if let short = hit.team.shortDisplayName { terms.append(short.lowercased()) }
+            if let abbr = hit.team.abbreviation { terms.append(abbr.lowercased()) }
+            if let league = hit.leagueLabel { terms.append(league.lowercased()) }
+            terms.append(hit.sport.rawValue.lowercased())
+            index.append(IndexedFavoritable(
+                hit: FavoritableHit(
+                    kind: .team,
+                    key: Self.teamKey(sport: hit.sport, teamID: hit.team.id),
+                    displayName: name,
+                    subtitle: hit.leagueLabel ?? hit.sport.rawValue,
+                    logo: hit.team.logo,
+                    color: hit.team.color,
+                    sport: hit.sport,
+                    leagueLabel: hit.leagueLabel,
+                    team: hit.team
+                ),
+                name: name.lowercased(),
+                terms: terms
+            ))
+        }
+
+        for hit in allKnownLeagues() {
+            let terms = [hit.displayName.lowercased(), hit.sport.rawValue.lowercased()]
+            index.append(IndexedFavoritable(
+                hit: FavoritableHit(
+                    kind: .league,
+                    key: Self.leagueKey(sport: hit.sport, leagueLabel: hit.leagueLabel),
+                    displayName: hit.displayName,
+                    subtitle: hit.sport.rawValue,
+                    logo: LeagueLogoURL.url(sport: hit.sport, leagueLabel: hit.leagueLabel),
+                    color: nil,
+                    sport: hit.sport,
+                    leagueLabel: hit.leagueLabel,
+                    team: nil
+                ),
+                name: hit.displayName.lowercased(),
+                terms: terms
+            ))
+        }
+
+        favoritableIndex = index
+    }
+
+    /// Teams and leagues matching a free-text query, best match first, for the
+    /// "add to favourites" row in search. Leagues sort ahead of teams on an
+    /// equal-quality match, since a league is the broader thing to follow.
+    ///
+    /// Ranking, best to worst: exact name, name starts with the query, a word
+    /// in the name starts with the query, name contains it, some other term
+    /// (abbreviation, league) contains it.
+    func favoritableMatches(for query: String, limit: Int = 12) -> [FavoritableHit] {
+        let needle = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard needle.count >= 2 else { return [] }
+        rebuildFavoritableIndexIfNeeded()
+
+        var scored: [(score: Int, kindRank: Int, name: String, hit: FavoritableHit)] = []
+        for entry in favoritableIndex {
+            let score: Int
+            if entry.name == needle {
+                score = 0
+            } else if entry.name.hasPrefix(needle) {
+                score = 1
+            } else if entry.name.split(separator: " ").contains(where: { $0.hasPrefix(needle) }) {
+                score = 2
+            } else if entry.name.contains(needle) {
+                score = 3
+            } else if entry.terms.contains(where: { $0 == needle }) {
+                score = 4
+            } else if entry.terms.contains(where: { $0.contains(needle) }) {
+                score = 5
+            } else {
+                continue
+            }
+            scored.append((score, entry.hit.kind == .league ? 0 : 1, entry.name, entry.hit))
+        }
+
+        scored.sort {
+            if $0.score != $1.score { return $0.score < $1.score }
+            if $0.kindRank != $1.kindRank { return $0.kindRank < $1.kindRank }
+            return $0.name < $1.name
+        }
+        return scored.prefix(limit).map { $0.hit }
+    }
+
+    /// True when this favouritable is already followed.
+    func isFavorite(_ hit: FavoritableHit) -> Bool {
+        switch hit.kind {
+        case .team:
+            guard let team = hit.team else { return false }
+            return isFavoriteTeam(team, sport: hit.sport)
+        case .league:
+            return isFavoriteLeague(sport: hit.sport, leagueLabel: hit.leagueLabel)
+        }
+    }
+
+    func toggleFavorite(_ hit: FavoritableHit) {
+        switch hit.kind {
+        case .team:
+            guard let team = hit.team else { return }
+            toggleFavoriteTeam(team, sport: hit.sport)
+        case .league:
+            toggleFavoriteLeague(sport: hit.sport, leagueLabel: hit.leagueLabel)
+        }
     }
 
     /// Resolves favorited team keys to live ESPNTeam structs. Preserves the

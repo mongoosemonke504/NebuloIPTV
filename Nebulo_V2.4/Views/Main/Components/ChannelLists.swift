@@ -1124,3 +1124,54 @@ struct SpotlightItem: Identifiable {
     let program: EPGProgram?
     var id: Int { channel.id }
 }
+
+// MARK: - Follow a team or league straight from search
+
+/// One "follow this team / league" row in the search results.
+///
+/// Searching is how people look for a team — typing "Arsenal" to find the
+/// match that's on is the same gesture as wanting to follow Arsenal — so the
+/// results offer that directly, rather than sending the user off to Favorites
+/// to search the catalog a second time.
+///
+/// Shaped like the Channels and Categories rows beside it: a 44pt square
+/// mark, two lines of text, and a trailing control.
+struct SearchFavoritableRow: View {
+    let hit: ScoreViewModel.FavoritableHit
+    let isFavorite: Bool
+    let onToggle: () -> Void
+
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: 12) {
+                FavoriteSquareLogo(
+                    logo: hit.logo,
+                    abbreviation: hit.displayName,
+                    color: hit.color
+                )
+                .frame(width: 44, height: 44)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(hit.displayName)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    Text(isFavorite ? "Following · \(hit.subtitle)" : hit.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                Image(systemName: isFavorite ? "heart.fill" : "plus.circle")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(isFavorite ? Color.pink : Color.white.opacity(0.7))
+            }
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .animation(.easeOut(duration: 0.18), value: isFavorite)
+    }
+}

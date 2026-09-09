@@ -14,7 +14,9 @@ class ChannelViewModel: ObservableObject {
     static let shared = ChannelViewModel()
     
     @Published var categories: [StreamCategory] = []
-    @Published var channels: [StreamChannel] = []
+    @Published var channels: [StreamChannel] = [] {
+        didSet { resolvedEPGIDCache.removeAll(keepingCapacity: true) }
+    }
     @Published var isLoading = true
     @Published var errorMessage: String? = nil
     
@@ -52,14 +54,58 @@ class ChannelViewModel: ObservableObject {
     @Published var scrollRestoreTrigger = UUID()
     @Published var draggingChannel: StreamChannel? = nil
     @Published var miniPlayerChannel: StreamChannel? = nil
-    @Published var currentTime: Date = Date()
+    @Published var currentTime: Date = Date() {
+        didSet { invalidateProgramCaches() }
+    }
     
     
     @Published var manualChannelOrder: [Int] = []
     
     
-    @Published var epgData: [String: [EPGProgram]] = [:]
-    private var epgNameMap: [String: String] = [:]
+    @Published var epgData: [String: [EPGProgram]] = [:] {
+        didSet { invalidateEPGLookupCaches() }
+    }
+    private var epgNameMap: [String: String] = [:] {
+        didSet { invalidateEPGLookupCaches() }
+    }
+
+    // MARK: - EPG lookup memoisation
+    //
+    // `getCurrentProgram(for:)` is the single most-called function in the app:
+    // roughly forty call sites, nearly all of them inside row bodies, and
+    // several rows ask for the same channel two or three times in ONE body
+    // evaluation ("is something live?", then the title, then the description).
+    // Uncached each of those calls ran `NameCleaner.clean` — twenty-six
+    // case-insensitive `range(of:)` searches and a handful of String
+    // allocations — and then linearly scanned a whole day of programmes.
+    // Multiplied by the visible rows and repeated on every frame of a scroll,
+    // that alone kept a core busy and is what made the phone warm up just
+    // browsing.
+    //
+    // Two caches replace it, both pure memoisation — same answers, computed
+    // once:
+    //  • `resolvedEPGIDCache` — channel id → guide id. This is the expensive
+    //    half (the name cleaning) and only depends on the channel list and the
+    //    guide, so it survives the 30-second clock tick.
+    //  • `currentProgramCache` — guide id → what is on now. Depends on the
+    //    clock, so it is dropped on each tick.
+    private var resolvedEPGIDCache: [Int: String?] = [:]
+    private var currentProgramCache: [String: EPGProgram?] = [:]
+    private var nextProgramCache: [String: EPGProgram?] = [:]
+
+    /// Guide data changed underneath us — every memoised answer is suspect.
+    private func invalidateEPGLookupCaches() {
+        resolvedEPGIDCache.removeAll(keepingCapacity: true)
+        currentProgramCache.removeAll(keepingCapacity: true)
+        nextProgramCache.removeAll(keepingCapacity: true)
+    }
+
+    /// The clock moved — which programme is on has changed, but the channel →
+    /// guide-id mapping has not.
+    private func invalidateProgramCaches() {
+        currentProgramCache.removeAll(keepingCapacity: true)
+        nextProgramCache.removeAll(keepingCapacity: true)
+    }
     /// Pre-computed curated carousel — one live channel per broad genre group.
     /// Populated on a background thread before isLoading flips to false so the
     /// home screen never has to compute this on first render.
@@ -707,38 +753,58 @@ class ChannelViewModel: ObservableObject {
             .sink { [weak self] _ in self?.currentTime = Date() }
     }
 
-    func getCurrentProgram(for channel: StreamChannel) -> EPGProgram? {
-        let eID: String? = {
+    /// Channel → guide id, memoised. The uncached path cleans the channel
+    /// name (twenty-six case-insensitive searches), so this is the half worth
+    /// remembering; the answer only changes when the playlist or the guide
+    /// does, and both invalidate the cache.
+    private func resolvedEPGID(for channel: StreamChannel) -> String? {
+        if let cached = resolvedEPGIDCache[channel.id] { return cached }
+
+        let resolved: String? = {
             if let id = channel.epgID, epgData[id] != nil { return id }
-            
-            let direct = epgNameMap[channel.name.lowercased()]
-            if direct != nil { return direct }
-            
-            
+            if let direct = epgNameMap[channel.searchNormalizedName] { return direct }
             let cleaned = NameCleaner.clean(channel.name).lowercased()
             return epgNameMap[cleaned]
         }()
-        
-        guard let id = eID, let schedule = epgData[id] else { return nil }
-        return schedule.first { currentTime >= $0.start && currentTime <= $0.stop }
+
+        resolvedEPGIDCache[channel.id] = resolved
+        return resolved
+    }
+
+    func getCurrentProgram(for channel: StreamChannel) -> EPGProgram? {
+        guard let id = resolvedEPGID(for: channel) else { return nil }
+        if let cached = currentProgramCache[id] { return cached }
+
+        let program = epgData[id]?.first { currentTime >= $0.start && currentTime <= $0.stop }
+        currentProgramCache[id] = program
+        return program
     }
 
     func getNextProgram(for channel: StreamChannel) -> EPGProgram? {
-        let eID: String? = {
-            if let id = channel.epgID, epgData[id] != nil { return id }
-            
-            let direct = epgNameMap[channel.name.lowercased()]
-            if direct != nil { return direct }
-            
-            let cleaned = NameCleaner.clean(channel.name).lowercased()
-            return epgNameMap[cleaned]
+        guard let id = resolvedEPGID(for: channel) else { return nil }
+        if let cached = nextProgramCache[id] { return cached }
+
+        let program: EPGProgram? = {
+            guard let schedule = epgData[id] else { return nil }
+            // One pass instead of filter-then-sort over the whole day: the
+            // "next" programme is just the earliest start after the cutoff,
+            // and the cutoff is the end of what's on now (or now itself, when
+            // the channel is between listings).
+            var current: EPGProgram? = nil
+            for p in schedule where currentTime >= p.start && currentTime <= p.stop {
+                current = p
+                break
+            }
+            let cutoff = current?.stop ?? currentTime
+            var best: EPGProgram? = nil
+            for p in schedule where p.start >= cutoff {
+                if best == nil || p.start < best!.start { best = p }
+            }
+            return best
         }()
-        
-        guard let id = eID, let schedule = epgData[id] else { return nil }
-        guard let current = schedule.first(where: { currentTime >= $0.start && currentTime <= $0.stop }) else {
-            return schedule.filter { $0.start > currentTime }.sorted { $0.start < $1.start }.first
-        }
-        return schedule.filter { $0.start >= current.stop }.sorted { $0.start < $1.start }.first
+
+        nextProgramCache[id] = program
+        return program
     }
 
     /// Re-computes the curated featured carousel on a background thread.

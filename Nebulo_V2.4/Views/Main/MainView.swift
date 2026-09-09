@@ -1077,6 +1077,14 @@ struct StandardLayout: SwiftUI.View {
     /// tabs doesn't change either hub's inputs — see `SportsHubView.active`.
     @State private var sportsActive = FlagBox()
     @State private var favoritesActive = FlagBox()
+    /// Home is the screen you are actually looking at. Home stays MOUNTED
+    /// behind search results and category pages (it is faded to zero, not
+    /// removed), so without this the hero kept counting down and sliding its
+    /// full-screen artwork behind an invisible layer.
+    ///
+    /// Starts true — home IS the first screen, so the hero must not depend on
+    /// an `onAppear` landing before its own countdown starts.
+    @State private var homeActive = FlagBox(true)
 
     /// The hub the dock is currently on, or nil. Search hides a hub exactly as
     /// it hides home: the old chain put `searchView` ahead of the section, so
@@ -1565,7 +1573,8 @@ struct StandardLayout: SwiftUI.View {
                                     viewModel: viewModel,
                                     accentColor: accentColor,
                                     openAction: openFeatured,
-                                    scroll: heroScroll
+                                    scroll: heroScroll,
+                                    visible: homeActive
                                 )
                                 .id(selectedHomeGroup?.rawValue ?? "for-you")
                                 // Rubber-banding past the top stretches the
@@ -1947,6 +1956,10 @@ struct StandardLayout: SwiftUI.View {
             sportsActive.set(id == -3)
             favoritesActive.set(id == -4)
         }
+        .onChangeCompat(of: homeVisible) { visible in
+            homeActive.set(visible)
+        }
+        .onAppear { homeActive.set(homeVisible) }
     }
 
     private var searchView: some SwiftUI.View {
@@ -3788,6 +3801,19 @@ struct LiveGolfCard: View {
     }
 }
 
+/// Watches a `FlagBox` without dragging the view that owns it into every
+/// change. Same trick as `HubActivationProbe` in the Sports hub.
+private struct HeroVisibilityProbe: View {
+    @ObservedObject var flag: FlagBox
+    let onChange: (Bool) -> Void
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onChangeCompat(of: flag.value) { onChange($0) }
+    }
+}
+
 /// Swipeable hero carousel backed by TabView(.page) — the most gesture-stable
 /// paging API in SwiftUI (uses UIPageViewController underneath). The earlier
 /// custom-ScrollView + .scrollTargetBehavior + .scrollPosition(id:) approach
@@ -3822,6 +3848,16 @@ struct FeaturedCarousel: View {
     /// only the `HeroScrollParallax` leaf watches it, so a scroll frame
     /// re-renders that transform instead of the whole carousel.
     let scroll: ScrollProgress
+    /// Whether the home screen is the screen on display.
+    ///
+    /// Home is kept mounted behind search results and category pages, faded
+    /// to zero rather than removed — so the dwell countdown kept running and
+    /// the auto-advance kept sliding two full-screen artwork layers for a
+    /// hero nobody could see, for as long as the user was anywhere else in
+    /// the app. Read through a leaf box, not as a plain `Bool`, so flipping
+    /// it doesn't re-evaluate this whole view: only the probe below watches
+    /// it. Defaults to "visible" so any other call site behaves as before.
+    var visible: FlagBox = FlagBox(true)
 
     /// Snapped page.
     @State private var page = 0
@@ -4255,12 +4291,23 @@ struct FeaturedCarousel: View {
         .task(id: "\(page)-\(timerKey)") {
             progress.set(0)
             guard items.count > 1 else { return }
+            // Nothing to count down to while the hero is off screen. The
+            // probe below restarts the countdown the moment home comes back.
+            guard visible.value else { return }
             withAnimation(.linear(duration: Self.dwell)) { progress.set(1) }
             try? await Task.sleep(nanoseconds: UInt64(Self.dwell * 1_000_000_000))
             // Never auto-advance out from under a finger that is still mid-swipe.
-            guard !Task.isCancelled, fraction.value == 0 else { return }
+            guard !Task.isCancelled, fraction.value == 0, visible.value else { return }
             autoAdvance()
         }
+        .background(
+            HeroVisibilityProbe(flag: visible) { _ in
+                // Bumping the key restarts the `.task` above: it stops the
+                // countdown on the way out and starts a fresh one on the way
+                // back, so the hero never returns mid-dwell.
+                timerKey += 1
+            }
+        )
         // The featured list can shrink in place (a live game ends and its
         // channel drops out) — clamp so the pager never points past the end.
         .onChangeCompat(of: items.count) { n in

@@ -31,6 +31,9 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     
     private var bufferWatchdogTimer: Timer?
     private var bufferStartTime: Date?
+    /// Last time the VLC subtitle/audio track lists were polled — see the
+    /// note in `updateState()`.
+    private var lastTrackPollTime: Date = .distantPast
     @Published public var currentQuality: VideoQuality = .auto
     @Published public var availableQualities: [VideoQuality] = VideoQuality.allCases
     @Published public var currentTime: Double = 0
@@ -328,6 +331,9 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         // Clear per-stream audio-track list so the next stream re-detects fresh tracks
         self.availableAudioTracks = []
         self.currentAudioTrack = nil
+        // …and let the first tick of the new stream poll immediately rather
+        // than waiting out the throttle.
+        self.lastTrackPollTime = .distantPast
 
         self.lastProgressValue = -1
         self.lastProgressCheckTime = Date()
@@ -579,7 +585,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                     if externalTimeOffset == 0 && valSec > 0 {
                         externalTimeOffset = valSec
                     }
-                } else if !isInteractionSeeking {
+                } else if !isInteractionSeeking, self.currentTime != valSec {
                     self.currentTime = valSec
                 }
             }
@@ -589,16 +595,36 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                     let d = Double(truncating: val) / 1000.0
                     // Only accept a positive duration from VLC so we don't overwrite
                     // the value probed via AVURLAsset for files where VLC returns -1.
-                    if d > 0 { self.duration = d }
+                    // Assigning an unchanged value still fires objectWillChange,
+                    // and a live stream reports the same number twice a second
+                    // forever — so re-render only on a real change.
+                    if d > 0, self.duration != d { self.duration = d }
                 }
             }
-            self.isPlaying = vlcMediaPlayer.isPlaying
+            // Guarded, because `isPlaying`'s didSet calls
+            // `updatePlaybackState(force: true)` — which reads and writes
+            // MPNowPlayingInfoCenter, a round trip to the media server.
+            // Assigning the same `true` on every tick meant doing that twice a
+            // second for the whole time something was playing, deliberately
+            // skipping the two-second throttle sitting right below it. Now the
+            // forced path runs on genuine play/pause transitions and the
+            // throttled call below handles the periodic refresh.
+            let playing = vlcMediaPlayer.isPlaying
+            if self.isPlaying != playing { self.isPlaying = playing }
             self.updatePlaybackState()
             // Refresh on every count change, NOT just once: live TS streams
             // announce their closed-caption/teletext tracks seconds or
             // minutes into playback, and the old fill-once guard locked the
             // list before they ever appeared — which is why most streams
             // showed no subtitles.
+            //
+            // Every two seconds rather than every tick, though. Each pass
+            // asks VLC for four bridged NSArrays and throws them away again,
+            // and a track list that takes seconds to appear is in no hurry.
+            let pollNow = Date()
+            guard pollNow.timeIntervalSince(lastTrackPollTime) >= 2.0 else { return }
+            lastTrackPollTime = pollNow
+
             if let tracks = vlcMediaPlayer.videoSubTitlesNames as? [String],
                let indexes = vlcMediaPlayer.videoSubTitlesIndexes as? [Int],
                tracks.count == indexes.count {

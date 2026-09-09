@@ -243,6 +243,8 @@ final class FlagBox: ObservableObject {
 
     @Published var value: Bool = false
 
+    init(_ value: Bool = false) { self.value = value }
+
     /// Assigns only on a real change, so repeat writes don't publish.
     func set(_ newValue: Bool) {
         if newValue != value { value = newValue }

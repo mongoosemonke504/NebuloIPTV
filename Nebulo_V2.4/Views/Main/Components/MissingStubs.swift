@@ -77,10 +77,34 @@ struct SearchView: View {
 
     private enum Scope: String, CaseIterable {
         case all = "All", channels = "Channels", epg = "EPG",
-             categories = "Categories", recordings = "Recordings"
+             categories = "Categories", teams = "Teams", recordings = "Recordings"
     }
 
     @State private var scope: Scope = .all
+
+    /// Teams and leagues whose names match the query, offered for one-tap
+    /// following. Ranked in a `.task(id:)` rather than in the body, so typing
+    /// never runs the catalog scan mid-render.
+    @State private var favoritableHits: [ScoreViewModel.FavoritableHit] = []
+    /// True when what was typed IS a team or league name rather than merely
+    /// touching one — "arse" → Arsenal leads the results; "sports" → the
+    /// channels lead and the follow rows sit below them.
+    @State private var favoritableLeads = false
+
+    private func rankFavoritables() {
+        guard let svm = scoreViewModel else {
+            favoritableHits = []
+            favoritableLeads = false
+            return
+        }
+        let needle = query.lowercased()
+        // Ranked deep once; the All scope shows only the head of the list and
+        // the Teams chip shows the rest, so switching scopes never re-ranks.
+        let hits = svm.favoritableMatches(for: needle, limit: 30)
+        favoritableHits = hits
+        favoritableLeads = !needle.isEmpty
+            && (hits.first?.displayName.lowercased().hasPrefix(needle) ?? false)
+    }
 
     @State private var pushTask: Task<Void, Never>? = nil
     /// True between a keystroke and the debounced hand-off, so the results
@@ -327,6 +351,13 @@ struct SearchView: View {
         .onChangeCompat(of: queryText) { newValue in
             scheduleSearchPush(newValue)
         }
+        // Teams and leagues come from the already-loaded catalog, so they are
+        // ranked straight off the keystroke — no need to wait out the 250 ms
+        // debounce that the channel search needs.
+        .task(id: queryText) { rankFavoritables() }
+        // The catalog arrives after launch — re-rank once it does, so a search
+        // run before it loaded doesn't sit there showing nothing to follow.
+        .task(id: scoreViewModel?.teamCatalog.count ?? 0) { rankFavoritables() }
         // The probe on the big title reports its offset in the scroll's
         // coordinate space; 40pt of scroll completes the title crossfade —
         // the same ramp the Sports and Favorites hubs use. Measured against
@@ -577,11 +608,42 @@ struct SearchView: View {
         .padding(.top, 60)
     }
 
+    /// The follow rows. One definition, placed either above the channel
+    /// results or below them depending on `favoritableLeads`.
+    @ViewBuilder
+    private var favoritableSection: some View {
+        if let svm = scoreViewModel, !favoritableHits.isEmpty {
+            // Alongside everything else, only the best few — enough to catch
+            // the team you meant without burying the channels. The Teams chip
+            // is where the full list lives.
+            let shown = scope == .teams ? favoritableHits : Array(favoritableHits.prefix(5))
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Teams & Leagues")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.white)
+                ForEach(shown) { hit in
+                    SearchFavoritableRow(
+                        hit: hit,
+                        isFavorite: svm.isFavorite(hit),
+                        onToggle: {
+                            guard SwipeTapGuard.tapsAllowed else { return }
+                            svm.toggleFavorite(hit)
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    /// True when the Teams scope has nothing to show — used so that scope
+    /// answers for itself the way Categories does.
+    private var hasFavoritableResults: Bool { !favoritableHits.isEmpty }
+
     @ViewBuilder
     private var resultsList: some View {
         VStack(alignment: .leading, spacing: 22) {
-            // A channel isn't a result in either of these scopes.
-            if scope != .recordings, scope != .categories, let top = topResult {
+            // A channel isn't a result in any of these scopes.
+            if scope != .recordings, scope != .categories, scope != .teams, let top = topResult {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("TOP RESULT")
                         .font(.caption.weight(.semibold))
@@ -590,6 +652,8 @@ struct SearchView: View {
                     topResultCard(top.channel, isLive: top.isLive)
                 }
             }
+
+            if scope == .all && favoritableLeads { favoritableSection }
 
             if scope == .all || scope == .channels {
                 let rows = nameMatches.filter { $0.id != topResult?.channel.id }
@@ -604,6 +668,8 @@ struct SearchView: View {
                     section(title: "On Now", channels: rows)
                 }
             }
+
+            if scope == .teams || (scope == .all && !favoritableLeads) { favoritableSection }
 
             if scope == .all || scope == .recordings {
                 let recs = recordingMatches
@@ -637,11 +703,16 @@ struct SearchView: View {
                 }
             }
 
-            // The Categories scope answers for itself: it can be empty while
-            // channels matched, and full while nothing else did.
+            // The Categories and Teams scopes answer for themselves: either
+            // can be empty while channels matched, or full while nothing
+            // else did.
             if scope == .categories {
                 if viewModel.filteredCategories.isEmpty { noResults }
-            } else if topResult == nil && recordingMatches.isEmpty && viewModel.filteredCategories.isEmpty {
+            } else if scope == .teams {
+                if !hasFavoritableResults { noResults }
+            } else if topResult == nil && recordingMatches.isEmpty
+                        && viewModel.filteredCategories.isEmpty
+                        && !hasFavoritableResults {
                 noResults
             }
 
