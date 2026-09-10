@@ -216,6 +216,9 @@ struct SportsHubView: View {
     /// reach the top.
     @State private var bigTitleHeight: CGFloat = 56
 
+    @State private var todaysEventCount: Int = 0
+    @State private var upcomingEventCount: Int = 0
+
     /// Breathing room between the bottom of the chip row and the first thing
     /// on the page, so a league label does not sit tight against the capsules.
     static let headerClearance: CGFloat = 28
@@ -386,19 +389,25 @@ struct SportsHubView: View {
     /// step with the space each page reserves for it.
     private var headerChrome: some View {
         VStack(alignment: .leading, spacing: 0) {
-            bigTitle
-                .padding(.horizontal, 20)
-                .padding(.bottom, 10)
-                .background(
-                    GeometryReader { g in
-                        Color.clear
-                            .onAppear { bigTitleHeight = g.size.height }
-                            .onChangeCompat(of: g.size.height) { bigTitleHeight = $0 }
-                    }
-                )
-                // Fades over its own height, so it is gone exactly as it
-                // reaches the top rather than lingering behind the chips.
-                .modifier(HubHeaderFade(offset: headerScroll, over: bigTitleHeight))
+            // Title and counts travel together. Once they have gone the
+            // chrome row's own "N live" line is what is left, which is
+            // exactly the one number worth keeping while you scroll.
+            VStack(alignment: .leading, spacing: 8) {
+                bigTitle
+                liveCountsLine
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 10)
+            .background(
+                GeometryReader { g in
+                    Color.clear
+                        .onAppear { bigTitleHeight = g.size.height }
+                        .onChangeCompat(of: g.size.height) { bigTitleHeight = $0 }
+                }
+            )
+            // Fades over its own height, so it is gone exactly as it
+            // reaches the top rather than lingering behind the chips.
+            .modifier(HubHeaderFade(offset: headerScroll, over: bigTitleHeight))
 
             pinnedChipHeader
         }
@@ -421,6 +430,56 @@ struct SportsHubView: View {
             // never changes — which is what keeps each page's reserved space
             // constant while the header moves over it.
             .modifier(HubHeaderShift(offset: headerScroll, limit: bigTitleHeight))
+    }
+
+    /// What is on today, shown only while the header is open. The chrome row
+    /// keeps the live count once this has scrolled away.
+    private var liveCountsLine: some View {
+        HStack(spacing: 6) {
+            Circle().fill(Color.red).frame(width: 7, height: 7)
+            Text("\(scoreViewModel.allLiveGames.count) live")
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(.red)
+            Text("·")
+                .foregroundStyle(.secondary)
+            Text("\(todaysEventCount) today")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+            Text("·")
+                .foregroundStyle(.secondary)
+            Text("\(upcomingEventCount) upcoming")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Walks every visible sport once and counts today's fixtures, and how
+    /// many of those have yet to start.
+    private func recomputeStats() {
+        let cal = Calendar.current
+        var todaysIDs = Set<String>()
+        var upcomingIDs = Set<String>()
+
+        func note(_ g: ESPNEvent) {
+            guard cal.isDateInToday(g.gameDate) else { return }
+            todaysIDs.insert(g.id)
+            if g.status.type.state == "pre" { upcomingIDs.insert(g.id) }
+        }
+
+        for (sport, games) in scoreViewModel.filteredGames
+        where !scoreViewModel.hiddenSportTabs.contains(sport) {
+            for g in games { note(g) }
+        }
+        for (sport, sections) in scoreViewModel.filteredSectionsMap
+        where !scoreViewModel.hiddenSportTabs.contains(sport) {
+            for s in sections {
+                for g in s.games { note(g) }
+            }
+        }
+
+        todaysEventCount = todaysIDs.count
+        upcomingEventCount = upcomingIDs.count
     }
 
     /// The large page title. This is the part that scrolls away.
@@ -523,6 +582,7 @@ struct SportsHubView: View {
         .task {
             await scoreViewModel.fetchScores()
             scoreViewModel.applyFilter(text: viewModel.searchText)
+            recomputeStats()
 
             // Everything below is WARMING — nothing on screen waits for it —
             // so it must not land on the frame the tab switch is animating.
@@ -541,6 +601,10 @@ struct SportsHubView: View {
             // are cached before the user can swipe there, rather than
             // streaming in on arrival.
             scoreViewModel.prefetchLogos(for: .soccerLeagues)
+        }
+        // Recompute the header counts whenever the live game set changes.
+        .task(id: scoreViewModel.allLiveGameIDsKey) {
+            recomputeStats()
         }
         // Was `.onAppear`. Mounted hubs appear once and then stay, so the
         // arrival work hangs off becoming visible instead — watched by a

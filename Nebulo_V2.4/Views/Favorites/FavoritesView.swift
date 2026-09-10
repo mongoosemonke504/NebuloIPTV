@@ -77,8 +77,9 @@ struct FavoritesView: View {
     @State private var bigTitleHeight: CGFloat = 56
 
     /// Breathing room between the bottom of the pill row and the first thing
-    /// on the page.
-    static let headerClearance: CGFloat = 28
+    /// on the page. Larger than the Sports hub's: the filter pills are taller
+    /// than the sport chips, so the same gap read as tighter here.
+    static let headerClearance: CGFloat = 42
 
     /// Distance from the top of the DISPLAY down to the top of the header.
     ///
