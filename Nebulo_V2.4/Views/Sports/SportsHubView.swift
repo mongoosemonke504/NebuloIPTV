@@ -218,7 +218,7 @@ struct SportsHubView: View {
 
     /// Breathing room between the bottom of the chip row and the first thing
     /// on the page, so a league label does not sit tight against the capsules.
-    static let headerClearance: CGFloat = 16
+    static let headerClearance: CGFloat = 28
 
     /// Distance from the top of the DISPLAY down to the top of the header.
     ///

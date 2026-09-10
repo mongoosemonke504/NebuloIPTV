@@ -78,7 +78,7 @@ struct FavoritesView: View {
 
     /// Breathing room between the bottom of the pill row and the first thing
     /// on the page.
-    static let headerClearance: CGFloat = 16
+    static let headerClearance: CGFloat = 28
 
     /// Distance from the top of the DISPLAY down to the top of the header.
     ///

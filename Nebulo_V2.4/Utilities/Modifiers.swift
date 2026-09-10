@@ -393,7 +393,7 @@ struct HeaderFadeBackdrop: View {
     var extendUp: CGFloat = 112
     /// How far BELOW the header the wash keeps fading, so it resolves into the
     /// page instead of stopping at an edge.
-    var extendDown: CGFloat = 64
+    var extendDown: CGFloat = 84
     /// Opacity at the very top of the display, behind the status bar.
     var strength: Double = 1.0
     var tint: Color = .black
@@ -414,10 +414,10 @@ struct HeaderFadeBackdrop: View {
         return LinearGradient(
             stops: [
                 .init(color: tint.opacity(strength),        location: 0.0),
-                .init(color: tint.opacity(strength * 0.93), location: atHeaderBottom * 0.30),
-                .init(color: tint.opacity(strength * 0.74), location: atHeaderBottom * 0.56),
-                .init(color: tint.opacity(strength * 0.48), location: atHeaderBottom * 0.80),
-                .init(color: tint.opacity(strength * 0.28), location: atHeaderBottom),
+                .init(color: tint.opacity(strength * 0.97), location: atHeaderBottom * 0.32),
+                .init(color: tint.opacity(strength * 0.86), location: atHeaderBottom * 0.58),
+                .init(color: tint.opacity(strength * 0.64), location: atHeaderBottom * 0.82),
+                .init(color: tint.opacity(strength * 0.42), location: atHeaderBottom),
                 .init(color: tint.opacity(0),               location: 1.0)
             ],
             startPoint: .top, endPoint: .bottom
