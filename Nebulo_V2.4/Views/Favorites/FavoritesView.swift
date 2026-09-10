@@ -37,78 +37,13 @@ struct FavoritesView: View {
     @State private var showReorderChannels = false
     @State private var showSeeAllTeams = false
     @State private var showSearchSheet = false
-    /// Set the instant a drag reads as horizontal, which disables the page's
-    /// vertical scroll for the rest of that gesture. A leaf box, so flipping it
-    /// re-renders the scroll modifier alone.
-    @State private var scrollLock = FlagBox()
-
-    /// 0 at rest, 1 once the big title has scrolled away. Tracked 1:1 with
-    /// the scroll offset (no canned animation) — drives the title fade and
-    /// the compact line growing into the pinned pill bar. Held in its own
-    /// object (observed only by the fading title + gradient) so scrolling
-    /// doesn't re-render this whole screen's content every frame.
-    @State private var titleProgress = ScrollProgress()
-
-    /// Live scroll offset and the height of the big title above the pills.
-    /// A class, not `@State`: `scrollY` updates on every scroll frame and must
-    /// not re-render this screen. Mirrors the Sports hub's HubMetrics.
-    @Observable final class FavMetrics {
-        var titleHeight: CGFloat = 96
-        var scrollY: CGFloat = 0
-    }
-    @State private var favMetrics = FavMetrics()
-    @State private var favScrollPos = ScrollPosition()
-
-    /// Which side the incoming content enters from. `true` when moving to a
-    /// pill further right, so content slides in from the trailing edge like
-    /// a page turn. Set BEFORE the animated change so the transition reads
-    /// the correct direction.
-    @State private var slideFromTrailing = true
-
-    /// True while a slide transition is in flight. Filter changes are
-    /// ignored during this window: interrupting a `.move` transition
-    /// mid-animation can leave the incoming view stuck offscreen (a fully
-    /// blank section) — rapid swipes must wait ~0.3s for the previous
-    /// slide to settle.
-    @State private var isSliding = false
-
-    /// Central filter switch: derives the slide direction from pill order
-    /// and swaps with a flat easeOut — no spring, no bounce.
+    /// Central filter switch, used by the pill row. The pager animates the
+    /// page move itself, so this is only a selection change — no slide
+    /// direction and no scroll clamp: each page keeps its own scroll
+    /// position, which is exactly what the shared scroll could not do.
     private func selectFilter(_ newFilter: FavoritesFilter) {
-        guard newFilter != filter, !isSliding else { return }
-        let all = FavoritesFilter.allCases
-        let oldIdx = all.firstIndex(of: filter) ?? 0
-        let newIdx = all.firstIndex(of: newFilter) ?? 0
-        slideFromTrailing = newIdx > oldIdx
-        isSliding = true
-        // Land no lower than the compact anchor — pills pinned, big title gone.
-        // The pages are wildly different lengths (a long channel list against
-        // three favourites), so switching while scrolled deep into a long one
-        // left the offset past the end of a short one: a screen of nothing.
-        // Clamping only ever moves the page UP, and never while it already sits
-        // above the anchor, so a switch near the top doesn't jump.
-        var t = Transaction()
-        t.disablesAnimations = true
-        withTransaction(t) {
-            favScrollPos.scrollTo(y: min(favMetrics.scrollY, favMetrics.titleHeight))
-        }
-        withAnimation(.easeOut(duration: 0.25)) { filter = newFilter }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            isSliding = false
-        }
-    }
-
-    /// One filter switch per drag — set mid-drag when the swipe fires,
-    /// cleared on finger-lift.
-    @State private var swipeConsumed = false
-    /// Steps to the previous/next filter pill. Driven by the horizontal swipe.
-    /// No haptic — swipes stay silent; haptics belong to deliberate taps.
-    private func advanceFilter(_ delta: Int) {
-        let all = FavoritesFilter.allCases
-        guard let idx = all.firstIndex(of: filter) else { return }
-        let next = idx + delta
-        guard all.indices.contains(next) else { return }
-        selectFilter(all[next])
+        guard newFilter != filter else { return }
+        withAnimation(.easeInOut(duration: 0.25)) { filter = newFilter }
     }
 
     private var favoriteChannels: [StreamChannel] { viewModel.orderedFavoriteChannels() }
@@ -119,108 +54,63 @@ struct FavoritesView: View {
         scoreViewModel.resolvedFavoriteLeagues()
     }
 
+    /// One filter's content as its own independently scrolling page.
+    ///
+    /// The header is a top safe-area inset on the pager, so each page's
+    /// scroll view is laid out beneath it automatically.
+    private func filterPage(for f: FavoritesFilter) -> some View {
+        ScrollView(showsIndicators: false) {
+            content(for: f)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private func content(for f: FavoritesFilter) -> some View {
+        switch f {
+        case .all:       allPageContent
+        case .channels:  channelsPageContent
+        case .teams:     teamsPageContent
+        case .leagues:   leaguesPageContent
+        }
+    }
+
+    /// Title and pills — FIXED at the top.
+    ///
+    /// Neither scrolls away, and neither travels sideways with the pages.
+    /// Content passes underneath it, which is what the scrim behind it is for.
+    private var headerChrome: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            titleRow
+            pinnedPillHeader
+        }
+        .background(alignment: .top) {
+            CompactHeaderScrim(height: 240, fadeStart: 0.44)
+                .offset(y: -120)
+                .allowsHitTesting(false)
+        }
+    }
+
     var body: some View {
         ZStack(alignment: .top) {
             AppBackground()
 
-            // One scroll for the whole screen, exactly like Recordings: the
-            // big "Favorites" title is scroll content and physically scrolls
-            // away with the content. The filter pills ride in a PINNED
-            // section header — they scroll as part of the page but stick at
-            // the top once they reach it, so they're always available. As
-            // the big title leaves, a compact "Favorites" line grows into
-            // the pinned bar above the pills.
-            ScrollView(showsIndicators: false) {
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    titleRow
-                        .scrollProgressOpacity(titleProgress) { 1 - Double($0) }
-                        .background(ScrollOffsetProbe(space: "favScroll", id: "fav"))
-                        // How far down the pills pin — the anchor a filter
-                        // switch clamps to.
-                        .background(
-                            GeometryReader { g in
-                                Color.clear
-                                    .onAppear { favMetrics.titleHeight = g.size.height }
-                                    .onChangeCompat(of: g.size.height) { favMetrics.titleHeight = $0 }
-                            }
-                        )
-
-                    Section(header: pinnedPillHeader) {
-                        // ZStack so the outgoing and incoming content overlap
-                        // during the directional slide instead of stacking
-                        // vertically. `.id(filter)` gives each page distinct
-                        // identity so the transition fires.
-                        ZStack(alignment: .top) {
-                            filterContent
-                                .id(filter)
-                                // Resolves the whole page's geometry as ONE unit
-                                // while it slides. Without this a child whose own
-                                // layout settles mid-transition — a logo that has
-                                // just finished loading and now has a size — is
-                                // positioned against the page's FINAL geometry
-                                // rather than its animating one, so it sits still
-                                // while everything around it travels. That is what
-                                // stops the switch reading as a single movement.
-                                .geometryGroup()
-                                .transition(.asymmetric(
-                                    insertion: .move(edge: slideFromTrailing ? .trailing : .leading).combined(with: .opacity),
-                                    removal: .move(edge: slideFromTrailing ? .leading : .trailing).combined(with: .opacity)
-                                ))
-                        }
-                    }
+            // The four filters are SIBLINGS in a real pager, the same
+            // treatment the Sports hub got and for the same reason: with one
+            // shared scroll and the page swapped in by identity, only one
+            // page ever exists, so a swipe cannot show you the one you are
+            // swiping towards. `TabView(.page)` is UIPageViewController
+            // underneath — genuine interactive paging, both pages on screen
+            // tracking the finger, and each page keeping its own scroll
+            // position.
+            TabView(selection: $filter) {
+                ForEach(FavoritesFilter.allCases) { f in
+                    filterPage(for: f)
+                        .tag(f)
                 }
             }
-            .coordinateSpace(name: "favScroll")
-            .scrollPosition($favScrollPos)
-            // Frozen for the duration of a horizontal swipe, so a sideways
-            // gesture travels purely sideways — same as the Sports hub.
-            .scrollLocked(scrollLock)
-            .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
-                guard let y = offsets["fav"] else { return }
-                favMetrics.scrollY = max(0, -y)
-                titleProgress.set(min(max(-y / 40, 0), 1))
-            }
-            // Horizontal swipe flips to the previous/next filter, matching
-            // the Sports hub. Fires mid-drag the moment the swipe reads as
-            // horizontal so the switch tracks the gesture instead of waiting
-            // for finger-lift. Left-edge swipes stay reserved for back.
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 10, coordinateSpace: .global)
-                    .onChanged { value in
-                        let dx = value.translation.width
-                        let dy = value.translation.height
-                        // As soon as the drag reads as horizontal, open the
-                        // tap-suppression window so the row under the finger
-                        // doesn't ALSO fire on release.
-                        if abs(dx) > abs(dy) * 1.4 {
-                            SwipeTapGuard.suppress()
-                        }
-                        // ...and freeze the vertical scroll, so a sideways
-                        // swipe doesn't also drag the page up or down. A drag
-                        // that turns decisively vertical before the filter
-                        // flips releases it again, so this can never strand
-                        // the page unscrollable.
-                        if value.startLocation.x > 44 {
-                            if abs(dx) > abs(dy) * 1.4 {
-                                scrollLock.set(true)
-                            } else if !swipeConsumed, abs(dy) > abs(dx) * 1.4 {
-                                scrollLock.set(false)
-                            }
-                        }
-                        // Low threshold + mid-drag firing: the swipe is
-                        // recognised almost as soon as the finger commits to
-                        // a horizontal motion.
-                        guard !swipeConsumed,
-                              value.startLocation.x > 44,
-                              abs(dx) > 20, abs(dx) > abs(dy) * 1.4 else { return }
-                        swipeConsumed = true
-                        advanceFilter(dx < 0 ? 1 : -1)
-                    }
-                    .onEnded { _ in
-                        swipeConsumed = false
-                        scrollLock.set(false)
-                    }
-            )
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .safeAreaInset(edge: .top, spacing: 0) { headerChrome }
         }
         // NOTE: no local bottom search pill here — MainViewModifiers already
         // pins the app-wide search bar to the bottom of every screen, and
@@ -319,32 +209,6 @@ struct FavoritesView: View {
             set: { selectFilter($0) }
         ))
             .padding(.vertical, 4)
-            // Home-style dark gradient. As part of the pinned header it
-            // renders ABOVE the scrolling content (dimming it as it passes
-            // under) but BEHIND the pills, which stay at full contrast. The
-            // tall frame + upward offset stretch it past the screen top so
-            // no edge can form; below, it fades to clear past the pills.
-            .background(alignment: .top) {
-                    // Sized to the header above it: the chrome row lost 10pt, so
-                    // the scrim's reach and the point it starts fading come in by
-                    // the same amount. The upward offset still has to clear the
-                    // status bar plus that row, with slack — it is what stops an
-                    // edge forming at the top of the screen.
-                CompactHeaderScrim(height: 240, fadeStart: 0.44)
-                    .offset(y: -120)
-                    .scrollProgressOpacity(titleProgress, cullWhenHidden: true) { Double($0 * $0) }
-            }
-    }
-
-    /// Content for the selected filter, shown below the pinned pills in the
-    /// shared scroll. Tapping a pill swaps this in place.
-    @ViewBuilder private var filterContent: some View {
-        switch filter {
-        case .all:       allPageContent
-        case .channels:  channelsPageContent
-        case .teams:     teamsPageContent
-        case .leagues:   leaguesPageContent
-        }
     }
 
     /// Tabs share a baseline of top inset + floating-dock clearance.

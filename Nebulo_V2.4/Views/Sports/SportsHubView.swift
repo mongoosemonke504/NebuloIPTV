@@ -72,19 +72,6 @@ private struct CollapsibleSection<Content: View>: View {
     }
 }
 
-/// Slides the floating header up with the page it belongs to, stopping once
-/// the chip row reaches the top. A leaf: it observes the box, the hub does
-/// not, so a scroll frame re-renders this modifier and nothing else.
-private struct HubHeaderShift: ViewModifier {
-    @ObservedObject var offset: ScrollProgress
-    /// How far it may travel — the height of the band above the chips.
-    let limit: CGFloat
-
-    func body(content: Content) -> some View {
-        content.offset(y: -min(max(offset.value, 0), max(limit, 0)))
-    }
-}
-
 /// Watches a hub's visibility flag without pulling the hub's own body into it:
 /// a zero-size view that observes the box and reports transitions.
 private struct HubActivationProbe: View {
@@ -138,12 +125,6 @@ struct SportsHubView: View {
         allowing: SportType.allCases
     )
 
-    /// 0 at rest, 1 once the big title has scrolled away. Tracked 1:1 with
-    /// the scroll offset (no canned animation) — drives the title fade and
-    /// the compact line growing into the pinned chip bar. Held in its own
-    /// object (observed only by the fading title + gradient) so scrolling the
-    /// scoreboard doesn't re-render this whole hub every frame.
-    @State private var statsProgress = ScrollProgress()
 
     private var orderedSports: [SportType] {
         scoreViewModel.sportTabOrder.filter { !scoreViewModel.hiddenSportTabs.contains($0) }
@@ -154,16 +135,6 @@ struct SportsHubView: View {
         [.all] + orderedSports.map { SportsTab.sport($0) }
     }
 
-    /// Live vertical scroll offset of the ACTIVE page, for the floating
-    /// header to ride on. A LEAF, so a scroll frame moves the header and
-    /// re-renders nothing else.
-    @State private var headerScroll = ScrollProgress()
-    /// Measured heights of the two header bands. `@State` (unlike
-    /// the live scroll offset) because each page reserves exactly this much
-    /// space at its top, so a change has to lay the pages out again — but
-    /// they only change when the header itself resizes, never while scrolling.
-    @State private var statsHeight: CGFloat = 96
-    @State private var chipRowHeight: CGFloat = 44
 
 
 
@@ -252,14 +223,12 @@ struct SportsHubView: View {
 
     /// One sport tab as its own independently scrolling page.
     ///
-    /// The spacer at the top is the space the floating header occupies. The
-    /// header is NOT part of this scroll any more — it sits above every page
-    /// so it can stay put while the pages move sideways underneath it.
+    /// The header sits in a top safe-area inset on the pager, so each page's
+    /// scroll view is laid out beneath it automatically — no reserved spacer
+    /// here, and nothing to keep in sync.
     private func pageScroll(for tab: SportsTab) -> some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
-                Color.clear
-                    .frame(height: statsHeight + chipRowHeight)
                 if isMounted(tab) {
                     pageContent(for: tab)
                         .padding(.top, 10)
@@ -267,61 +236,34 @@ struct SportsHubView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        // Read straight off this scroll view rather than through a preference.
-        // A paged TabView hosts each page in its own controller, and
-        // preferences do not reliably cross that boundary — the header would
-        // simply stop collapsing, with nothing to show why. This callback is
-        // local to the scroll view that produced it.
-        .onScrollGeometryChange(for: CGFloat.self) { geo in
-            geo.contentOffset.y + geo.contentInsets.top
-        } action: { _, y in
-            // Only the page you are on moves the header; the neighbours are
-            // mounted and reporting too.
-            guard tab == sportsTab else { return }
-            let scrolled = max(0, y)
-            headerScroll.set(scrolled)
-            statsProgress.set(min(max(scrolled / 40, 0), 1))
-        }
     }
 
-    /// Title, stats and chips, drawn ABOVE the pager rather than inside it.
+    /// Title, stats and chips — FIXED at the top of the hub.
     ///
-    /// It rides up with the active page as that page scrolls, until the chip
-    /// row reaches the top of the screen and stops — which is what the pinned
-    /// section header used to do when everything shared one scroll view. The
-    /// difference is that it no longer travels sideways with the pages, so a
-    /// swipe moves the lists and leaves the chrome alone.
+    /// It neither scrolls away nor travels sideways with the pages: it is a
+    /// top safe-area inset on the pager, so every page's scroll view is laid
+    /// out beneath it and page content passes underneath when scrolled. The
+    /// scrim behind it is therefore always on, where it used to be revealed
+    /// by scroll progress as the header collapsed.
     private var headerChrome: some View {
         VStack(alignment: .leading, spacing: 0) {
             statsHeader
                 .padding(.horizontal, 20)
                 .padding(.bottom, 10)
-                .scrollProgressOpacity(statsProgress) { 1 - Double($0) }
-                .background(
-                    GeometryReader { g in
-                        Color.clear
-                            .onAppear { statsHeight = g.size.height }
-                            .onChangeCompat(of: g.size.height) { statsHeight = $0 }
-                    }
-                )
 
             pinnedChipHeader
-                .background(
-                    GeometryReader { g in
-                        Color.clear
-                            .onAppear { chipRowHeight = g.size.height }
-                            .onChangeCompat(of: g.size.height) { chipRowHeight = $0 }
-                    }
-                )
         }
-        // Rides up by however far the page has scrolled, but never past the
-        // point where the chips reach the top. A LEAF reads the live offset,
-        // so a scroll frame moves this and re-renders nothing else.
-        .modifier(HubHeaderShift(offset: headerScroll, limit: statsHeight))
+        .background(alignment: .top) {
+            // Reaches past the top of the screen so no edge can form against
+            // the chrome row above it.
+            CompactHeaderScrim(height: 226, fadeStart: 0.46)
+                .offset(y: -112)
+                .allowsHitTesting(false)
+        }
     }
 
     var body: some View {
-        ZStack(alignment: .top) {
+        Group {
             // The pages are SIBLINGS in a real pager now, not one slot in a
             // shared scroll view swapped by identity.
             //
@@ -344,8 +286,7 @@ struct SportsHubView: View {
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
-
-            headerChrome
+            .safeAreaInset(edge: .top, spacing: 0) { headerChrome }
         }
         // Sync selectedSport when the chip selection changes so the
         // existing fetch/pre-resolution observers fire correctly.
@@ -514,15 +455,6 @@ struct SportsHubView: View {
         // scroll's clip extends under the chrome row and status bar, so the
         // gradient reaches the true screen top and no edge can form; below,
         // it fades to clear well past the chips.
-        .background(alignment: .top) {
-            // Sized to the header above it: the chrome row lost 10pt, so the
-            // scrim's reach and the point it starts fading come in to match.
-            // The upward offset still clears the status bar plus that row with
-            // slack — it is what stops an edge forming at the top of the screen.
-            CompactHeaderScrim(height: 226, fadeStart: 0.46)
-                .offset(y: -112)
-                .scrollProgressOpacity(statsProgress, cullWhenHidden: true) { Double($0 * $0) }
-        }
     }
 
     // MARK: - Stats header (above chips, visible on all tabs)

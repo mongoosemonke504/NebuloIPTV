@@ -1162,10 +1162,6 @@ struct StandardLayout: SwiftUI.View {
                 sectionChromeRow(for: StreamCategory(id: -3, name: "Sports"),
                                  titleProgress: sportsTitleProgress)
             }
-            .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
-                guard let y = offsets["sports"] else { return }
-                sportsTitleProgress.set(min(max(-y / 40, 0), 1))
-            }
             .opacity(isActive ? 1 : 0)
             .allowsHitTesting(isActive && isDetailInteractive)
             .zIndex(isActive ? 1 : -1)
@@ -1185,10 +1181,6 @@ struct StandardLayout: SwiftUI.View {
             .safeAreaInset(edge: .top, spacing: 0) {
                 sectionChromeRow(for: StreamCategory(id: -4, name: "Favorites"),
                                  titleProgress: favoritesTitleProgress)
-            }
-            .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
-                guard let y = offsets["fav"] else { return }
-                favoritesTitleProgress.set(min(max(-y / 40, 0), 1))
             }
             .opacity(isActive ? 1 : 0)
             .allowsHitTesting(isActive && isDetailInteractive)
