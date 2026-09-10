@@ -12,6 +12,8 @@ struct ReorderFavoriteChannelsSheet: View {
     var body: some View {
         NavigationView {
             List {
+                
+                
                 ForEach(viewModel.orderedFavoriteChannels()) { channel in
                     HStack(spacing: 12) {
                         if let icon = channel.icon, !icon.isEmpty {

@@ -11,6 +11,29 @@ enum FavoritesFilter: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// Slides the header up with the page as it scrolls, stopping once the pills
+/// reach the top. A leaf: it observes the box, the screen does not, so a
+/// scroll frame re-renders this modifier and nothing else.
+private struct FavHeaderShift: ViewModifier {
+    @ObservedObject var offset: ScrollProgress
+    let limit: CGFloat
+
+    func body(content: Content) -> some View {
+        content.offset(y: -min(max(offset.value, 0), max(limit, 0)))
+    }
+}
+
+/// Fades a view out across the first `over` points of scroll.
+private struct FavHeaderFade: ViewModifier {
+    @ObservedObject var offset: ScrollProgress
+    let over: CGFloat
+
+    func body(content: Content) -> some View {
+        let progress = min(max(offset.value / max(over, 1), 0), 1)
+        return content.opacity(1 - Double(progress))
+    }
+}
+
 // MARK: - Favorites screen
 
 /// Hub for the user's favorited channels, teams and leagues.
@@ -33,10 +56,43 @@ struct FavoritesView: View {
 
 
     @State private var filter: FavoritesFilter = .all
+    /// Drives the compact "Favorites" line that grows into the chrome row as
+    /// the big title scrolls away.
+    var titleProgress: ScrollProgress = ScrollProgress()
     @State private var showAddSheet = false
     @State private var showReorderChannels = false
     @State private var showSeeAllTeams = false
     @State private var showSearchSheet = false
+    /// Live scroll depth of the ACTIVE page, driving the header slide. A
+    /// LEAF, so a scroll frame moves the header and re-renders nothing else.
+    @State private var headerScroll = ScrollProgress()
+    /// How far EVERY page is scrolled, kept per filter. The pages each keep
+    /// their own scroll position, so on a swipe the header has to be told the
+    /// new page's depth — otherwise it holds the one it had for the page you
+    /// just left, and a page sitting at its top under a still-collapsed
+    /// header shows the big title's height of empty space above its content.
+    @State private var pageDepths: [String: CGFloat] = [:]
+    /// Height of the big title — how far the header travels before the pills
+    /// reach the top.
+    @State private var bigTitleHeight: CGFloat = 56
+
+    /// Breathing room between the bottom of the pill row and the first thing
+    /// on the page.
+    static let headerClearance: CGFloat = 16
+
+    /// Distance from the top of the DISPLAY down to the top of the header.
+    ///
+    /// Used ONLY to tell the backdrop how far up to reach — it is not part of
+    /// any layout, which matters: an earlier version added it to the pages'
+    /// top padding as well, on top of the safe-area inset the scroll view was
+    /// already applying, and every page sat that much too low.
+    @State private var safeTop: CGFloat = 112
+
+    /// Height of the WHOLE header. Each page reserves exactly this much and
+    /// it does NOT shrink as the header collapses, so the header sliding
+    /// cannot change how far the page thinks it has scrolled.
+    @State private var headerHeight: CGFloat = 120
+
     /// Central filter switch, used by the pill row. The pager animates the
     /// page move itself, so this is only a selection change — no slide
     /// direction and no scroll clamp: each page keeps its own scroll
@@ -44,6 +100,12 @@ struct FavoritesView: View {
     private func selectFilter(_ newFilter: FavoritesFilter) {
         guard newFilter != filter else { return }
         withAnimation(.easeInOut(duration: 0.25)) { filter = newFilter }
+    }
+
+    /// Hand the header the depth of the page just landed on, rather than
+    /// leaving it showing the depth of the page left behind.
+    private func syncHeaderToFilter(_ f: FavoritesFilter) {
+        applyHeaderDepth(pageDepths[f.rawValue] ?? 0)
     }
 
     private var favoriteChannels: [StreamChannel] { viewModel.orderedFavoriteChannels() }
@@ -62,6 +124,24 @@ struct FavoritesView: View {
         ScrollView(showsIndicators: false) {
             content(for: f)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                // The header's height plus a little clearance, so the first
+                // row has room below the pills. The scroll view supplies the
+                // status bar and chrome row itself as a safe-area content
+                // inset, so this must not add that distance again.
+                .padding(.top, headerHeight + Self.headerClearance)
+        }
+        // Read straight off this scroll view rather than through a preference:
+        // a paged TabView hosts each page in its own controller and
+        // preferences do not reliably cross that.
+        .onScrollGeometryChange(for: CGFloat.self) { geo in
+            geo.contentOffset.y + geo.contentInsets.top
+        } action: { _, y in
+            let scrolled = max(0, y)
+            // Recorded for every page, so a swipe can pick the right one up.
+            pageDepths[f.rawValue] = scrolled
+            // ...but only the page you are on may move the header.
+            guard f == filter else { return }
+            applyHeaderDepth(scrolled)
         }
     }
 
@@ -79,21 +159,68 @@ struct FavoritesView: View {
     ///
     /// Neither scrolls away, and neither travels sideways with the pages.
     /// Content passes underneath it, which is what the scrim behind it is for.
+    /// Points the header at a given scroll depth: how far it has slid, and
+    /// how far the chrome row's compact title has grown in.
+    private func applyHeaderDepth(_ scrolled: CGFloat) {
+        headerScroll.set(scrolled)
+        titleProgress.set(min(max(scrolled / max(bigTitleHeight, 1), 0), 1))
+    }
+
+    /// The header: the filter pills, and nothing else.
+    ///
+    /// The big "Favorites" title is gone — the chrome row above already names
+    /// the screen and carries the channel/team counts, so the large one was
+    /// repeating what was already there while taking most of the height at
+    /// the top. Nothing collapses as a result, so the header cannot get out
+    /// of step with the space each page reserves for it.
     private var headerChrome: some View {
         VStack(alignment: .leading, spacing: 0) {
             titleRow
+                .background(
+                    GeometryReader { g in
+                        Color.clear
+                            .onAppear { bigTitleHeight = g.size.height }
+                            .onChangeCompat(of: g.size.height) { bigTitleHeight = $0 }
+                    }
+                )
+                .modifier(FavHeaderFade(offset: headerScroll, over: bigTitleHeight))
+
             pinnedPillHeader
         }
-        .background(alignment: .top) {
-            CompactHeaderScrim(height: 240, fadeStart: 0.44)
-                .offset(y: -120)
-                .allowsHitTesting(false)
-        }
+            // Thick at the very top of the SCREEN, clear by the bottom of the
+            // pills.
+            .background(alignment: .top) {
+                HeaderFadeBackdrop(headerHeight: headerHeight, extendUp: safeTop)
+            }
+            .background(
+                GeometryReader { g in
+                    Color.clear
+                        .onAppear { headerHeight = g.size.height }
+                        .onChangeCompat(of: g.size.height) { headerHeight = $0 }
+                }
+            )
+            // `headerHeight` is measured BEFORE this, so it never changes as
+            // the header moves — which keeps each page's reserved space
+            // constant while the header rides over it.
+            .modifier(FavHeaderShift(offset: headerScroll, limit: bigTitleHeight))
+    }
+
+    /// The large page title. This is the part that scrolls away; the chrome
+    /// row above keeps a small "Favorites" once it has gone.
+    @ViewBuilder private var titleRow: some View {
+        Text("Favorites")
+            .font(NuvioTheme.pageTitleFont)
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20)
+            .padding(.top, 4)
+            .padding(.bottom, 10)
     }
 
     var body: some View {
         ZStack(alignment: .top) {
             AppBackground()
+                .ignoresSafeArea()
 
             // The four filters are SIBLINGS in a real pager, the same
             // treatment the Sports hub got and for the same reason: with one
@@ -110,8 +237,28 @@ struct FavoritesView: View {
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
-            .safeAreaInset(edge: .top, spacing: 0) { headerChrome }
+            // The pages reach the top of the DISPLAY, so their content passes
+            // behind the chrome row and the status bar. Without this there is
+            // nothing up there for the gradient to sit over, and a black wash
+            // on a black canvas is simply a black bar.
+            .ignoresSafeArea(.container, edges: .top)
+
+            // The header OVERLAYS the pages rather than being reserved by
+            // SwiftUI. `safeAreaInset` looked tidier, but its reservation and
+            // the header's own height are computed independently and were
+            // disagreeing by well over a hundred points — the empty strip
+            // between the chips and the first card. Here both sides come from
+            // the SAME measured `headerHeight`: the header is that tall, and
+            // each page reserves exactly that, so they cannot drift apart.
+            headerChrome
         }
+        .background(
+            GeometryReader { g in
+                Color.clear
+                    .onAppear { safeTop = g.frame(in: .global).minY }
+                    .onChangeCompat(of: g.frame(in: .global).minY) { safeTop = $0 }
+            }
+        )
         // NOTE: no local bottom search pill here — MainViewModifiers already
         // pins the app-wide search bar to the bottom of every screen, and
         // rendering FavoritesSearchPill as well produced two stacked bars.
@@ -119,6 +266,7 @@ struct FavoritesView: View {
         // empty inline title, plain chevron+"Back" on the leading edge in
         // white. The trailing settings gear is supplied by MainViewModifiers
         // at the parent level, exactly like the Recordings screen.
+        .onChangeCompat(of: filter) { syncHeaderToFilter($0) }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.hidden, for: .navigationBar)
@@ -165,32 +313,6 @@ struct FavoritesView: View {
 
     // MARK: Title row (matches RecordingsView's headerView)
 
-    @ViewBuilder private var titleRow: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Favorites")
-                .font(NuvioTheme.pageTitleFont)
-                .foregroundStyle(.white)
-            Text(headerSubtitle)
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.white.opacity(0.65))
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 20)
-        .padding(.top, 4)
-        .padding(.bottom, 8)
-    }
-
-    private var headerSubtitle: String {
-        let c = favoriteChannels.count
-        let t = favoriteTeams.count
-        let l = favoriteLeagues.count
-        var parts = ["\(c) channel\(c == 1 ? "" : "s")", "\(t) team\(t == 1 ? "" : "s")"]
-        // Leagues only earn a slot in the line once there are some — an
-        // always-on "0 leagues" is noise on a screen most people fill with
-        // channels and clubs.
-        if l > 0 { parts.append("\(l) league\(l == 1 ? "" : "s")") }
-        return parts.joined(separator: " · ")
-    }
 
     // MARK: TabView pages
 

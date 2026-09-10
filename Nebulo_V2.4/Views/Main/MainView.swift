@@ -1153,6 +1153,7 @@ struct StandardLayout: SwiftUI.View {
                               playAction: playAction,
                               onBack: handleBackNavigation,
                               scoreViewModel: scoreViewModel,
+                              titleProgress: sportsTitleProgress,
                               active: sportsActive)
             }
             .equatable()
@@ -1173,7 +1174,8 @@ struct StandardLayout: SwiftUI.View {
                               scoreViewModel: scoreViewModel,
                               accentColor: accentColor,
                               playAction: playAction,
-                              onBack: handleBackNavigation)
+                              onBack: handleBackNavigation,
+                              titleProgress: favoritesTitleProgress)
             }
             .equatable()
             // Chrome, preference reading and visibility all sit OUTSIDE the

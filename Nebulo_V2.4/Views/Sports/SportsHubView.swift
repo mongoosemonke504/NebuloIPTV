@@ -36,7 +36,8 @@ private enum SportsTab: Hashable {
 /// One tempo for every fold in the hub, so a league, a tennis draw and a
 /// sport in the All tab all open and close identically.
 enum SectionFold {
-    static let animation: Animation = .easeInOut(duration: 0.28)
+    static let seconds: Double = 0.26
+    static let animation: Animation = .easeInOut(duration: Self.seconds)
 }
 
 /// The rows under a collapsible section header.
@@ -57,18 +58,87 @@ private struct CollapsibleSection<Content: View>: View {
     let collapsed: Bool
     @ViewBuilder var content: () -> Content
 
+    /// The section's natural height, measured once. The whole animation is
+    /// this number sliding to zero and back.
+    @State private var naturalHeight: CGFloat = 0
+    /// Whether the rows are in the view tree at all. Stays true through the
+    /// closing animation and drops afterwards, so a folded league costs
+    /// nothing to keep folded.
+    @State private var rendered: Bool = true
+
     var body: some View {
-        VStack(spacing: 12) {
-            if !collapsed {
-                content()
-                    .transition(.opacity)
+        Group {
+            if naturalHeight > 0 {
+                body(height: collapsed ? 0 : naturalHeight)
+            } else {
+                // First pass, before anything has been measured.
+                body(height: nil)
             }
         }
+        .onChangeCompat(of: collapsed) { isCollapsed in
+            if isCollapsed {
+                DispatchQueue.main.asyncAfter(deadline: .now() + SectionFold.seconds) {
+                    if collapsed { rendered = false }
+                }
+            } else {
+                rendered = true
+            }
+        }
+    }
+
+    private func body(height: CGFloat?) -> some View {
+        VStack(spacing: 12) {
+            if rendered || !collapsed { content() }
+        }
+        // Lets the rows settle at their own height ONCE, so the animating
+        // frame below clips them rather than re-proposing a new height to
+        // every row on every frame — which is what made the fold stutter.
+        .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Anchored to the TOP so the height animation eats the section from
-        // the bottom up, towards its header, rather than from the middle out.
-        .frame(maxHeight: collapsed ? 0 : nil, alignment: .top)
+        .background(
+            GeometryReader { g in
+                Color.clear
+                    .onAppear { if !collapsed { naturalHeight = g.size.height } }
+                    .onChangeCompat(of: g.size.height) { h in
+                        // Only ever learn the height while OPEN; measuring the
+                        // clipped state would record zero and the section
+                        // could never open again.
+                        if !collapsed, h > 0 { naturalHeight = h }
+                    }
+            }
+        )
+        // Two interpolatable numbers. The previous version animated to `nil`,
+        // which SwiftUI cannot tween at all — it fell back to re-measuring the
+        // section every frame, which is why the fold ran rough.
+        .frame(height: height, alignment: .top)
         .clipped()
+        .opacity(collapsed ? 0 : 1)
+        .allowsHitTesting(!collapsed)
+    }
+}
+
+/// Slides the header up with the page as it scrolls, stopping once the chips
+/// reach the top. A leaf: it observes the box, the hub does not, so a scroll
+/// frame re-renders this modifier and nothing else.
+private struct HubHeaderShift: ViewModifier {
+    @ObservedObject var offset: ScrollProgress
+    /// How far it may travel — the height of the title that scrolls away.
+    let limit: CGFloat
+
+    func body(content: Content) -> some View {
+        content.offset(y: -min(max(offset.value, 0), max(limit, 0)))
+    }
+}
+
+/// Fades a view out across the first `over` points of scroll. A leaf, for the
+/// same reason as `HubHeaderShift`.
+private struct HubHeaderFade: ViewModifier {
+    @ObservedObject var offset: ScrollProgress
+    let over: CGFloat
+
+    func body(content: Content) -> some View {
+        let progress = min(max(offset.value / max(over, 1), 0), 1)
+        return content.opacity(1 - Double(progress))
     }
 }
 
@@ -91,6 +161,12 @@ struct SportsHubView: View {
     let accentColor: Color; let playAction: (StreamChannel) -> Void; var onBack: (() -> Void)? = nil
     @ObservedObject var scoreViewModel: ScoreViewModel
     var onOpenSearch: (() -> Void)? = nil
+    /// Drives the compact "Sports" line that grows into the chrome row as the
+    /// big title scrolls away, so the screen is still named once it has gone.
+    /// Written into directly rather than published through
+    /// `SectionScrollOffsetsKey`: the pages sit inside a paged TabView, and
+    /// preferences do not reliably cross that boundary.
+    var titleProgress: ScrollProgress = ScrollProgress()
     /// Whether this hub is the visible tab.
     ///
     /// The hub is kept alive across tab switches now (see StandardLayout), so
@@ -106,10 +182,7 @@ struct SportsHubView: View {
     /// probe below watches it.
     var active: FlagBox = FlagBox()
     @Environment(\.scenePhase) var scenePhase
-    @State private var isRefreshingAnimation = false
     /// Header stat counts — refreshed whenever the live game set changes.
-    @State private var todaysEventCount: Int = 0
-    @State private var liveChannelCount: Int = 0
 
     /// Current tab — `.all` is the "Live Now" overview.
     /// Driving a single TabView with `.page` style lets the user swipe
@@ -125,6 +198,41 @@ struct SportsHubView: View {
         allowing: SportType.allCases
     )
 
+
+    /// Live scroll depth of the ACTIVE page, driving the header slide. A
+    /// LEAF, so a scroll frame moves the header and re-renders nothing else.
+    @State private var headerScroll = ScrollProgress()
+    /// How far EVERY page is scrolled, kept per tab.
+    ///
+    /// The pages each keep their own scroll position, so on a swipe the
+    /// header has to be told the new page's depth — otherwise it holds the
+    /// one it had for the page you just left. Land on a page sitting at its
+    /// top while the header is still collapsed and the reservation is right
+    /// but the header is not in it: exactly the big title's height of empty
+    /// space above the content. Recording every page's depth (not just the
+    /// active one's) means the answer is already known when the tab changes.
+    @State private var pageDepths: [String: CGFloat] = [:]
+    /// Height of the big title — how far the header travels before the chips
+    /// reach the top.
+    @State private var bigTitleHeight: CGFloat = 56
+
+    /// Breathing room between the bottom of the chip row and the first thing
+    /// on the page, so a league label does not sit tight against the capsules.
+    static let headerClearance: CGFloat = 16
+
+    /// Distance from the top of the DISPLAY down to the top of the header.
+    ///
+    /// Used ONLY to tell the backdrop how far up to reach — it is not part of
+    /// any layout, which matters: an earlier version added it to the pages'
+    /// top padding as well, on top of the safe-area inset the scroll view was
+    /// already applying, and every page sat that much too low.
+    @State private var safeTop: CGFloat = 112
+
+    /// Height of the WHOLE header. Each page reserves exactly this much at
+    /// its top, and it does NOT change as the header collapses — which is
+    /// what keeps the slide free of feedback: the header moving cannot alter
+    /// how far the page thinks it has scrolled.
+    @State private var headerHeight: CGFloat = 140
 
     private var orderedSports: [SportType] {
         scoreViewModel.sportTabOrder.filter { !scoreViewModel.hiddenSportTabs.contains($0) }
@@ -178,11 +286,6 @@ struct SportsHubView: View {
         if case .sport(let sport) = sportsTab, !orderedSports.contains(sport) {
             sportsTab = .all
         }
-        if scoreViewModel.isLoading {
-            withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
-                isRefreshingAnimation = true
-            }
-        }
         // Ahead of the first swipe, not on it.
         warmAdjacentTabs()
     }
@@ -223,9 +326,10 @@ struct SportsHubView: View {
 
     /// One sport tab as its own independently scrolling page.
     ///
-    /// The header sits in a top safe-area inset on the pager, so each page's
-    /// scroll view is laid out beneath it automatically — no reserved spacer
-    /// here, and nothing to keep in sync.
+    /// Each page reserves the header's full height at its top. That reserve
+    /// is FIXED — it does not shrink as the header collapses — which is what
+    /// makes the collapse safe: the header sliding cannot change how far the
+    /// page thinks it has scrolled, so there is no feedback to fight.
     private func pageScroll(for tab: SportsTab) -> some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
@@ -235,36 +339,107 @@ struct SportsHubView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            // The header's height, plus a little clearance so the first
+            // league label has room to breathe instead of butting straight
+            // into the chip capsules above it.
+            //
+            // The header's height and nothing more: the scroll view supplies
+            // the status bar and chrome row itself as a safe-area content
+            // inset (its frame reaches past the top of the screen), so this
+            // must not add that distance again — doing so was what pushed
+            // every page down by it.
+            .padding(.top, headerHeight + Self.headerClearance)
+        }
+        // Read straight off this scroll view rather than through a preference:
+        // a paged TabView hosts each page in its own controller and
+        // preferences do not reliably cross that.
+        .onScrollGeometryChange(for: CGFloat.self) { geo in
+            geo.contentOffset.y + geo.contentInsets.top
+        } action: { _, y in
+            let scrolled = max(0, y)
+            // Recorded for every page, so a swipe can pick the right one up.
+            pageDepths[tab.storedValue] = scrolled
+            // ...but only the page you are on may move the header.
+            guard tab == sportsTab else { return }
+            applyHeaderDepth(scrolled)
         }
     }
 
-    /// Title, stats and chips — FIXED at the top of the hub.
+    /// Points the header at a given scroll depth: how far it has slid, and
+    /// how far the chrome row's compact title has grown in.
+    private func applyHeaderDepth(_ scrolled: CGFloat) {
+        headerScroll.set(scrolled)
+        // Hands the compact "Sports" line to the chrome row as the big one
+        // leaves, so the screen is still named once it has gone.
+        titleProgress.set(min(max(scrolled / max(bigTitleHeight, 1), 0), 1))
+    }
+
+    /// The header: the section chips, and nothing else.
     ///
-    /// It neither scrolls away nor travels sideways with the pages: it is a
-    /// top safe-area inset on the pager, so every page's scroll view is laid
-    /// out beneath it and page content passes underneath when scrolled. The
-    /// scrim behind it is therefore always on, where it used to be revealed
-    /// by scroll progress as the header collapsed.
+    /// The big "Sports" title and the "N LIVE · N channels · N events today"
+    /// line are gone. The chrome row above already names the screen and
+    /// carries the live count, so both were saying a second time what was
+    /// already on screen while taking most of the height at the top.
+    ///
+    /// Nothing collapses as a result, which is worth more than it sounds: the
+    /// header no longer moves with the scroll, so it can no longer get out of
+    /// step with the space each page reserves for it.
     private var headerChrome: some View {
         VStack(alignment: .leading, spacing: 0) {
-            statsHeader
+            bigTitle
                 .padding(.horizontal, 20)
                 .padding(.bottom, 10)
+                .background(
+                    GeometryReader { g in
+                        Color.clear
+                            .onAppear { bigTitleHeight = g.size.height }
+                            .onChangeCompat(of: g.size.height) { bigTitleHeight = $0 }
+                    }
+                )
+                // Fades over its own height, so it is gone exactly as it
+                // reaches the top rather than lingering behind the chips.
+                .modifier(HubHeaderFade(offset: headerScroll, over: bigTitleHeight))
 
             pinnedChipHeader
         }
-        .background(alignment: .top) {
-            // Reaches past the top of the screen so no edge can form against
-            // the chrome row above it.
-            CompactHeaderScrim(height: 226, fadeStart: 0.46)
-                .offset(y: -112)
-                .allowsHitTesting(false)
+            // Thick at the very top of the SCREEN, clear by the bottom of the
+            // chips. Drawn taller than the header and pushed back up over the
+            // chrome row and status bar, which costs nothing in layout
+            // because a background is never clipped.
+            .background(alignment: .top) {
+                HeaderFadeBackdrop(headerHeight: headerHeight, extendUp: safeTop)
+            }
+            .background(
+                GeometryReader { g in
+                    Color.clear
+                        .onAppear { headerHeight = g.size.height }
+                        .onChangeCompat(of: g.size.height) { headerHeight = $0 }
+                }
+            )
+            // The whole header rides up with the page, stopping once the chips
+            // reach the top. `headerHeight` is measured BEFORE this and so
+            // never changes — which is what keeps each page's reserved space
+            // constant while the header moves over it.
+            .modifier(HubHeaderShift(offset: headerScroll, limit: bigTitleHeight))
+    }
+
+    /// The large page title. This is the part that scrolls away.
+    private var bigTitle: some View {
+        Button(action: {
+            ChannelViewModel.shared.triggerSelectionHaptic()
+            Task { await scoreViewModel.fetchScores(forceRefresh: true) }
+        }) {
+            Text("Sports")
+                .font(NuvioTheme.pageTitleFont)
+                .foregroundStyle(.white)
         }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     var body: some View {
-        Group {
-            // The pages are SIBLINGS in a real pager now, not one slot in a
+        ZStack(alignment: .top) {
+            // The pages are SIBLINGS in a real pager, not one slot in a
             // shared scroll view swapped by identity.
             //
             // That shared scroll is what made a good swipe impossible: there
@@ -272,13 +447,11 @@ struct SportsHubView: View {
             // meant rendering a stand-in copy over the top and hand-animating
             // both — which never lines up, because a stand-in cannot
             // reproduce a scrolled page's position, height or scroll state.
-            // Every fix for one artefact produced another.
             //
             // `TabView(.page)` is UIPageViewController underneath: real
             // interactive paging, both pages genuinely on screen and tracking
-            // the finger, correct rubber-banding at the ends, and the
-            // release physics for free. Each page also keeps its own scroll
-            // position, which the single scroll could not do at all.
+            // the finger, correct rubber-banding at the ends, and the release
+            // physics for free. Each page also keeps its own scroll position.
             TabView(selection: $sportsTab) {
                 ForEach(orderedTabs, id: \.self) { tab in
                     pageScroll(for: tab)
@@ -286,8 +459,28 @@ struct SportsHubView: View {
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
-            .safeAreaInset(edge: .top, spacing: 0) { headerChrome }
+            // The pages reach the top of the DISPLAY, so their content passes
+            // behind the chrome row and the status bar. Without this there is
+            // nothing up there for the gradient to sit over, and a black wash
+            // on a black canvas is simply a black bar.
+            .ignoresSafeArea(.container, edges: .top)
+
+            // The header OVERLAYS the pages rather than being reserved by
+            // SwiftUI. `safeAreaInset` looked tidier, but its reservation and
+            // the header's own height are computed independently and were
+            // disagreeing by well over a hundred points — the empty strip
+            // between the chips and the first card. Here both sides come from
+            // the SAME measured `headerHeight`: the header is that tall, and
+            // each page reserves exactly that, so they cannot drift apart.
+            headerChrome
         }
+        .background(
+            GeometryReader { g in
+                Color.clear
+                    .onAppear { safeTop = g.frame(in: .global).minY }
+                    .onChangeCompat(of: g.frame(in: .global).minY) { safeTop = $0 }
+            }
+        )
         // Sync selectedSport when the chip selection changes so the
         // existing fetch/pre-resolution observers fire correctly.
         // Deferred past the slide: the observers kick off score fetches,
@@ -295,6 +488,10 @@ struct SportsHubView: View {
         // the same frames as the slide animation is what made the chip
         // switch look choppy.
         .onChangeCompat(of: sportsTab) { tab in
+            // The page you just landed on has its own scroll position; hand
+            // the header that one immediately rather than leaving it showing
+            // the depth of the page you left.
+            applyHeaderDepth(pageDepths[tab.storedValue] ?? 0)
             // Remembered here rather than in selectTab, so a swipe between
             // tabs is recorded the same as a chip tap.
             UserDefaults.standard.set(tab.storedValue, forKey: SportsTab.storageKey)
@@ -326,7 +523,6 @@ struct SportsHubView: View {
         .task {
             await scoreViewModel.fetchScores()
             scoreViewModel.applyFilter(text: viewModel.searchText)
-            recomputeStats()
 
             // Everything below is WARMING — nothing on screen waits for it —
             // so it must not land on the frame the tab switch is animating.
@@ -346,35 +542,22 @@ struct SportsHubView: View {
             // streaming in on arrival.
             scoreViewModel.prefetchLogos(for: .soccerLeagues)
         }
-        // Recompute header stats whenever the live game set changes.
-        .task(id: scoreViewModel.allLiveGameIDsKey) {
-            recomputeStats()
-        }
         // Was `.onAppear`. Mounted hubs appear once and then stay, so the
         // arrival work hangs off becoming visible instead — watched by a
         // zero-size probe so this screen's body stays out of it.
         .background(
             HubActivationProbe(flag: active) { isVisible in
-                guard isVisible else {
-                    // A spinner nobody can see must not keep driving frames.
-                    isRefreshingAnimation = false
-                    return
-                }
+                guard isVisible else { return }
                 arrive()
             }
         )
         .onChangeCompat(of: scoreViewModel.isLoading) { loading in
-            guard active.value else { return }
-            if loading {
-                withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
-                    isRefreshingAnimation = true
-                }
-            } else {
-                withAnimation(.default) {
-                    isRefreshingAnimation = false
-                }
-                triggerPreResolution()
-            }
+            // The pulsing title this used to drive is gone with the big
+            // header, so there is nothing left to animate here — and a
+            // `repeatForever` on state nobody reads is a display link kept
+            // alive for no picture at all.
+            guard active.value, !loading else { return }
+            triggerPreResolution()
         }
         .onChangeCompat(of: scenePhase) { phase in
             guard active.value else { return }
@@ -459,65 +642,6 @@ struct SportsHubView: View {
 
     // MARK: - Stats header (above chips, visible on all tabs)
 
-    private var statsHeader: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Button(action: {
-                ChannelViewModel.shared.triggerSelectionHaptic()
-                Task { await scoreViewModel.fetchScores(forceRefresh: true) }
-            }) {
-                Text("Sports")
-                    .font(NuvioTheme.pageTitleFont)
-                    .foregroundStyle(.white)
-                    .opacity(isRefreshingAnimation ? 0.3 : 1.0)
-            }
-            .buttonStyle(.plain)
-
-            HStack(spacing: 6) {
-                Circle().fill(Color.red).frame(width: 7, height: 7)
-                Text("\(scoreViewModel.allLiveGames.count) LIVE")
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(.red)
-                Text("·")
-                    .foregroundStyle(.secondary)
-                Text("\(liveChannelCount) channels")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.secondary)
-                Text("·")
-                    .foregroundStyle(.secondary)
-                Text("\(todaysEventCount) events today")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func recomputeStats() {
-        let cal = Calendar.current
-
-        var todaysIDs = Set<String>()
-        for (sport, games) in scoreViewModel.filteredGames where !scoreViewModel.hiddenSportTabs.contains(sport) {
-            for g in games where cal.isDateInToday(g.gameDate) {
-                todaysIDs.insert(g.id)
-            }
-        }
-        for (sport, sections) in scoreViewModel.filteredSectionsMap where !scoreViewModel.hiddenSportTabs.contains(sport) {
-            for s in sections {
-                for g in s.games where cal.isDateInToday(g.gameDate) {
-                    todaysIDs.insert(g.id)
-                }
-            }
-        }
-        todaysEventCount = todaysIDs.count
-
-        var channels = Set<String>()
-        for game in scoreViewModel.allLiveGames {
-            if let n = game.broadcastName?.lowercased(), !n.isEmpty {
-                channels.insert(n)
-            }
-        }
-        liveChannelCount = channels.count
-    }
 
     private func triggerPreResolution() {
         let sport = scoreViewModel.selectedSport

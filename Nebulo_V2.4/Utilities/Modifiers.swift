@@ -369,6 +369,65 @@ extension View {
 /// so they read identically. `height` sets the total reach and `fadeStart` is
 /// the fraction that stays fully solid before the long fade begins — a taller
 /// solid cap for headers that sit further below the top of the screen.
+/// Backdrop for a hub header that floats over its scrolling content.
+///
+/// Thickest at the very TOP OF THE DISPLAY — above the Dynamic Island, so the
+/// status bar and the chrome row stay legible over whatever has scrolled up
+/// behind them — and clear again by the BOTTOM of the section row, where it
+/// hands over to the page with no edge to see.
+///
+/// It reaches the top of the display WITHOUT moving anything: the wash is
+/// drawn `extendUp` points taller than the header and offset back up by the
+/// same amount. A background is never clipped and never affects layout, which
+/// is what makes that free — the header, the chrome row and the pages all stay
+/// exactly where they are.
+///
+/// Deliberately a plain gradient with no `.regularMaterial`. A material is a
+/// full-width backdrop blur recomputed on every frame of every scroll, and
+/// this sits over the busiest list in the app.
+struct HeaderFadeBackdrop: View {
+    /// The header's own height.
+    var headerHeight: CGFloat
+    /// How far ABOVE the header the wash reaches — the chrome row plus the
+    /// status bar. Overshooting is harmless: the excess is off-screen.
+    var extendUp: CGFloat = 112
+    /// How far BELOW the header the wash keeps fading, so it resolves into the
+    /// page instead of stopping at an edge.
+    var extendDown: CGFloat = 64
+    /// Opacity at the very top of the display, behind the status bar.
+    var strength: Double = 1.0
+    var tint: Color = .black
+
+    var body: some View {
+        // The ramp runs the WHOLE way down — that is the difference between a
+        // gradient and a black box.
+        //
+        // It used to hold near full strength from the top of the screen all
+        // the way to the bottom of the section row and squeeze the entire fade
+        // into the short tail below it. Everything above the chips was then
+        // 80-90% black across its whole depth, which reads as a flat panel
+        // with a soft edge, not as a gradient. Now it is already down to about
+        // a third by the time it reaches the chips, so the page is visible
+        // through it and you can see it fading.
+        let total = max(extendUp + headerHeight + extendDown, 1)
+        let atHeaderBottom = (extendUp + headerHeight) / total
+        return LinearGradient(
+            stops: [
+                .init(color: tint.opacity(strength),        location: 0.0),
+                .init(color: tint.opacity(strength * 0.93), location: atHeaderBottom * 0.30),
+                .init(color: tint.opacity(strength * 0.74), location: atHeaderBottom * 0.56),
+                .init(color: tint.opacity(strength * 0.48), location: atHeaderBottom * 0.80),
+                .init(color: tint.opacity(strength * 0.28), location: atHeaderBottom),
+                .init(color: tint.opacity(0),               location: 1.0)
+            ],
+            startPoint: .top, endPoint: .bottom
+        )
+        .frame(height: total)
+        .offset(y: -extendUp)
+        .allowsHitTesting(false)
+    }
+}
+
 struct CompactHeaderScrim: View {
     var height: CGFloat
     var fadeStart: CGFloat = 0.2
