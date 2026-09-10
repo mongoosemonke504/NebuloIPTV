@@ -369,6 +369,31 @@ extension View {
 /// so they read identically. `height` sets the total reach and `fadeStart` is
 /// the fraction that stays fully solid before the long fade begins — a taller
 /// solid cap for headers that sit further below the top of the screen.
+/// Slides a floating header up with the page as it scrolls, stopping once the
+/// section row reaches the top. A leaf: it observes the box, the screen does
+/// not, so a scroll frame re-renders this modifier and nothing else.
+struct HeaderSlide: ViewModifier {
+    @ObservedObject var offset: ScrollProgress
+    /// How far it may travel — the height of the band that scrolls away.
+    let limit: CGFloat
+
+    func body(content: Content) -> some View {
+        content.offset(y: -min(max(offset.value, 0), max(limit, 0)))
+    }
+}
+
+/// Fades a view out across the first `over` points of scroll. A leaf, for the
+/// same reason as `HeaderSlide`.
+struct HeaderFade: ViewModifier {
+    @ObservedObject var offset: ScrollProgress
+    let over: CGFloat
+
+    func body(content: Content) -> some View {
+        let progress = min(max(offset.value / max(over, 1), 0), 1)
+        return content.opacity(1 - Double(progress))
+    }
+}
+
 /// Backdrop for a hub header that floats over its scrolling content.
 ///
 /// Thickest at the very TOP OF THE DISPLAY — above the Dynamic Island, so the

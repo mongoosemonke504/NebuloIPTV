@@ -492,6 +492,39 @@ struct DetailPageHost: SwiftUI.View {
 /// navigation pop gives you, which is what the Settings sub-pages get for free
 /// from UIKit. Observes the router's leaf, so a drag frame moves this one
 /// offset and re-renders none of the app beneath it.
+/// Reveals the bottom bar exactly as far as a drill-down page has slid off.
+///
+/// The bar is an overlay on everything, so a page rendered inside the content
+/// cannot draw over it the way `DetailPageHost` does — a team page is applied
+/// AFTER this overlay and so simply covers the bar. Masking to the width the
+/// page has vacated gets the same picture from the layer order we have: the
+/// bar sits behind the page and is uncovered from the leading edge as it goes,
+/// instead of being pulled out of the tree and put back in one frame.
+///
+/// A leaf, so a frame of the drag re-renders this mask and nothing else.
+struct DockCoverMask: ViewModifier {
+    @ObservedObject var cover: ScrollProgress
+
+    func body(content: Content) -> some View {
+        let uncovered = 1 - min(max(cover.value, 0), 1)
+        return content
+            .mask(alignment: .leading) {
+                Rectangle()
+                    // Constrained in X only. Given the mask's own height it
+                    // clipped the bar's bottom edge: the bar deliberately
+                    // draws OUTSIDE its layout bounds (it ignores the bottom
+                    // safe area to sit 20pt off the physical edge), and a mask
+                    // is clipped to those bounds. A full-screen height covers
+                    // everything it paints, however far past its frame that
+                    // goes.
+                    .frame(width: UIScreen.main.bounds.width * uncovered,
+                           height: UIScreen.main.bounds.height)
+            }
+            // A masked-away bar must not take taps meant for the page over it.
+            .allowsHitTesting(uncovered > 0.5)
+    }
+}
+
 struct DetailUnderlayParallax: ViewModifier {
     @ObservedObject var cover: ScrollProgress
 
@@ -565,6 +598,10 @@ struct MainViewModifiers: ViewModifier {
     @State private var searchQuery = ""
     @FocusState private var searchFieldFocused: Bool
 
+    /// Watched so the dock can reappear while a back-swipe is in flight — see
+    /// `dockVisible`. Publishes once at each end of the drag, never per frame.
+    @ObservedObject private var backSwipe = BackSwipeState.shared
+
     /// Tab switches carry NO animation at all — Nuvio's tab host swaps the
     /// selected screen in a single frame, and copying that is what makes the
     /// switch feel instant instead of clunky. The state changes below are
@@ -575,10 +612,13 @@ struct MainViewModifiers: ViewModifier {
     /// Settings, Search). Drill-down pages (plain categories, Recently
     /// Watched, Recordings) hide it and show a circular back chevron
     /// instead — same as the reference app's catalog pages.
-    private var dockVisible: Bool {
-        guard let cat = selectedCategory else { return true }
-        return cat.id == -3 || cat.id == -4 || cat.id == -6
-    }
+    /// The bar is in the tree on every one of these surfaces, drill-downs
+    /// included. It is not hidden and re-shown any more — a drill-down COVERS
+    /// it (see `DockCoverMask`), so a swipe uncovers it progressively, the
+    /// same way a favourite team's page reveals it on the way out. Taking it
+    /// out of the tree instead is what made it snap: gone for the whole
+    /// gesture, then back in one frame at the end.
+    private var dockVisible: Bool { true }
 
     private var activeDockTab: NuvioTab {
         if showSearch { return .search }
@@ -713,6 +753,9 @@ struct MainViewModifiers: ViewModifier {
                             .opacity(0.01)
                             .allowsHitTesting(false)
                     )
+                    // Covered by a drill-down rather than removed, so the page
+                    // sliding off uncovers it under your finger.
+                    .modifier(DockCoverMask(cover: backSwipe.cover))
                 }
             }
             // Pushed aside while a detail page covers this. At rest the value
@@ -946,7 +989,7 @@ struct StandardLayout: SwiftUI.View {
     /// Push/pop tempo for DRILL-DOWNS (open a category, Recently Watched,
     /// Recordings, and the way back). Tab switches deliberately don't use it —
     /// see the note on the missing implicit animation at the end of `body`.
-    static let pageAnimation: Animation = .easeInOut(duration: 0.2)
+    static let pageAnimation: Animation = .easeOut(duration: DetailRouter.travel)
 
     /// When `false` the active detail view doesn't intercept touches.
     /// Set to `false` the moment a back navigation fires so the departing
@@ -1108,6 +1151,14 @@ struct StandardLayout: SwiftUI.View {
     /// an `onAppear` landing before its own countdown starts.
     @State private var homeActive = FlagBox(true)
 
+    /// Drives the interactive back-swipe out of a category page or the search
+    /// results, and the home screen's parallax behind it.
+    @ObservedObject private var backSwipe = BackSwipeState.shared
+    /// True while that swipe is in flight. Home is normally faded out whenever
+    /// a page is over it; during the drag it has to be VISIBLE, because the
+    /// whole point is watching it come in behind your finger.
+    private var backSwipeActive: Bool { backSwipe.isActive }
+
     /// The hub the dock is currently on, or nil. Search hides a hub exactly as
     /// it hides home: the old chain put `searchView` ahead of the section, so
     /// opening search destroyed it.
@@ -1116,6 +1167,16 @@ struct StandardLayout: SwiftUI.View {
     /// Tab sections that are built once and then kept alive, hidden, rather
     /// than rebuilt on every visit.
     private static let mountedHubIDs: Set<Int> = [-3, -4]
+
+    /// The dock's own tabs: Sports, Favorites and Settings. Selecting one is a
+    /// TAB SWITCH — instant, nothing slides. Everything else reached through
+    /// `selectedCategory` is a drill-down that pushes in over the home screen
+    /// and can be swiped back out of, exactly like a favourite team's page.
+    private static let dockTabIDs: Set<Int> = [-3, -4, -6]
+
+    static func isDrillDown(_ cat: StreamCategory) -> Bool {
+        !dockTabIDs.contains(cat.id)
+    }
 
     /// Hubs the user has actually opened. Nothing is built until its tab is
     /// chosen for the first time, so opening the app costs no more than before.
@@ -1491,7 +1552,20 @@ struct StandardLayout: SwiftUI.View {
                 homeSkeleton
             } else if !searchText.isEmpty {
                 searchView
-                    .modifier(SwipeBackModifier(onBack: { withAnimation(Self.pageAnimation) { searchText = "" } }))
+                    .modifier(SwipeBackModifier(
+                        onBack: {
+                            // Removed with animation OFF for the same reason
+                            // the category page is: the swipe has already
+                            // carried it off-screen, so a removal animation
+                            // has nowhere to travel and only gives the page a
+                            // chance to flash back over the screen.
+                            var t = Transaction()
+                            t.disablesAnimations = true
+                            withTransaction(t) { searchText = "" }
+                        },
+                        state: backSwipe,
+                        onDragChange: { backSwipe.isActive = $0 }
+                    ))
                     .zIndex(2)
             } else if let cat = selectedCategory, !Self.mountedHubIDs.contains(cat.id) {
                 // `.allowsHitTesting(isDetailInteractive)` is the key fix for
@@ -1511,7 +1585,6 @@ struct StandardLayout: SwiftUI.View {
                     if cat.id == -5 {
                         RecordingsView(viewModel: viewModel, playAction: playAction, onBack: handleBackNavigation)
                             .transition(.opacity)
-                            .modifier(SwipeBackModifier(onBack: handleBackNavigation))
                     } else if cat.id == -6 {
                         // Settings is a real SECTION now (Profile tab) —
                         // in-hierarchy with the bar visible, crossfading
@@ -1532,8 +1605,6 @@ struct StandardLayout: SwiftUI.View {
                         .transition(.opacity)
                     } else {
                         CategoryDetailView(title: cat.name, channels: getChannelsToShow(for: cat), accentColor: accentColor, playAction: playAction, toggleFav: viewModel.toggleFavorite, promptRename: viewModel.triggerRenameChannel, hideChannel: viewModel.hideChannel, favoriteIDs: viewModel.favoriteIDs, viewModel: viewModel, showMultiView: $showMultiView, onBack: handleBackNavigation, onCategorySelect: { cat in withAnimation(Self.pageAnimation) { selectedCategory = cat; searchText = "" } }, zoomNS: zoomNS)
-                            .transition(.opacity)
-                            .modifier(SwipeBackModifier(onBack: handleBackNavigation))
                     }
                 }
                 // The hubs publish their scroll offset via preference (the
@@ -1553,6 +1624,33 @@ struct StandardLayout: SwiftUI.View {
                 .safeAreaInset(edge: .top, spacing: 0) {
                     sectionChromeRow(for: cat, titleProgress: sectionTitleProgress)
                 }
+                // OUTSIDE the chrome inset on purpose: the swipe has to carry
+                // the Back pill and the category's name off with the page.
+                // Applied to the content alone, the title sat there unmoved
+                // until the page had gone and then vanished on its own.
+                //
+                // Settings is a dock tab rather than a drill-down, so it has
+                // nowhere to swipe back to.
+                .modifier(SwipeBackModifier(
+                    onBack: handleSwipeBackNavigation,
+                    isEnabled: cat.id != -6,
+                    state: backSwipe,
+                    onDragChange: { backSwipe.isActive = $0 }
+                ))
+                // On the OUTERMOST layer, because this is what actually gets
+                // inserted and removed — the page, its chrome row and the
+                // swipe wrapper together.
+                //
+                // With the transition on the page alone, the container around
+                // it fell back to SwiftUI's default, which is `.opacity`: the
+                // page slid in while everything wrapping it faded, which is
+                // the fade-and-slide that looked wrong. One transition on the
+                // whole thing makes it a single push, the same as a detail
+                // page. Settings is a dock tab rather than a drill-down, so it
+                // keeps the crossfade the other tabs use.
+                .transition(Self.isDrillDown(cat)
+                            ? AnyTransition.move(edge: .trailing)
+                            : AnyTransition.opacity)
                 .allowsHitTesting(isDetailInteractive)
                 .zIndex(1)
             }
@@ -1911,7 +2009,8 @@ struct StandardLayout: SwiftUI.View {
                         .ignoresSafeArea(.container, edges: .top)
                         .allowsHitTesting(false)
                     }
-                    .opacity(homeVisible ? 1 : 0)
+                    .modifier(DetailUnderlayParallax(cover: backSwipe.cover))
+                    .opacity(homeVisible || backSwipeActive ? 1 : 0)
                     .allowsHitTesting(homeVisible)
                     .zIndex(0)
             }
@@ -1960,7 +2059,28 @@ struct StandardLayout: SwiftUI.View {
             withAnimation(Self.pageAnimation) { selectedCategory = nil }
         }
         .onChangeCompat(of: selectedCategory) { cat in
-            if cat != nil { isDetailInteractive = true }
+            // ONLY a drill-down pushes the home screen aside.
+            //
+            // Driving this on every category change swept the dock tabs in
+            // too: switching to Home ran the parallax 1 → 0, so the home
+            // screen eased in from a quarter of the way off to the left.
+            // Tab switches carry no animation in this app — they swap in a
+            // single frame — and that slide was the whole of what looked
+            // wrong about them.
+            if let cat, Self.isDrillDown(cat) {
+                isDetailInteractive = true
+                // Start from covering, whatever a previous swipe left behind,
+                // and push the home screen aside as the page arrives.
+                backSwipe.slide.set(0)
+                withAnimation(Self.pageAnimation) { backSwipe.cover.set(1) }
+            } else {
+                // A hub tab, or home. `set` assigns only on a real change, so
+                // this is a no-op while a chevron close is already animating
+                // the cover down — that animation survives — and instant when
+                // arriving from a tab that never pushed anything aside.
+                backSwipe.slide.set(0)
+                backSwipe.cover.set(0)
+            }
             sectionTitleProgress.set(0)
             // First visit to a hub mounts it; it stays for the rest of the
             // session. Nothing is built for a tab that is never opened.
@@ -2231,8 +2351,31 @@ struct StandardLayout: SwiftUI.View {
     /// Setting `isDetailInteractive = false` before the animation removes
     /// `userInteractionEnabled` from the UIKit layer first, so the home screen
     /// is tappable the instant the transition starts.
+    /// Back-out for the interactive swipe.
+    ///
+    /// The animated path below is right for the chevron — the page plays its
+    /// slide-out and goes. After a swipe it is wrong twice over: the page is
+    /// ALREADY off-screen under the finger, so a second removal animation is a
+    /// move it has no room to make, and while that animation was still
+    /// running the swipe state reset the page's offset to zero — snapping it
+    /// back over the screen mid-fade. That is the flash of the category on
+    /// the way out.
+    private func handleSwipeBackNavigation() {
+        isDetailInteractive = false
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) { selectedCategory = nil }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            isDetailInteractive = true
+        }
+    }
+
     private func handleBackNavigation() {
         isDetailInteractive = false
+        // Eased down here rather than from the observer, so the home screen
+        // travels with the page on its way out — the same pairing the detail
+        // pages get from `DetailRouter.close()`.
+        withAnimation(Self.pageAnimation) { backSwipe.cover.set(0) }
         // Defer the state flip to the next run-loop turn so SwiftUI can
         // commit `isDetailInteractive = false` as its own update pass —
         // batching both changes together would apply `allowsHitTesting(false)`
@@ -2705,6 +2848,12 @@ struct CategoryDetailView: SwiftUI.View {
                 playAction: { playAction($0) }
             )
         }
+        // Frozen for the duration of a back-swipe, so the page travels
+        // sideways only instead of also drifting up or down under the finger.
+        // The detail pages take the same lock from `DetailRouter.dragLock`;
+        // without it this was the one way a category swipe still did not feel
+        // like a favourite team's page.
+        .scrollLocked(BackSwipeState.shared.dragLock)
     }
 }
 
@@ -2820,6 +2969,14 @@ struct MiniPlayerView: SwiftUI.View {
     }
 }
 
+/// Edge back-swipe that TRACKS THE FINGER, with the screen underneath easing
+/// in behind it — the same gesture the detail pages use, and the same feel
+/// UIKit gives the Settings sub-pages for free.
+///
+/// The previous version did nothing until the drag ENDED and then jumped:
+/// a 25pt strip whose only job was to notice a 60pt translation on release.
+/// Nothing moved under your finger, so a swipe on a category page felt
+/// unrelated to the animation it produced.
 struct SwipeBackModifier: ViewModifier {
     let onBack: () -> Void
     /// Off when the screen has nothing of its own to go back to. The strip is
@@ -2828,25 +2985,79 @@ struct SwipeBackModifier: ViewModifier {
     /// UIKit's interactive pop to the touch and then does nothing with it —
     /// the page just sits there under your finger.
     var isEnabled: Bool = true
+    /// Shared with whatever is drawing the screen underneath, so it can move
+    /// in step. Nil for callers with nothing behind them to ease in.
+    var state: BackSwipeState? = nil
+    /// Told when a drag starts and stops, so the host can reveal the screen
+    /// underneath for the duration.
+    var onDragChange: ((Bool) -> Void)? = nil
+
+    /// Only the far edge goes back: everything inboard belongs to the page.
+    private static let edgeWidth: CGFloat = 32
+
+    @State private var dragging = false
+    @State private var rejected = false
 
     func body(content: Content) -> some View {
         ZStack(alignment: .leading) {
-            content
+            if let state {
+                content.modifier(DetailSlideOffset(slide: state.slide))
+            } else {
+                content
+            }
 
             if isEnabled {
                 Color.clear
-                    .frame(width: 25)
+                    .frame(width: Self.edgeWidth)
                     .contentShape(Rectangle())
-                    .highPriorityGesture(
-                        DragGesture()
-                            .onEnded { value in
-                                if value.translation.width > 60 {
-                                    onBack()
-                                }
-                            }
-                    )
+                    .highPriorityGesture(drag)
             }
         }
+    }
+
+    private var drag: some Gesture {
+        let width = max(UIScreen.main.bounds.width, 1)
+        return DragGesture(minimumDistance: 8, coordinateSpace: .global)
+            .onChanged { value in
+                let dx = value.translation.width
+                let dy = value.translation.height
+                if !dragging && !rejected {
+                    // Judged once, on the first reported movement: a leftward
+                    // or vertical start is somebody else's gesture.
+                    guard dx > 0, abs(dx) > abs(dy) else { rejected = true; return }
+                    dragging = true
+                    SwipeTapGuard.suppress()
+                    state?.dragLock.set(true)
+                    onDragChange?(true)
+                }
+                guard dragging else { return }
+                state?.track(dx / width)
+            }
+            .onEnded { value in
+                let wasDragging = dragging
+                dragging = false
+                rejected = false
+                state?.dragLock.set(false)
+                guard wasDragging else {
+                    onDragChange?(false)
+                    return
+                }
+                // Same rule as the detail pages: a third of the width
+                // travelled, or a flick that would carry it past two thirds.
+                let travelled = max(0, value.translation.width)
+                let flick = value.predictedEndTranslation.width - value.translation.width
+                if travelled > width * 0.3 || travelled + flick > width * 0.6 {
+                    if let state {
+                        state.finish { onBack(); onDragChange?(false) }
+                    } else {
+                        onBack()
+                        onDragChange?(false)
+                    }
+                } else {
+                    state?.cancel()
+                    onDragChange?(false)
+                }
+            }
     }
 }
 

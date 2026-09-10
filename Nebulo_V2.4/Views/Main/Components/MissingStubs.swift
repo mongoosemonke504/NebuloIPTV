@@ -82,6 +82,23 @@ struct SearchView: View {
 
     @State private var scope: Scope = .all
 
+    /// Live scroll depth of the ACTIVE page, driving the header slide. A LEAF,
+    /// so a scroll frame moves the header and re-renders nothing else. Same
+    /// mechanism as the Sports and Favorites hubs.
+    @State private var headerScroll = ScrollProgress()
+    /// Height of the big title — how far the header travels before the scope
+    /// chips reach the top.
+    @State private var bigTitleHeight: CGFloat = 56
+    /// Height of the WHOLE floating header. Each page reserves exactly this,
+    /// and it never changes as the header collapses (the header SLIDES, it
+    /// does not resize), so the two cannot drift apart.
+    @State private var headerHeight: CGFloat = 120
+    /// Distance from the top of the display to the top of the header. Used
+    /// only to tell the backdrop how far up to reach — never in any layout.
+    @State private var safeTop: CGFloat = 112
+    /// Breathing room between the chips and the first result.
+    private static let headerClearance: CGFloat = 24
+
     /// Teams and leagues whose names match the query, offered for one-tap
     /// following. Ranked in a `.task(id:)` rather than in the body, so typing
     /// never runs the catalog scan mid-render.
@@ -111,13 +128,6 @@ struct SearchView: View {
     /// area shows the skeleton instead of flashing the browse content.
     @State private var pushPending = false
 
-    /// One scope switch per drag — set mid-drag, cleared on finger-lift.
-    @State private var scopeSwipeConsumed = false
-
-    /// Direction of the current scope change, so the results slide in from the
-    /// correct edge — same directional slide as the Sports/Favorites hubs.
-    @State private var scopeSlideFromTrailing = true
-
     /// Browse content (live games, recents, categories) lands one runloop
     /// tick after the overlay: the first frame (nebula + title + field)
     /// presents instantly, and the heavy shelves join on the next frame —
@@ -131,10 +141,6 @@ struct SearchView: View {
     /// object so scrolling doesn't re-render the whole overlay every frame.
     @State private var titleProgress = ScrollProgress()
 
-    /// The probe's reading at rest. The chrome rides as a top safe-area
-    /// inset, so the content's resting minY equals the inset height rather
-    /// than 0 — progress is measured relative to this baseline.
-    @State private var probeRestY: CGFloat? = nil
 
     // Same nebula palette as every other screen so search feels like part of
     // the app instead of a black sheet.
@@ -179,23 +185,13 @@ struct SearchView: View {
         }
     }
 
-    private func advanceScope(_ delta: Int) {
-        let all = Scope.allCases
-        guard let idx = all.firstIndex(of: scope) else { return }
-        let next = idx + delta
-        guard all.indices.contains(next) else { return }
-        setScope(all[next])
-    }
-
-    /// Switches the active scope with a directional slide, shared by the chip
-    /// taps and the horizontal swipe so both animate identically. Silent — no
-    /// tab or chip row in the app buzzes.
+    /// Switches the active scope. The pager animates the page move itself, so
+    /// this is only a selection change — no slide direction to derive, and no
+    /// separate swipe path, since the chips and the swipe now drive the same
+    /// `TabView` selection. Silent: no chip row in the app buzzes.
     private func setScope(_ target: Scope) {
-        guard target != scope,
-              let cur = Scope.allCases.firstIndex(of: scope),
-              let dst = Scope.allCases.firstIndex(of: target) else { return }
-        scopeSlideFromTrailing = dst > cur
-        withAnimation(.easeOut(duration: 0.25)) { scope = target }
+        guard target != scope else { return }
+        withAnimation(.easeInOut(duration: 0.25)) { scope = target }
     }
 
     private var nameMatches: [StreamChannel] { viewModel.filteredNameChannels }
@@ -216,14 +212,113 @@ struct SearchView: View {
         }
     }
 
+    /// One page of results. Scopes are SIBLINGS in a real pager, the same
+    /// treatment the Sports and Favorites hubs got and for the same reason:
+    /// with one scroll and the list swapped in by identity, only one scope
+    /// ever exists, so a swipe cannot show you the one you are swiping
+    /// towards. `TabView(.page)` is UIPageViewController underneath — genuine
+    /// interactive paging, both pages tracking the finger, each keeping its
+    /// own scroll position.
+    /// Whether this scope's list should actually be BUILT. The pager keeps
+    /// every page alive, and a full result list is not cheap; only the current
+    /// scope and the two you can reach from it — all an interactive swipe can
+    /// reveal — get real content. Same rule as the hubs.
+    private func isMounted(_ s: Scope) -> Bool {
+        let all = Scope.allCases
+        guard let here = all.firstIndex(of: scope),
+              let there = all.firstIndex(of: s) else { return s == scope }
+        return abs(here - there) <= 1
+    }
+
+    private func scopePage(for s: Scope) -> some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                if pushPending || viewModel.isSearching {
+                    searchingSkeleton
+                } else if isMounted(s) {
+                    resultsList(for: s)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // The header's height, plus clearance. The scroll view supplies
+            // the status bar and chrome row itself as a safe-area content
+            // inset, so this must not add that distance again.
+            .padding(.top, headerHeight + Self.headerClearance)
+            // Clearance for the floating dock — results scroll behind its
+            // translucent slab instead of stopping above it.
+            .padding(.bottom, 118)
+        }
+        .onScrollGeometryChange(for: CGFloat.self) { geo in
+            geo.contentOffset.y + geo.contentInsets.top
+        } action: { _, y in
+            guard s == scope else { return }
+            let scrolled = max(0, y)
+            headerScroll.set(scrolled)
+            titleProgress.set(min(max(scrolled / max(bigTitleHeight, 1), 0), 1))
+        }
+    }
+
+    /// The empty-query screen. One scroll, no scopes to page between.
+    private var browsePage: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                if browseReady {
+                    VStack(alignment: .leading, spacing: 26) {
+                        liveGamesSection
+                        recentChannelsSection
+                        browseGrid
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, headerHeight + Self.headerClearance)
+            .padding(.bottom, 118)
+        }
+        .onScrollGeometryChange(for: CGFloat.self) { geo in
+            geo.contentOffset.y + geo.contentInsets.top
+        } action: { _, y in
+            let scrolled = max(0, y)
+            headerScroll.set(scrolled)
+            titleProgress.set(min(max(scrolled / max(bigTitleHeight, 1), 0), 1))
+        }
+    }
+
+    /// Title and scope chips, floating over the pages. The title slides away
+    /// with the scroll from the first pixel; the chips stop at the top.
+    private var headerChrome: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            bigTitle
+                .background(
+                    GeometryReader { g in
+                        Color.clear
+                            .onAppear { bigTitleHeight = g.size.height }
+                            .onChangeCompat(of: g.size.height) { bigTitleHeight = $0 }
+                    }
+                )
+                .modifier(HeaderFade(offset: headerScroll, over: bigTitleHeight))
+
+            if !query.isEmpty { scopeChips }
+        }
+        // The same wash the hubs use: opaque at the very top of the display,
+        // fading to clear below the chips.
+        .background(alignment: .top) {
+            HeaderFadeBackdrop(headerHeight: headerHeight, extendUp: safeTop)
+        }
+        .background(
+            GeometryReader { g in
+                Color.clear
+                    .onAppear { headerHeight = g.size.height }
+                    .onChangeCompat(of: g.size.height) { headerHeight = $0 }
+            }
+        )
+        .modifier(HeaderSlide(offset: headerScroll, limit: bigTitleHeight))
+    }
+
     var body: some View {
         ZStack {
             // Opaque nebula gradient (the Canvas paints solid black underneath
             // its blobs) — matches the rest of the app and guarantees the home
-            // screen never shows through the overlay. Deliberately OUTSIDE
-            // the rising/fading group below: it's visible from the very
-            // first frame, so the cover never flashes black even if the
-            // first-ever open hits a slow frame.
+            // screen never shows through the overlay.
             NebulaBackgroundView(
                 color1: Color(hex: nebColor1) ?? .purple,
                 color2: Color(hex: nebColor2) ?? .blue,
@@ -234,107 +329,41 @@ struct SearchView: View {
             )
             .ignoresSafeArea()
 
-            ZStack {
-                ScrollView(showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 0) {
-                    // The big title is scroll CONTENT — same compact mode as
-                    // the Sports/Favorites hubs: it physically scrolls away
-                    // with the page while the small title in the chrome row
-                    // above crossfades in over the same distance.
-                    bigTitle
-                        .scrollProgressOpacity(titleProgress) { 1 - Double($0) }
-                        .background(ScrollOffsetProbe(space: "searchScroll", id: "search"))
-
-                    Group {
-                        if query.isEmpty {
-                            if browseReady {
-                                VStack(alignment: .leading, spacing: 26) {
-                                    liveGamesSection
-                                    recentChannelsSection
-                                    browseGrid
-                                }
-                            }
-                        } else if pushPending || viewModel.isSearching {
-                            searchingSkeleton
-                        } else {
-                            // ZStack so the outgoing and incoming scope lists
-                            // overlap during the directional slide instead of
-                            // stacking vertically — the same move+fade the
-                            // Sports and Favorites hubs use for tab switches.
-                            ZStack(alignment: .top) {
-                                resultsList
-                                    .id(scope)
-                                    .transition(.asymmetric(
-                                        insertion: .move(edge: scopeSlideFromTrailing ? .trailing : .leading).combined(with: .opacity),
-                                        removal: .move(edge: scopeSlideFromTrailing ? .leading : .trailing).combined(with: .opacity)
-                                    ))
-                            }
-                        }
-                    }
-                    // Explicit full width: content inserted while another
-                    // layout transaction is animating (keyboard rise) was
-                    // getting laid out narrow and visibly growing to full
-                    // width — the "cover sliding away" on open.
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    // Clearance for the floating dock — results scroll
-                    // behind its translucent slab instead of stopping above.
-                    .padding(.bottom, 118)
-                    }
-                }
-                .coordinateSpace(name: "searchScroll")
-                .frame(maxWidth: .infinity)
-                // Horizontal swipe on the results area steps through the
-                // scope chips (All → Channels → EPG → Recordings), matching
-                // the Sports and Favorites sections. Fires mid-drag for an
-                // instant response; simultaneousGesture so vertical
-                // scrolling keeps working.
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 25)
-                        .onChanged { value in
-                            let h = value.translation.width
-                            let v = value.translation.height
-                            // As soon as the drag reads as horizontal, open the
-                            // tap-suppression window so whatever is under the
-                            // finger doesn't ALSO fire on release. Deliberately
-                            // BEFORE the empty-query check below: the browse
-                            // screen has no scopes to switch between, but its
-                            // shelves and grid are just as tappable, and a
-                            // sideways drag across them was landing as a tap.
-                            if abs(h) > abs(v) * 1.4 {
-                                SwipeTapGuard.suppress()
-                            }
-                            guard !query.isEmpty else { return }
-                            guard !scopeSwipeConsumed,
-                                  abs(h) > 50, abs(h) > abs(v) * 1.5,
-                                  !HorizontalScrollActivity.isActive else { return }
-                            scopeSwipeConsumed = true
-                            advanceScope(h < 0 ? 1 : -1)
-                        }
-                        .onEnded { _ in scopeSwipeConsumed = false }
-                )
-                // Shared app-wide compact-header vignette, revealed as the big
-                // "Search" title scrolls away. Sits above the scrolling results
-                // but below the chrome (added by the safeAreaInset that follows).
-                .overlay(alignment: .top) {
-                    CompactHeaderScrim(height: screenInsets.top + 215, fadeStart: 0.2)
-                        .frame(maxWidth: .infinity)
+            ZStack(alignment: .top) {
+                if query.isEmpty {
+                    browsePage
                         .ignoresSafeArea(.container, edges: .top)
-                        .scrollProgressOpacity(titleProgress, cullWhenHidden: true) { Double($0 * $0) }
-                        .allowsHitTesting(false)
-                }
-                // Chrome rides as a top inset OVER the scroll: content
-                // scrolls UNDER the Back pill, gear and chips with nothing
-                // drawn behind them — totally translucent, like the other
-                // sections — instead of clipping against a solid strip.
-                .safeAreaInset(edge: .top, spacing: 0) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        // Status-bar spacer (safe area is zeroed by the ancestor).
-                        Color.clear.frame(height: screenInsets.top)
-                        chromeRow
-                        if !query.isEmpty { scopeChips }
+                } else {
+                    TabView(selection: $scope) {
+                        ForEach(Scope.allCases, id: \.self) { s in
+                            scopePage(for: s)
+                                .tag(s)
+                        }
                     }
+                    .tabViewStyle(.page(indexDisplayMode: .never))
+                    // The pages reach the top of the display so their content
+                    // passes behind the chrome row and status bar — otherwise
+                    // there is nothing up there for the wash to sit over.
+                    .ignoresSafeArea(.container, edges: .top)
                 }
 
+                headerChrome
+            }
+            .background(
+                GeometryReader { g in
+                    Color.clear
+                        .onAppear { safeTop = g.frame(in: .global).minY }
+                        .onChangeCompat(of: g.frame(in: .global).minY) { safeTop = $0 }
+                }
+            )
+            // Chrome rides as a top inset OVER the pages: content scrolls
+            // UNDER the Back pill and gear with nothing drawn behind them.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Status-bar spacer (safe area is zeroed by the ancestor).
+                    Color.clear.frame(height: screenInsets.top)
+                    chromeRow
+                }
             }
         }
         .onAppear {
@@ -358,16 +387,6 @@ struct SearchView: View {
         // The catalog arrives after launch — re-rank once it does, so a search
         // run before it loaded doesn't sit there showing nothing to follow.
         .task(id: scoreViewModel?.teamCatalog.count ?? 0) { rankFavoritables() }
-        // The probe on the big title reports its offset in the scroll's
-        // coordinate space; 40pt of scroll completes the title crossfade —
-        // the same ramp the Sports and Favorites hubs use. Measured against
-        // the resting baseline because the chrome inset shifts the origin.
-        .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
-            guard let y = offsets["search"] else { return }
-            if probeRestY == nil { probeRestY = y }
-            let scrolled = (probeRestY ?? y) - y
-            titleProgress.set(min(max(scrolled / 40, 0), 1))
-        }
     }
 
     // MARK: - Header
@@ -611,7 +630,7 @@ struct SearchView: View {
     /// The follow rows. One definition, placed either above the channel
     /// results or below them depending on `favoritableLeads`.
     @ViewBuilder
-    private var favoritableSection: some View {
+    private func favoritableSection(for scope: Scope) -> some View {
         if let svm = scoreViewModel, !favoritableHits.isEmpty {
             // Alongside everything else, only the best few — enough to catch
             // the team you meant without burying the channels. The Teams chip
@@ -640,7 +659,7 @@ struct SearchView: View {
     private var hasFavoritableResults: Bool { !favoritableHits.isEmpty }
 
     @ViewBuilder
-    private var resultsList: some View {
+    private func resultsList(for scope: Scope) -> some View {
         VStack(alignment: .leading, spacing: 22) {
             // A channel isn't a result in any of these scopes.
             if scope != .recordings, scope != .categories, scope != .teams, let top = topResult {
@@ -653,7 +672,7 @@ struct SearchView: View {
                 }
             }
 
-            if scope == .all && favoritableLeads { favoritableSection }
+            if scope == .all && favoritableLeads { favoritableSection(for: scope) }
 
             if scope == .all || scope == .channels {
                 let rows = nameMatches.filter { $0.id != topResult?.channel.id }
@@ -669,7 +688,7 @@ struct SearchView: View {
                 }
             }
 
-            if scope == .teams || (scope == .all && !favoritableLeads) { favoritableSection }
+            if scope == .teams || (scope == .all && !favoritableLeads) { favoritableSection(for: scope) }
 
             if scope == .all || scope == .recordings {
                 let recs = recordingMatches

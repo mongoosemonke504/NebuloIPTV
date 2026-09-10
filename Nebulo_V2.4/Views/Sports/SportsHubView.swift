@@ -117,31 +117,6 @@ private struct CollapsibleSection<Content: View>: View {
     }
 }
 
-/// Slides the header up with the page as it scrolls, stopping once the chips
-/// reach the top. A leaf: it observes the box, the hub does not, so a scroll
-/// frame re-renders this modifier and nothing else.
-private struct HubHeaderShift: ViewModifier {
-    @ObservedObject var offset: ScrollProgress
-    /// How far it may travel — the height of the title that scrolls away.
-    let limit: CGFloat
-
-    func body(content: Content) -> some View {
-        content.offset(y: -min(max(offset.value, 0), max(limit, 0)))
-    }
-}
-
-/// Fades a view out across the first `over` points of scroll. A leaf, for the
-/// same reason as `HubHeaderShift`.
-private struct HubHeaderFade: ViewModifier {
-    @ObservedObject var offset: ScrollProgress
-    let over: CGFloat
-
-    func body(content: Content) -> some View {
-        let progress = min(max(offset.value / max(over, 1), 0), 1)
-        return content.opacity(1 - Double(progress))
-    }
-}
-
 /// Watches a hub's visibility flag without pulling the hub's own body into it:
 /// a zero-size view that observes the box and reports transitions.
 private struct HubActivationProbe: View {
@@ -407,7 +382,7 @@ struct SportsHubView: View {
             )
             // Fades over its own height, so it is gone exactly as it
             // reaches the top rather than lingering behind the chips.
-            .modifier(HubHeaderFade(offset: headerScroll, over: bigTitleHeight))
+            .modifier(HeaderFade(offset: headerScroll, over: bigTitleHeight))
 
             pinnedChipHeader
         }
@@ -429,7 +404,7 @@ struct SportsHubView: View {
             // reach the top. `headerHeight` is measured BEFORE this and so
             // never changes — which is what keeps each page's reserved space
             // constant while the header moves over it.
-            .modifier(HubHeaderShift(offset: headerScroll, limit: bigTitleHeight))
+            .modifier(HeaderSlide(offset: headerScroll, limit: bigTitleHeight))
     }
 
     /// What is on today, shown only while the header is open. The chrome row

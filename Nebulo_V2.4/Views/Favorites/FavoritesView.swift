@@ -11,29 +11,6 @@ enum FavoritesFilter: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-/// Slides the header up with the page as it scrolls, stopping once the pills
-/// reach the top. A leaf: it observes the box, the screen does not, so a
-/// scroll frame re-renders this modifier and nothing else.
-private struct FavHeaderShift: ViewModifier {
-    @ObservedObject var offset: ScrollProgress
-    let limit: CGFloat
-
-    func body(content: Content) -> some View {
-        content.offset(y: -min(max(offset.value, 0), max(limit, 0)))
-    }
-}
-
-/// Fades a view out across the first `over` points of scroll.
-private struct FavHeaderFade: ViewModifier {
-    @ObservedObject var offset: ScrollProgress
-    let over: CGFloat
-
-    func body(content: Content) -> some View {
-        let progress = min(max(offset.value / max(over, 1), 0), 1)
-        return content.opacity(1 - Double(progress))
-    }
-}
-
 // MARK: - Favorites screen
 
 /// Hub for the user's favorited channels, teams and leagues.
@@ -184,7 +161,7 @@ struct FavoritesView: View {
                             .onChangeCompat(of: g.size.height) { bigTitleHeight = $0 }
                     }
                 )
-                .modifier(FavHeaderFade(offset: headerScroll, over: bigTitleHeight))
+                .modifier(HeaderFade(offset: headerScroll, over: bigTitleHeight))
 
             pinnedPillHeader
         }
@@ -203,7 +180,7 @@ struct FavoritesView: View {
             // `headerHeight` is measured BEFORE this, so it never changes as
             // the header moves — which keeps each page's reserved space
             // constant while the header rides over it.
-            .modifier(FavHeaderShift(offset: headerScroll, limit: bigTitleHeight))
+            .modifier(HeaderSlide(offset: headerScroll, limit: bigTitleHeight))
     }
 
     /// The large page title. This is the part that scrolls away; the chrome

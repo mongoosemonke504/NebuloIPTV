@@ -141,6 +141,81 @@ enum DetailRoute: Identifiable, Equatable {
 /// which it is on every one of these pages. Rendering the page as an overlay
 /// over the live screen keeps the whole transition in SwiftUI, where the
 /// screen behind is genuinely there to be revealed.
+/// Interactive back-swipe for a page that is NOT inside a NavigationStack.
+///
+/// Settings' sub-pages get this from UIKit: the edge drag tracks your finger
+/// and the previous screen eases in behind. The category pages and search
+/// results are custom layers in `StandardLayout`, so they had
+/// `SwipeBackModifier` instead — which does nothing at all until the drag
+/// ends and then jumps. This gives them the same feel as the rest of the app
+/// by reusing exactly what the detail pages already use: a slide leaf for the
+/// page, a cover leaf for the screen underneath, and the same thresholds.
+///
+/// Both values are leaves, so a frame of the drag re-renders the two offsets
+/// and nothing else.
+final class BackSwipeState: ObservableObject {
+    /// Shared, because the page doing the swiping and the bottom bar that has
+    /// to reappear behind it live in different views.
+    static let shared = BackSwipeState()
+
+    /// True for the duration of a back-swipe. Published (the offsets are not)
+    /// so the few things that must change state for the gesture — the home
+    /// screen becoming visible, the dock coming back — can react to it. One
+    /// re-render at each end of the drag, not per frame.
+    @Published var isActive = false
+
+    /// 0 = page covering the screen, 1 = fully swiped off to the right.
+    let slide = ScrollProgress()
+    /// 1 = the screen underneath is fully covered, 0 = uncovered. Drives its
+    /// parallax so it eases in from part-way across rather than sitting still.
+    let cover = ScrollProgress()
+    /// Freezes the page's own vertical scroll for the duration of the drag.
+    let dragLock = FlagBox()
+
+    /// Puts the page back over the screen with no animation. Call when a page
+    /// is opened, so a previous swipe's end state can't leak into it.
+    func reset() {
+        slide.set(0)
+        cover.set(1)
+    }
+
+    func track(_ progress: CGFloat) {
+        let p = min(max(progress, 0), 1)
+        slide.set(p)
+        cover.set(1 - p)
+    }
+
+    /// Past the threshold: carry the page the rest of the way out under the
+    /// gesture's own momentum, then hand back once it is off-screen so there
+    /// is no second animation playing over the top of the first.
+    func finish(_ onBack: @escaping () -> Void) {
+        let duration: TimeInterval = 0.2
+        withAnimation(.easeOut(duration: duration)) {
+            slide.set(1)
+            cover.set(0)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { onBack() }
+            // Put the PAGE back to its covering position for next time, but
+            // leave `cover` where the swipe left it — at 0, uncovered.
+            // Calling `reset()` here instead set cover back to 1, which is
+            // "a page is over the screen": the home screen stayed parked a
+            // quarter of the way off to the left with nothing on top of it.
+            self.slide.set(0)
+        }
+    }
+
+    /// Abandoned — springs back under the screen edge.
+    func cancel() {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
+            slide.set(0)
+            cover.set(1)
+        }
+    }
+}
+
 final class DetailRouter: ObservableObject {
     static let shared = DetailRouter()
     private init() {}
