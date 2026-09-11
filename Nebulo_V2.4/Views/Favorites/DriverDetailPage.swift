@@ -33,23 +33,28 @@ struct DriverDetailPage: View {
     @State private var heroScroll = ScrollProgress()
     @State private var titleProgress = ScrollProgress()
 
-    @State private var scrollLock = FlagBox()
-    @State private var swipeConsumed = false
-    @State private var isSliding = false
-    @State private var slideFromTrailing = true
-    @State private var chipBarFrame: CGRect = .zero
+    /// Live scroll depth of the ACTIVE page, driving the header slide.
+    @State private var headerScroll = ScrollProgress()
+    /// Measured height of the floating header (hero + chip row).
+    @State private var headerHeight: CGFloat = 0
+    /// The top inset the pages' scroll views apply on their own.
+    @State private var pageInsetTop: CGFloat = 0
 
     /// Points of scroll the header collapse runs over — see the team page.
     private static let handoverSpan: CGFloat = 90
 
-    private var heroHeight: CGFloat { UIScreen.main.bounds.height * 0.47 }
-
-    private var pinnedInset: CGFloat {
-        let top = UIApplication.shared.connectedScenes
+    /// Height of the status bar, read from the window — the stack ignores the
+    /// top safe area for the hero's sake, so anything that must clear the
+    /// status bar adds this back itself.
+    private var statusBarInset: CGFloat {
+        UIApplication.shared.connectedScenes
             .compactMap { ($0 as? UIWindowScene)?.keyWindow }
             .first?.safeAreaInsets.top ?? 0
-        return top + 44
     }
+
+    private var heroHeight: CGFloat { UIScreen.main.bounds.height * 0.47 }
+
+    private var pinnedInset: CGFloat { statusBarInset + 44 }
 
     // MARK: Derived
 
@@ -100,83 +105,20 @@ struct DriverDetailPage: View {
         ZStack(alignment: .top) {
             AppBackground().ignoresSafeArea()
 
-            ScrollView(showsIndicators: false) {
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    hero
-                        .modifier(HeroStretch(pull: heroPull, height: heroHeight))
-                        .padding(.bottom, -pinnedInset)
-
-                    ScrollOffsetProbe(space: "driverScroll", id: "driver")
-
-                    Section(header: pinnedChipHeader) {
-                        ZStack(alignment: .top) {
-                            Group {
-                                switch tab {
-                                case .overview:  overviewTab
-                                case .season:    seasonTab
-                                case .standings: standingsTab
-                                }
-                            }
-                            .id(tab)
-                            .transition(.asymmetric(
-                                insertion: .move(edge: slideFromTrailing ? .trailing : .leading).combined(with: .opacity),
-                                removal: .move(edge: slideFromTrailing ? .leading : .trailing).combined(with: .opacity)
-                            ))
-                        }
-                        .padding(.top, 12)
-
-                        if loading && season == nil {
-                            HStack {
-                                Spacer()
-                                CustomSpinner(color: .white.opacity(0.5), lineWidth: 2, size: 22)
-                                Spacer()
-                            }
-                            .padding(.vertical, 30)
-                        }
-
-                        Color.clear.frame(height: 60)
-                    }
+            // The tabs are SIBLINGS in a real pager, the same treatment the
+            // team page and the hubs got. The hero and the chip row float over
+            // the pages and slide up with the active page's scroll until the
+            // chips pin at `pinnedInset`, so the travel is simply the hero's
+            // height less that.
+            TabView(selection: $tab) {
+                ForEach(availableTabs) { t in
+                    tabPage(for: t)
+                        .tag(t)
                 }
             }
-            .ignoresSafeArea(.container, edges: .top)
-            .coordinateSpace(name: "driverScroll")
-            .scrollLocked(scrollLock, DetailRouter.shared.dragLock)
-            .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
-                guard let y = offsets["driver"] else { return }
-                let span = Self.handoverSpan
-                titleProgress.set(min(max((span - y) / span, 0), 1))
-            }
-            .onScrollGeometryChange(for: CGFloat.self) { geo in
-                geo.contentOffset.y + geo.contentInsets.top
-            } action: { _, scrolled in
-                heroPull.set(max(0, -scrolled))
-                heroScroll.set(min(max(0, scrolled), heroHeight))
-            }
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 10, coordinateSpace: .global)
-                    .onChanged { value in
-                        let dx = value.translation.width
-                        let dy = value.translation.height
-                        if abs(dx) > abs(dy) * 1.4 { SwipeTapGuard.suppress() }
-                        if value.startLocation.x > 44, !chipBarFrame.contains(value.startLocation) {
-                            if abs(dx) > abs(dy) * 1.4 {
-                                scrollLock.set(true)
-                            } else if !swipeConsumed, abs(dy) > abs(dx) * 1.4 {
-                                scrollLock.set(false)
-                            }
-                        }
-                        guard !swipeConsumed, !isSliding,
-                              value.startLocation.x > 44,
-                              !chipBarFrame.contains(value.startLocation),
-                              abs(dx) > 38, abs(dx) > abs(dy) * 1.4 else { return }
-                        swipeConsumed = true
-                        advanceTab(dx < 0 ? 1 : -1)
-                    }
-                    .onEnded { _ in
-                        swipeConsumed = false
-                        scrollLock.set(false)
-                    }
-            )
+            .tabViewStyle(.page(indexDisplayMode: .never))
+
+            headerChrome
 
             HStack(spacing: 10) {
                 NuvioCircleButton(systemName: "chevron.left") {
@@ -184,20 +126,35 @@ struct DriverDetailPage: View {
                     DetailRouter.shared.close()
                 }
                 Spacer(minLength: 0)
-                Text(name)
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .scrollProgressOpacity(titleProgress) { Double(max(($0 - 0.55) / 0.45, 0)) }
+                // Name and the team · number · standing line, as on the team
+                // page: with the hero gone this band is where they live.
+                VStack(spacing: 2) {
+                    Text(name)
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                    NuvioMetadataLine(parts: metadataParts)
+                        .scaleEffect(0.85)
+                }
+                .scrollProgressOpacity(titleProgress) { Double(max(($0 - 0.55) / 0.45, 0)) }
                 Spacer(minLength: 0)
                 Color.clear.frame(width: 38, height: 38)
             }
             .padding(.horizontal, 16)
-            .padding(.top, 4)
+            // Below the status bar. The stack ignores the top safe area so the
+            // hero can bleed behind it, which put this row under the clock and
+            // Dynamic Island as well; the inset is added back here by hand.
+            .padding(.top, statusBarInset + 4)
         }
+        // The hero bleeds behind the status bar. On the whole stack, so the
+        // pages and the header share one origin and the pages' scroll views
+        // take no automatic top inset.
+        .ignoresSafeArea(.container, edges: .top)
+        // A swipe changes `tab` without going through `selectTab`, so the
+        // re-sync hangs off the value itself.
+        .onChangeCompat(of: tab) { _ in syncHeaderToSelectedTab() }
         .preferredColorScheme(.dark)
-        .onAppear { scrollLock.set(false) }
         .task(id: driver.id) {
             loading = true
             season = await F1DetailService.fetchSeason()
@@ -315,7 +272,6 @@ struct DriverDetailPage: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .padding(.top, pinnedInset)
-        .captureGlobalFrame { chipBarFrame = $0 }
         .background(alignment: .top) {
             // Soft top edge while the scrim is still mid-screen — see the team
             // page.
@@ -326,23 +282,103 @@ struct DriverDetailPage: View {
         }
     }
 
-    private func selectTab(_ newTab: Tab) {
-        guard newTab != tab, !isSliding else { return }
-        let tabs = availableTabs
-        let oldIndex = tabs.firstIndex(of: tab) ?? 0
-        let newIndex = tabs.firstIndex(of: newTab) ?? 0
-        slideFromTrailing = newIndex > oldIndex
-        isSliding = true
-        withAnimation(.easeOut(duration: 0.25)) { tab = newTab }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { isSliding = false }
+    /// How far the header slides before the chips pin.
+    private var headerTravel: CGFloat { max(0, heroHeight - pinnedInset) }
+
+    /// Last known scroll depth of each tab. A reference box rather than
+    /// `@State`, because it is written on every scroll frame.
+    fileprivate final class TabDepths { var values: [Tab: CGFloat] = [:] }
+    @State fileprivate var tabDepths = TabDepths()
+
+    /// Puts the header where a given scroll depth wants it.
+    private func applyScroll(_ scrolled: CGFloat) {
+        heroPull.set(max(0, -scrolled))
+        heroScroll.set(min(max(0, scrolled), heroHeight))
+        headerScroll.set(max(0, scrolled))
+        // The chips pin at `headerTravel`. The handover runs over the last
+        // 90pt of that travel, so the big title fades out as the compact one
+        // in the chrome row fades in.
+        let span = Self.handoverSpan
+        titleProgress.set(min(max((scrolled - (headerTravel - span)) / span, 0), 1))
     }
 
-    private func advanceTab(_ delta: Int) {
-        let tabs = availableTabs
-        guard let index = tabs.firstIndex(of: tab) else { return }
-        let next = index + delta
-        guard tabs.indices.contains(next) else { return }
-        selectTab(tabs[next])
+    /// Hands the header the depth of whichever tab is now in front. Each page
+    /// keeps its own scroll position, so arriving at one otherwise leaves the
+    /// header holding the depth of the page you left — collapsed over a list
+    /// sitting at its top, which is the tall gap between the chips and the
+    /// first row.
+    private func syncHeaderToSelectedTab() {
+        applyScroll(tabDepths.values[tab] ?? 0)
+    }
+
+    /// One tab as its own independently scrolling page.
+    private func tabPage(for t: Tab) -> some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                // The floating header's height, reserved — LESS whatever top
+                // inset this scroll view has applied on its own (the pager's
+                // per-page controller re-applies the window's safe area).
+                Color.clear.frame(height: max(0, headerHeight - pageInsetTop))
+
+                Group {
+                    switch t {
+                    case .overview:  overviewTab
+                    case .season:    seasonTab
+                    case .standings: standingsTab
+                    }
+                }
+                .padding(.top, 12)
+
+                if loading && season == nil {
+                    HStack {
+                        Spacer()
+                        CustomSpinner(color: .white.opacity(0.5), lineWidth: 2, size: 22)
+                        Spacer()
+                    }
+                    .padding(.vertical, 30)
+                }
+
+                Color.clear.frame(height: 60)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .scrollLocked(DetailRouter.shared.dragLock)
+        .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geo in
+            let scrolled = geo.contentOffset.y + geo.contentInsets.top
+            if geo.contentInsets.top != pageInsetTop { pageInsetTop = geo.contentInsets.top }
+            tabDepths.values[t] = scrolled
+            // Only the page you are on drives the header; the neighbours are
+            // mounted and reporting too.
+            guard t == tab else { return }
+            applyScroll(scrolled)
+        }
+    }
+
+    /// The hero and the chip row, floating over the pages and sliding up
+    /// with the active page's scroll until the chips pin.
+    private var headerChrome: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            hero
+                .modifier(HeroStretch(pull: heroPull, height: heroHeight))
+                .padding(.bottom, -pinnedInset)
+
+            pinnedChipHeader
+        }
+        .background(
+            GeometryReader { g in
+                Color.clear
+                    .onAppear { headerHeight = g.size.height }
+                    .onChangeCompat(of: g.size.height) { headerHeight = $0 }
+            }
+        )
+        .modifier(HeaderSlide(offset: headerScroll, limit: headerTravel))
+    }
+
+    /// Switches tab, used by the chip row. The pager animates the page move
+    /// itself, so this is only a selection change.
+    private func selectTab(_ newTab: Tab) {
+        guard newTab != tab else { return }
+        withAnimation(.easeInOut(duration: 0.25)) { tab = newTab }
     }
 
     // MARK: Overview
