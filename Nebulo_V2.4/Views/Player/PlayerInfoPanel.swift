@@ -60,6 +60,22 @@ struct PlayerInfoPanel: View {
     /// Height of the compact one-line header the full block collapses into.
     private let headerCompactHeight: CGFloat = 44
 
+    /// Measured height of the pinned category picker, which only the Channels
+    /// tab shows.
+    @State private var pickerHeight: CGFloat = 0
+
+    /// How much space a page must leave clear at its top.
+    ///
+    /// `headerBlockHeight` covers whatever the chrome is showing right now,
+    /// and the picker is part of it only while Channels is selected — so that
+    /// is taken off to get the shared base, and added back for the one page
+    /// that sits under it. Without this the Schedule and Recordings pages
+    /// would reserve room for a picker they never show.
+    private func reserve(for tab: InfoTab) -> CGFloat {
+        let base = headerBlockHeight - (selectedTab == .channels ? pickerHeight : 0)
+        return max(0, base) + (tab == .channels ? pickerHeight : 0)
+    }
+
     /// Last known scroll depth of each tab. A reference box rather than
     /// `@State`, because it is written on every scroll frame.
     fileprivate final class TabScrollDepths { var values: [InfoTab: CGFloat] = [:] }
@@ -269,6 +285,23 @@ struct PlayerInfoPanel: View {
 
             Divider()
                 .background(Color.white.opacity(0.1))
+
+            // Pinned, like the tab bar above it — it belongs to the chrome,
+            // not to the list. Inside the scroll it travelled away with the
+            // channels, which is not what a filter for those channels should
+            // do.
+            if selectedTab == .channels {
+                categoryPicker
+                    .padding(.top, 10)
+                    .padding(.bottom, 4)
+                    .background(
+                        GeometryReader { g in
+                            Color.clear
+                                .onAppear { pickerHeight = g.size.height }
+                                .onChangeCompat(of: g.size.height) { pickerHeight = $0 }
+                        }
+                    )
+            }
         }
         .background(Color.black)
         .background(
@@ -370,17 +403,8 @@ struct PlayerInfoPanel: View {
     private var channelsTab: some View {
         VStack(spacing: 0) {
             ScrollView(showsIndicators: false) {
-                // One wrapper so the header reserve — and the category picker
-                // with it — scrolls along with the rest of the content. The
-                // picker used to sit OUTSIDE this scroll; under a floating
-                // header that would strand it in a fixed strip that the
-                // header slides away from, leaving a gap.
                 VStack(spacing: 0) {
-                    Color.clear.frame(height: headerBlockHeight)
-
-                    categoryPicker
-                        .padding(.top, 10)
-                        .padding(.bottom, 4)
+                    Color.clear.frame(height: reserve(for: .channels))
                     let chans = cachedBrowsingChannels
                     if chans.isEmpty {
                         emptyState(icon: "tv.slash", message: "No channels in this category")
@@ -504,7 +528,7 @@ struct PlayerInfoPanel: View {
     private var scheduleTab: some View {
         ScrollView(showsIndicators: false) {
             VStack(spacing: 0) {
-            Color.clear.frame(height: headerBlockHeight)
+            Color.clear.frame(height: reserve(for: .schedule))
             if todaySchedule.isEmpty {
                 emptyState(icon: "calendar.badge.exclamationmark", message: "No schedule available for today")
             } else {
@@ -557,7 +581,7 @@ struct PlayerInfoPanel: View {
     private var recordingsTab: some View {
         ScrollView(showsIndicators: false) {
             VStack(spacing: 0) {
-            Color.clear.frame(height: headerBlockHeight)
+            Color.clear.frame(height: reserve(for: .recordings))
             let sorted = recordingManager.recordings.sorted { $0.createdAt > $1.createdAt }
             if sorted.isEmpty {
                 emptyState(icon: "record.circle", message: "No recordings yet")
