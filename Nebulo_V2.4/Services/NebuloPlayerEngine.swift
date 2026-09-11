@@ -182,7 +182,9 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self, let side = self.pipAVPlayer, !self.isPiPSessionActive else { return }
             if self.currentBackend == .vlc && self.isPlaying {
-                // Last chance before the auto-PiP eligibility check.
+                // A side player only exists in the moments between a PiP tap
+                // and the window opening. Keep it playing through a resign so
+                // the window it is about to become opens playing.
                 if side.timeControlStatus != .playing { side.play() }
             } else {
                 // The user paused (or playback is gone) — a surprise PiP
@@ -198,11 +200,6 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                 // is still up, so reconnect VLC now that we're visible.
                 self.vlcSuspendedForPiP = false
                 self.vlcMediaPlayer.play()
-                if self.pipAVPlayer == nil {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
-                        self?.armAutoPiP()
-                    }
-                }
             } else if let side = self.pipAVPlayer, !self.isPiPSessionActive,
                       self.currentBackend == .vlc, self.isPlaying,
                       side.timeControlStatus != .playing {
@@ -579,15 +576,14 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
             }
             self.vlcMediaPlayer.play()
 
-            // Arm the auto-PiP side channel a few seconds in, once VLC has
-            // its own buffers — closing the app then floats the video
-            // automatically (live streams only, not recordings).
-            if !url.isFileURL {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
-                    guard let self, self.currentBackend == .vlc, self.currentURL == url else { return }
-                    self.armAutoPiP()
-                }
-            }
+            // NO PiP side channel is built here any more. It used to be armed
+            // three seconds into every live stream so that leaving the app
+            // would float the video automatically — which meant a second,
+            // hidden AVPlayer decoding the same stream for the whole time you
+            // watched, purely in case you backgrounded. Leaving the app now
+            // keeps the audio going and puts the stream in the Dynamic Island
+            // as Now Playing; Picture in Picture is built on demand, the
+            // moment the PiP button is tapped, and only then.
         }
     }
 
@@ -776,9 +772,6 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     /// both can't run at once. Survives teardown so returning to the app
     /// knows to restart VLC.
     private var vlcSuspendedForPiP = false
-    /// While hidden behind VLC the side player only needs to stay alive,
-    /// not look good — cap it so it doesn't fight VLC for bandwidth.
-    private let pipHiddenBitrateCap: Double = 1_200_000
     /// True from PiP start until it ends — dismissal paths check this so
     /// closing the player screen doesn't kill an active floating window.
     public private(set) var isPiPSessionActive = false
@@ -794,7 +787,6 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
               pipAVPlayer == nil else { return }
 
         let item = AVPlayerItem(url: url)
-        item.preferredPeakBitRate = pipHiddenBitrateCap
         let player = AVPlayer(playerItem: item)
         player.isMuted = true
         let layer = AVPlayerLayer(player: player)
@@ -817,7 +809,11 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                     self.pipStatusObservation = nil
                     player.play()
                     let controller = AVPictureInPictureController(playerLayer: layer)
-                    controller?.canStartPictureInPictureAutomaticallyFromInline = true
+                    // Never automatically. Once a side channel exists — after
+                    // the user has used PiP once — leaving the app would
+                    // otherwise float the video again on its own, which is
+                    // exactly the behaviour PiP-on-tap-only is meant to end.
+                    controller?.canStartPictureInPictureAutomaticallyFromInline = false
                     controller?.delegate = self
                     self.pipController = controller
                     if self.startPiPWhenReady {
@@ -848,7 +844,6 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         lastPiPRecovery = Date()
         print("🔄 [NebuloEngine] PiP side-player reconnecting")
         let item = AVPlayerItem(url: url)
-        item.preferredPeakBitRate = isPiPSessionActive ? 0 : pipHiddenBitrateCap
         attachPiPItemObservers(item)
         player.replaceCurrentItem(with: item)
         player.play()
@@ -1066,7 +1061,12 @@ extension NebuloPlayerEngine: AVPictureInPictureControllerDelegate {
             // VLC tearing down its audio unit must not take the shared
             // session down with it.
             try? AVAudioSession.sharedInstance().setActive(true)
-            pipAVPlayer?.currentItem?.preferredPeakBitRate = 0
+            // No quality change here. The side player is at full quality
+            // from the moment it is built, so becoming the only thing on
+            // screen asks nothing new of it. It used to be capped while
+            // hidden and uncapped right here, which made it re-buffer at a
+            // new tier at exactly the moment it took over — the stream
+            // appearing to pause on entry to PiP.
             pipAVPlayer?.isMuted = false
             if pipAVPlayer?.timeControlStatus != .playing { pipAVPlayer?.play() }
         }
@@ -1082,10 +1082,11 @@ extension NebuloPlayerEngine: AVPictureInPictureControllerDelegate {
                 teardownPiPPlayer()
                 return
             }
-            // Back inline: side player re-mutes and keeps rendering (armed
-            // for the next auto-PiP), VLC reconnects and takes the screen.
-            pipAVPlayer?.isMuted = true
-            pipAVPlayer?.currentItem?.preferredPeakBitRate = pipHiddenBitrateCap
+            // Back inline: VLC reconnects and takes the screen. The side
+            // player is not kept around any more — PiP is built on the tap,
+            // so there is nothing to keep warm for next time, and keeping it
+            // would be a second decoder running for no picture.
+            teardownPiPPlayer()
             vlcSuspendedForPiP = false
             vlcMediaPlayer.play()
         } else {
