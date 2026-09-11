@@ -51,7 +51,6 @@ struct PlayerInfoPanel: View {
     /// 1:1 with the scroll offset (same mechanism as the section headers):
     /// the big program header + description + action pills compress into a
     /// one-line "what's playing" row so more of the channel list is visible.
-    @State private var panelCollapse: CGFloat = 0
 
     /// Natural (uncollapsed) height of the full header, measured at runtime
     /// since the description block varies per program. Drives the reserve
@@ -61,33 +60,42 @@ struct PlayerInfoPanel: View {
     /// Height of the compact one-line header the full block collapses into.
     private let headerCompactHeight: CGFloat = 44
 
-    private var headerReserve: CGFloat? {
-        guard headerFullHeight > 0 else { return nil }
-        return headerCompactHeight + (headerFullHeight - headerCompactHeight) * (1 - panelCollapse)
-    }
+    /// Last known scroll depth of each tab. A reference box rather than
+    /// `@State`, because it is written on every scroll frame.
+    fileprivate final class TabScrollDepths { var values: [InfoTab: CGFloat] = [:] }
+    @State fileprivate var tabDepths = TabScrollDepths()
 
-    /// Scroll distance over which the header fully compresses — EXACTLY the
-    /// height it gives up. That 1:1 ratio is what makes everything move at
-    /// finger speed: 1pt of scroll shrinks the header by 1pt, so the header
-    /// edge, tab bar and (via the compensation spacer) the list all track
-    /// the finger precisely. A shorter distance made the top of the panel
-    /// visibly outrun the finger.
-    private var collapseDistance: CGFloat {
-        max(1, headerFullHeight - headerCompactHeight)
-    }
+    /// Live scroll depth of the ACTIVE tab, driving the header slide. A LEAF,
+    /// so a scroll frame moves the header and re-renders nothing else — the
+    /// same arrangement the Sports and Favorites hubs use.
+    @State private var panelScroll = ScrollProgress()
 
-    /// Top spacer inserted into each tab's scroll content, exactly matching
-    /// the height the header has given up. This anchors the scroll: without
-    /// it, the shrinking header pulled the whole list up IN ADDITION to the
-    /// finger's own scroll, so rows visibly outran the finger. With it, the
-    /// row you touch stays under your finger for the entire collapse; the
-    /// spacer then scrolls away like any other content.
-    private var collapseCompensation: CGFloat {
-        // In carried mode the collapse never "took" height from this tab's
-        // scroll (its list opens at the top), so no spacer is owed — leaving
-        // it in was exactly the blank band under the tab bar.
-        guard headerFullHeight > 0, !carriedCollapse else { return 0 }
-        return max(0, (headerFullHeight - headerCompactHeight) * panelCollapse)
+    /// Height of the whole floating header block (full header + tab bar).
+    /// Each page reserves exactly this at its top, and it does NOT change as
+    /// the header collapses — the header SLIDES, it does not resize.
+    ///
+    /// That constant is the entire reason the tabs can be a real pager now.
+    /// The old design shrank the header and inserted a matching spacer INSIDE
+    /// each tab's scroll to stop the rows outrunning the finger; with a paged
+    /// TabView the spacer lives inside a UIPageViewController page and
+    /// committed a frame after the header's height changed outside it, which
+    /// was the one-pixel oscillation during slow scrolls. Nothing resizes any
+    /// more, so there is nothing to keep in step and nothing to lag.
+    @State private var headerBlockHeight: CGFloat = 0
+
+    /// How far the header travels before the compact line and tab bar reach
+    /// the top and stop.
+    ///
+    /// Enormous until the header has actually been measured, NOT zero. Every
+    /// leaf that reads this divides by it, and a zero travel reads as "fully
+    /// collapsed" the instant anything scrolls: the full block would fade out
+    /// while still occupying its whole height, and the compact line would take
+    /// over — a one-line header under a tall band of nothing. A huge value
+    /// makes the same division come out at zero progress, so the header simply
+    /// stays open until there is a real height to work with.
+    private var headerTravel: CGFloat {
+        guard headerFullHeight > headerCompactHeight else { return .greatestFiniteMagnitude }
+        return headerFullHeight - headerCompactHeight
     }
 
     /// Converts the scrolled distance into collapse progress. Fed by
@@ -97,36 +105,29 @@ struct PlayerInfoPanel: View {
     /// preference system, capping the collapse's effective frame rate below
     /// the rest of the app's. The offset is in the scroll view's own content
     /// coordinates, so it's immune to the frame moving as the header shrinks.
-    private func updateCollapse(scrolled: CGFloat) {
-        // Frozen during a collapse-preserving tab swipe (see selectTab) so the
-        // incoming tab's initial offset-0 callback can't reset the collapse.
-        guard Date() >= suppressCollapseUntil, headerFullHeight > 0 else { return }
-        // Carried mode: the header is latched compact regardless of this
-        // tab's offset (its list sits at the top). A decisive pull past the
-        // top releases the latch and re-opens the full header; normal
-        // offset-driven tracking resumes from there.
-        if carriedCollapse {
-            if scrolled < -36 {
-                carriedCollapse = false
-                withAnimation(.easeOut(duration: 0.25)) { panelCollapse = 0 }
-            }
-            return
-        }
-        let distance = collapseDistance
-        // Pure continuous mapping — no pixel quantization, no end snap
-        // zones. Both were workarounds for noise in the old probe pipeline
-        // (rounded layout readbacks oscillated sub-pixel; residual fractions
-        // at rest clipped the pills). The synchronous offset is exact — 0 at
-        // rest, ≥ distance once scrolled past — so any discretization here
-        // only ADDS visible steps: the snap zones popped the header ~1.5pt
-        // at the start and end of every slow scroll, and quantizing the
-        // spacer while the list pans at fractional offsets wobbled the row
-        // under the finger by half a device pixel.
-        let shrink = min(max(scrolled, 0), distance)
-        let p = shrink / distance
-        if p != panelCollapse {
-            panelCollapse = p
-        }
+    /// Hands the active tab's scroll depth to the header.
+    ///
+    /// Replaces the old `panelCollapse` mapping. Nothing resizes any more —
+    /// the header slides at constant height — so there is no distance to
+    /// interpolate, no latch to carry across a tab switch and no window to
+    /// freeze while one is in flight. The neighbours in the pager report too,
+    /// hence the guard.
+    private func updateCollapse(scrolled: CGFloat, from tab: InfoTab) {
+        let depth = max(0, scrolled)
+        // Remembered for EVERY tab, not just the active one. Each page keeps
+        // its own scroll position, so arriving at one leaves the header
+        // holding the depth of the page you left — collapsed over a list
+        // sitting at its top, which is the band of black between the picker
+        // and the content. A plain box, not `@State`: this is written on every
+        // scroll frame and must not re-render the panel.
+        tabDepths.values[tab] = depth
+        guard tab == selectedTab else { return }
+        panelScroll.set(depth)
+    }
+
+    /// Hands the header the depth of whichever tab is now in front.
+    private func syncHeaderToSelectedTab() {
+        panelScroll.set(tabDepths.values[selectedTab] ?? 0)
     }
 
     /// Which category is currently being browsed in the Channels tab.
@@ -136,7 +137,7 @@ struct PlayerInfoPanel: View {
 
     /// Cached result of the `browsingChannels` filter. The filter scans the
     /// whole channel list, so recomputing it on every header-collapse frame
-    /// (the body re-runs each frame as `panelCollapse` ticks) was a large part
+    /// (the body re-runs each frame as the collapse ticks) was a large part
     /// of the channel-list scroll jitter. Refreshed only when its inputs
     /// actually change via `.task(id: browsingCacheKey)`.
     @State private var cachedBrowsingChannels: [StreamChannel] = []
@@ -151,11 +152,9 @@ struct PlayerInfoPanel: View {
 
     /// Which side the incoming tab content enters from — `true` when moving
     /// to a tab further right. Set BEFORE the animated change.
-    @State private var slideFromTrailing = true
 
     /// Gates tab changes while a slide is in flight — interrupting a `.move`
     /// transition can strand the incoming view offscreen (blank panel).
-    @State private var isSliding = false
 
     /// Per-tab scroll positions, so a tab swipe can carry the collapsed header
     /// across to the incoming tab by scrolling it to the matching offset.
@@ -167,13 +166,7 @@ struct PlayerInfoPanel: View {
     /// briefly during a collapse-preserving tab swipe so the incoming tab's
     /// initial `offset 0` layout callback can't flash the header back open
     /// before we've scrolled it to the collapsed offset.
-    @State private var suppressCollapseUntil = Date.distantPast
 
-    /// One tab switch per drag (set mid-drag, cleared on finger-lift), and
-    /// the category chip row's global frame so drags starting there scroll
-    /// chips instead of switching tabs.
-    @State private var swipeConsumed = false
-    @State private var categoryPickerFrame: CGRect = .zero
 
     /// True when a collapsed header was carried across a tab switch. In this
     /// mode the header is latched compact WITHOUT a compensation spacer or
@@ -182,41 +175,15 @@ struct PlayerInfoPanel: View {
     /// content, view not attached yet — the spacer showed as a dead blank
     /// band). The latch releases when the user pulls decisively past the top
     /// of the list, which re-opens the full header.
-    @State private var carriedCollapse = false
 
-    /// Central tab switch: derives the slide direction from tab order and
-    /// swaps with a flat easeOut — no spring, no bounce. A collapsed header
-    /// STAYS collapsed (latched) across the switch; the incoming tab opens
-    /// at the top of its list under the compact header.
+    /// Central tab switch, used by the tab bar. The pager animates the page
+    /// move itself, so this is only a selection change — no slide direction to
+    /// derive, no in-flight guard, and no collapse to latch across the switch:
+    /// the header's position is the active page's scroll depth, so it simply
+    /// follows whichever page you land on.
     private func selectTab(_ newTab: InfoTab) {
-        guard newTab != selectedTab, !isSliding else { return }
-        slideFromTrailing = newTab.rawValue > selectedTab.rawValue
-        isSliding = true
-
-        let keepCollapsed = panelCollapse > 0.5
-        carriedCollapse = keepCollapsed
-
-        // Freeze scroll-driven collapse updates during the slide so the
-        // outgoing tab's offset callbacks can't fight the state below.
-        suppressCollapseUntil = Date().addingTimeInterval(0.35)
-
-        withAnimation(.easeOut(duration: 0.25)) {
-            selectedTab = newTab
-            panelCollapse = keepCollapsed ? 1 : 0
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            isSliding = false
-        }
-    }
-
-    /// Steps to the previous/next tab. Driven by the horizontal swipe.
-    private func advanceTab(_ delta: Int) {
-        let all = InfoTab.allCases
-        guard let idx = all.firstIndex(of: selectedTab) else { return }
-        let next = idx + delta
-        guard all.indices.contains(next) else { return }
-        selectTab(all[next])
+        guard newTab != selectedTab else { return }
+        withAnimation(.easeInOut(duration: 0.25)) { selectedTab = newTab }
     }
 
     private var currentProgram: EPGProgram? { viewModel.getCurrentProgram(for: channel) }
@@ -261,15 +228,15 @@ struct PlayerInfoPanel: View {
     private var isCurrentlyRecording: Bool { recordingManager.isRecording(channelName: channel.name) }
     private var isFavorited: Bool { viewModel.favoriteIDs.contains(channel.id) }
 
-    var body: some View {
+    /// The header, floating over the pages: the full programme block, the
+    /// compact line that replaces it, and the tab bar.
+    ///
+    /// It SLIDES up with the scroll at a constant height rather than shrinking.
+    /// That is the change that lets the tabs below be a real pager — see
+    /// `headerBlockHeight` — and it is the same arrangement the Sports and
+    /// Favorites hubs use.
+    private var headerChrome: some View {
         VStack(spacing: 0) {
-            // ── Collapsing header ──
-            // Scrolling any tab's list compresses the full header (program
-            // info + description + action pills) into a compact one-line
-            // "what's playing" row, freeing the space for more channels.
-            // Same continuous, finger-tracked collapse as the section
-            // headers: reserve height interpolates full → compact while the
-            // two layers crossfade. The tab bar below stays pinned.
             ZStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 12) {
                     programHeader
@@ -281,19 +248,10 @@ struct PlayerInfoPanel: View {
                 .padding(.horizontal, 18)
                 .padding(.top, 14)
                 .padding(.bottom, 10)
-                // Keep the ideal height even as the outer frame shrinks —
-                // the clip crops it instead of the text reflowing, and the
-                // GeometryReader measurement stays stable (no feedback loop).
                 .fixedSize(horizontal: false, vertical: true)
-                // The full header stays FULLY VISIBLE while the shrinking
-                // window crops it bottom-up (pills, then description, then
-                // title — swallowed under the video at finger speed, like an
-                // iOS large title). Fading it early left a tall empty black
-                // band that slowly pumped during slow scrolls and read as
-                // jitter. It only fades in the last stretch, right before
-                // the compact line takes over.
-                .opacity(min(1.0, max(0.0, (0.92 - Double(panelCollapse)) / 0.2)))
-                .allowsHitTesting(panelCollapse < 0.7)
+                // Fades over its own travel, so it is gone exactly as the
+                // compact line reaches the top.
+                .modifier(HeaderFade(offset: panelScroll, over: headerTravel))
                 .background(
                     GeometryReader { g in
                         Color.clear
@@ -301,16 +259,8 @@ struct PlayerInfoPanel: View {
                             .onChangeCompat(of: g.size.height) { headerFullHeight = $0 }
                     }
                 )
-
-                // ...and the compact line takes over only in the final ~8%
-                // (the last few points of scroll), so the swap is a crisp
-                // handoff with no stretch where the band sits empty.
-                compactHeader
-                    .opacity(max(0.0, (Double(panelCollapse) - 0.92) / 0.08))
-                    .allowsHitTesting(false)
             }
-            .frame(height: headerReserve, alignment: .top)
-            .clipped()
+            .frame(height: headerFullHeight > 0 ? headerFullHeight : nil, alignment: .top)
 
             // ── Tab bar ──
             tabBar
@@ -319,56 +269,63 @@ struct PlayerInfoPanel: View {
 
             Divider()
                 .background(Color.white.opacity(0.1))
-
-            // ── Tab content ──
-            // NOT a paged TabView: the pager is UIPageViewController-backed,
-            // so the compensation spacer inside its pages committed a frame
-            // later than the header's height change outside it — a one-pixel
-            // up/down oscillation every frame during slow scrolls (the
-            // "jitter"). A plain switch keeps the header, spacer and list in
-            // ONE layout transaction. Swiping between tabs still works via
-            // the horizontal drag below, with a directional slide like the
-            // Sports/Favorites sections.
-            ZStack(alignment: .top) {
-                Group {
-                    switch selectedTab {
-                    case .channels:   channelsTab
-                    case .schedule:   scheduleTab
-                    case .recordings: recordingsTab
-                    }
-                }
-                .id(selectedTab)
-                .transition(.asymmetric(
-                    insertion: .move(edge: slideFromTrailing ? .trailing : .leading).combined(with: .opacity),
-                    removal: .move(edge: slideFromTrailing ? .leading : .trailing).combined(with: .opacity)
-                ))
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .clipped()
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 25, coordinateSpace: .global)
-                    .onChanged { value in
-                        let dx = value.translation.width
-                        let dy = value.translation.height
-                        // Horizontal drags open the tap-suppression window so
-                        // the row under the finger doesn't fire on release.
-                        if abs(dx) > abs(dy) * 1.5 {
-                            SwipeTapGuard.suppress()
-                        }
-                        // Fires mid-drag for an instant response. Drags that
-                        // start on the category chip row scroll the chips —
-                        // they must never flip to the Schedule tab.
-                        guard !swipeConsumed,
-                              value.startLocation.x > 44,
-                              !categoryPickerFrame.contains(value.startLocation),
-                              !HorizontalScrollActivity.isActive,
-                              abs(dx) > 50, abs(dx) > abs(dy) * 1.5 else { return }
-                        swipeConsumed = true
-                        advanceTab(dx < 0 ? 1 : -1)
-                    }
-                    .onEnded { _ in swipeConsumed = false }
-            )
         }
+        .background(Color.black)
+        .background(
+            GeometryReader { g in
+                Color.clear
+                    .onAppear { headerBlockHeight = g.size.height }
+                    .onChangeCompat(of: g.size.height) { headerBlockHeight = $0 }
+            }
+        )
+        .modifier(HeaderSlide(offset: panelScroll, limit: headerTravel))
+    }
+
+    /// The one-line "what's playing" row that replaces the full block.
+    ///
+    /// A SIBLING of the header rather than an overlay on it: the header is
+    /// what slides, and anything hung off it inherits that movement in ways
+    /// that are hard to reason about. Pinned to the panel's top on its own, it
+    /// is simply there, revealed over the last stretch of the header's travel.
+    private var compactHeaderLayer: some View {
+        compactHeader
+            .modifier(CompactHeaderReveal(offset: panelScroll, over: headerTravel))
+            .allowsHitTesting(false)
+    }
+
+    /// One tab as its own page. Siblings in a real pager, so the tab you are
+    /// swiping towards is genuinely on screen and tracking your finger — the
+    /// same treatment the hubs and search got.
+    @ViewBuilder
+    private func tabPage(for tab: InfoTab) -> some View {
+        switch tab {
+        case .channels:   channelsTab
+        case .schedule:   scheduleTab
+        case .recordings: recordingsTab
+        }
+    }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            TabView(selection: $selectedTab) {
+                ForEach(InfoTab.allCases, id: \.self) { tab in
+                    tabPage(for: tab)
+                        .tag(tab)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+
+            headerChrome
+            compactHeaderLayer
+        }
+        // The header slides UP out of the panel, and what is directly above
+        // the panel is the video. Unclipped, its black background rode over
+        // the picture as you scrolled. The old shrinking header clipped as a
+        // side effect of resizing its own window; a sliding one has to say so.
+        .clipped()
+        // A swipe changes this without going through `selectTab`, so the
+        // re-sync hangs off the value itself rather than the tap path.
+        .onChangeCompat(of: selectedTab) { _ in syncHeaderToSelectedTab() }
         .background(Color.black)
         .sheet(isPresented: $showRecordingSheet) {
             RecordingSetupSheet(channel: channel) {
@@ -412,15 +369,18 @@ struct PlayerInfoPanel: View {
 
     private var channelsTab: some View {
         VStack(spacing: 0) {
-            categoryPicker
-                .padding(.top, 10)
-                .padding(.bottom, 4)
-
             ScrollView(showsIndicators: false) {
-                // Single wrapper so the compensation spacer scrolls with the
-                // rest of the content.
+                // One wrapper so the header reserve — and the category picker
+                // with it — scrolls along with the rest of the content. The
+                // picker used to sit OUTSIDE this scroll; under a floating
+                // header that would strand it in a fixed strip that the
+                // header slides away from, leaving a gap.
                 VStack(spacing: 0) {
-                    Color.clear.frame(height: collapseCompensation)
+                    Color.clear.frame(height: headerBlockHeight)
+
+                    categoryPicker
+                        .padding(.top, 10)
+                        .padding(.bottom, 4)
                     let chans = cachedBrowsingChannels
                     if chans.isEmpty {
                         emptyState(icon: "tv.slash", message: "No channels in this category")
@@ -464,8 +424,7 @@ struct PlayerInfoPanel: View {
             .onScrollGeometryChange(for: CGFloat.self) { geo in
                 geo.contentOffset.y + geo.contentInsets.top
             } action: { _, scrolled in
-                guard selectedTab == .channels else { return }
-                updateCollapse(scrolled: scrolled)
+                updateCollapse(scrolled: scrolled, from: .channels)
             }
         }
         .onAppear {
@@ -494,7 +453,6 @@ struct PlayerInfoPanel: View {
         .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.x }) { _, _ in
             HorizontalScrollActivity.touch()
         }
-        .captureGlobalFrame { categoryPickerFrame = $0 }
     }
 
     @ViewBuilder
@@ -546,7 +504,7 @@ struct PlayerInfoPanel: View {
     private var scheduleTab: some View {
         ScrollView(showsIndicators: false) {
             VStack(spacing: 0) {
-            Color.clear.frame(height: collapseCompensation)
+            Color.clear.frame(height: headerBlockHeight)
             if todaySchedule.isEmpty {
                 emptyState(icon: "calendar.badge.exclamationmark", message: "No schedule available for today")
             } else {
@@ -590,8 +548,7 @@ struct PlayerInfoPanel: View {
         .onScrollGeometryChange(for: CGFloat.self) { geo in
             geo.contentOffset.y + geo.contentInsets.top
         } action: { _, scrolled in
-            guard selectedTab == .schedule else { return }
-            updateCollapse(scrolled: scrolled)
+            updateCollapse(scrolled: scrolled, from: .schedule)
         }
     }
 
@@ -600,7 +557,7 @@ struct PlayerInfoPanel: View {
     private var recordingsTab: some View {
         ScrollView(showsIndicators: false) {
             VStack(spacing: 0) {
-            Color.clear.frame(height: collapseCompensation)
+            Color.clear.frame(height: headerBlockHeight)
             let sorted = recordingManager.recordings.sorted { $0.createdAt > $1.createdAt }
             if sorted.isEmpty {
                 emptyState(icon: "record.circle", message: "No recordings yet")
@@ -623,8 +580,7 @@ struct PlayerInfoPanel: View {
         .onScrollGeometryChange(for: CGFloat.self) { geo in
             geo.contentOffset.y + geo.contentInsets.top
         } action: { _, scrolled in
-            guard selectedTab == .recordings else { return }
-            updateCollapse(scrolled: scrolled)
+            updateCollapse(scrolled: scrolled, from: .recordings)
         }
     }
 

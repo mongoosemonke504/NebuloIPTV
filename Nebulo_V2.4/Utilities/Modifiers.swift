@@ -394,6 +394,20 @@ struct HeaderFade: ViewModifier {
     }
 }
 
+/// The inverse of `HeaderFade`: brings a view IN over the last stretch of the
+/// scroll that takes the full header away, so the handoff between the two is a
+/// crisp swap rather than both being half-visible through the middle of it.
+struct CompactHeaderReveal: ViewModifier {
+    @ObservedObject var offset: ScrollProgress
+    let over: CGFloat
+
+    func body(content: Content) -> some View {
+        let progress = min(max(offset.value / max(over, 1), 0), 1)
+        // Nothing until the last ~15%, then all of it.
+        return content.opacity(Double(max(0, progress - 0.85) / 0.15))
+    }
+}
+
 /// Backdrop for a hub header that floats over its scrolling content.
 ///
 /// Thickest at the very TOP OF THE DISPLAY — above the Dynamic Island, so the

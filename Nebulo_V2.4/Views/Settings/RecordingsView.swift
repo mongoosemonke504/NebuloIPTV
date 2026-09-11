@@ -216,18 +216,22 @@ struct RecordingsView: View {
             .opacity(headerProgress * headerProgress)
             .allowsHitTesting(false)
 
-            // blurFade overlay to Recently Recorded category breakdown
+            // The Recently Recorded breakdown is a DRILL-DOWN, so it pushes in
+            // from the trailing edge and leaves the same way — like a category
+            // page or a favourite team's, rather than the blur-crossfade it
+            // used to do. Same curve and duration as every other push in the
+            // app, from `DetailRouter.travel`.
             if navigateToCategoryView {
                 RecordingsCategoryView(
                     viewModel: viewModel,
                     onBack: {
-                        withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) {
+                        withAnimation(.easeOut(duration: DetailRouter.travel)) {
                             navigateToCategoryView = false
                         }
                     },
                     onOpenSearch: onOpenSearch
                 )
-                .transition(.blurFade)
+                .transition(.move(edge: .trailing))
                 .zIndex(10)
             }
         }
@@ -239,7 +243,7 @@ struct RecordingsView: View {
         // (in MainView) was eating swipes that should dismiss the overlay.
         .modifier(SwipeBackModifier(onBack: {
             if navigateToCategoryView {
-                withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) {
+                withAnimation(.easeOut(duration: DetailRouter.travel)) {
                     navigateToCategoryView = false
                 }
             } else {
@@ -427,7 +431,9 @@ struct RecordingsView: View {
         VStack(alignment: .leading, spacing: 14) {
             // Tappable header navigates to per-category page
             Button {
-                withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) {
+                // Same push tempo as the way back out, and as every other
+                // drill-down in the app.
+                withAnimation(.easeOut(duration: DetailRouter.travel)) {
                     navigateToCategoryView = true
                 }
             } label: {

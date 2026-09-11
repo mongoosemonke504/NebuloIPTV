@@ -159,6 +159,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         setupVLC()
         setupAudioSession()
         setupRemoteTransportControls()
+        observeAppLifecycle()
         renderView.onLayoutSizeChange = { [weak self] in
             guard let self else { return }
             // VLC's fill/stretch bake the container's shape into a crop or
@@ -384,6 +385,66 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     
     
     
+    // MARK: - Returning to the app
+
+    /// When the app went away, if it did.
+    private var backgroundedAt: Date?
+    /// Below this, a live stream is very likely still inside VLC's buffer and
+    /// picks up on its own; past it, it is stale and only the stall watchdog
+    /// would ever notice — twenty-five to thirty seconds later, which is the
+    /// frozen picture you come back to.
+    private static let staleAfterBackground: TimeInterval = 4
+
+    private func observeAppLifecycle() {
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.backgroundedAt = Date()
+        }
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.reloadIfStaleAfterBackground()
+        }
+    }
+
+    /// Re-opens a LIVE stream that went stale while the app was away.
+    ///
+    /// A live stream has no meaningful "resume": the buffer VLC was holding
+    /// describes a moment that has passed, and it neither catches up nor
+    /// errors — it just sits there. The only thing that noticed was the stall
+    /// watchdog, on a half-minute timer.
+    ///
+    /// Deliberately narrow. It does nothing for a recording (a file resumes
+    /// exactly where it was, and reloading would throw away the position),
+    /// nothing while paused (you left it paused on purpose), nothing while
+    /// Picture in Picture is up (that kept playing the whole time, so there is
+    /// nothing stale to replace), and nothing for a short trip away.
+    private func reloadIfStaleAfterBackground() {
+        guard let away = backgroundedAt else { return }
+        backgroundedAt = nil
+
+        guard Date().timeIntervalSince(away) >= Self.staleAfterBackground,
+              let url = currentURL,
+              !url.isFileURL,
+              !userPaused,
+              pipController?.isPictureInPictureActive != true else { return }
+
+        reloadCurrentStream()
+    }
+
+    /// Reopens the current URL from scratch, bypassing `play(url:)`'s
+    /// "already on this URL" guard — which exists so re-selecting the channel
+    /// you are watching doesn't restart it, and is exactly what stops a
+    /// reload here.
+    public func reloadCurrentStream() {
+        guard let url = currentURL else { return }
+        currentURL = nil
+        play(url: url)
+    }
+
     private func startBufferWatchdog() {
         stopBufferWatchdog()
         
