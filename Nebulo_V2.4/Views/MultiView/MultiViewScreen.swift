@@ -109,14 +109,6 @@ struct MultiViewScreen: View {
     @State private var chromeHideTask: Task<Void, Never>? = nil
     /// Mirror of the GeometryReader's `isLandscape` so modifiers attached
     /// outside the GeometryReader (toolbar, overlay) can react to rotation.
-    @State private var isLandscapeOrient: Bool = false
-
-    /// Auto-hide chrome only applies in landscape equal mode (full-bleed
-    /// video). Every other state keeps the always-visible chrome row —
-    /// the same Back pill + settings gear as the rest of the app.
-    private var chromeAutoHideActive: Bool {
-        layoutMode == .equal && isLandscapeOrient
-    }
 
     /// The standard Back pill used across the app (identical to MainView's
     /// section chrome), shared by the pinned row and the auto-hide overlay.
@@ -154,6 +146,17 @@ struct MultiViewScreen: View {
                     let topInset = max(geo.safeAreaInsets.top, 54)
                     let bottomInset = max(geo.safeAreaInsets.bottom, 16)
                     let isLandscape = geo.size.width > geo.size.height
+                    // ONE decision, from the live geometry, for everything
+                    // that changes in landscape immersive mode: the header
+                    // collapsing, the chrome becoming an auto-hiding overlay,
+                    // and the tap that toggles it. These used to be decided
+                    // from two different values — the header from this live
+                    // reading, the chrome from a stored copy updated by
+                    // onAppear/onChange — and the copy could be left stuck
+                    // at `true` by the first layout pass. Then the overlay
+                    // chrome drew over a header that had never collapsed:
+                    // the Back pill across the title, the gear on the + button.
+                    let immersive = layoutMode == .equal && isLandscape
 
                     ZStack {
                         NebulaBackgroundView(
@@ -193,7 +196,6 @@ struct MultiViewScreen: View {
                 // containers, no re-parenting, no possible freeze on rapid
                 // rotations.
                 .onChangeCompat(of: isLandscape) { nowLandscape in
-                    isLandscapeOrient = nowLandscape
                     guard !activeIndices.isEmpty else { return }
                     let target: MultiViewLayoutMode = nowLandscape ? .equal : .focus
                     if layoutMode != target {
@@ -201,10 +203,9 @@ struct MultiViewScreen: View {
                     }
                 }
                 .onAppear {
-                    // Seed initial orientation + apply orientation default so
-                    // the first render lands on the correct mode for whichever
-                    // way the device is held when multi-view opens.
-                    isLandscapeOrient = isLandscape
+                    // Apply the orientation default so the first render lands
+                    // on the correct mode for whichever way the device is held
+                    // when multi-view opens.
                     if !activeIndices.isEmpty {
                         let target: MultiViewLayoutMode = isLandscape ? .equal : .focus
                         if layoutMode != target {
@@ -212,6 +213,72 @@ struct MultiViewScreen: View {
                         }
                     }
                 }
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    // Landscape + equal = full-bleed video; the auto-hiding
+                    // overlay chrome below owns the top edge in that state.
+                    if !immersive {
+                        HStack {
+                            chromeBackButton
+                            Spacer()
+                            SettingsGearButton {
+                                viewModel.triggerSelectionHaptic()
+                                onOpenSettings()
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 4)
+                    }
+                }
+                .overlay(alignment: .top) {
+                    if immersive {
+                        HStack(spacing: 10) {
+                            chromeBackButton
+
+                            Spacer()
+
+                            // Add-stream button — the header (where the home + lives)
+                            // is collapsed in landscape immersive mode, so this is
+                            // the only way to add a stream without rotating back to
+                            // portrait.
+                            Button(action: {
+                                openFullSearch()
+                            }) {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 18, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .frame(width: 44, height: 44)
+                                    .modifier(GlassEffect(cornerRadius: 22, isSelected: false, accentColor: nil))
+                            }
+                            .buttonStyle(.plain)
+
+                            // The one settings gear used everywhere in the app.
+                            SettingsGearButton {
+                                viewModel.triggerSelectionHaptic()
+                                onOpenSettings()
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 8)
+                        .opacity(showChrome ? 1 : 0)
+                        .allowsHitTesting(showChrome)
+                        .animation(.easeInOut(duration: 0.25), value: showChrome)
+                    }
+                }
+                // Toggle the back / settings chrome on tap: a tap while it's
+                // hidden brings it in and starts the 4-second auto-hide timer;
+                // a tap while it's visible dismisses it immediately. Mirrors the
+                // video player overlay behavior. simultaneousGesture means the
+                // underlying tile taps (focus / audio routing) still fire — we
+                // just piggy-back on the same touch event. Only active in
+                // landscape equal mode since that's where the chrome auto-hides.
+                .simultaneousGesture(
+                    TapGesture()
+                        .onEnded {
+                            if immersive {
+                                toggleChrome()
+                            }
+                        }
+                )
             }
             // NO SwipeBackModifier here. This screen has its own close swipe
             // (`closeSwipe`, below) that tracks the finger and carries it off.
@@ -262,72 +329,6 @@ struct MultiViewScreen: View {
             // every other screen uses: Back pill + SettingsGearButton in a
             // top safeAreaInset.
             .toolbar(.hidden, for: .navigationBar)
-            .safeAreaInset(edge: .top, spacing: 0) {
-                // Landscape + equal = full-bleed video; the auto-hiding
-                // overlay chrome below owns the top edge in that state.
-                if !chromeAutoHideActive {
-                    HStack {
-                        chromeBackButton
-                        Spacer()
-                        SettingsGearButton {
-                            viewModel.triggerSelectionHaptic()
-                            onOpenSettings()
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 4)
-                }
-            }
-            .overlay(alignment: .top) {
-                if chromeAutoHideActive {
-                    HStack(spacing: 10) {
-                        chromeBackButton
-
-                        Spacer()
-
-                        // Add-stream button — the header (where the home + lives)
-                        // is collapsed in landscape immersive mode, so this is
-                        // the only way to add a stream without rotating back to
-                        // portrait.
-                        Button(action: {
-                            openFullSearch()
-                        }) {
-                            Image(systemName: "plus")
-                                .font(.system(size: 18, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 44, height: 44)
-                                .modifier(GlassEffect(cornerRadius: 22, isSelected: false, accentColor: nil))
-                        }
-                        .buttonStyle(.plain)
-
-                        // The one settings gear used everywhere in the app.
-                        SettingsGearButton {
-                            viewModel.triggerSelectionHaptic()
-                            onOpenSettings()
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                    .opacity(showChrome ? 1 : 0)
-                    .allowsHitTesting(showChrome)
-                    .animation(.easeInOut(duration: 0.25), value: showChrome)
-                }
-            }
-            // Toggle the back / settings chrome on tap: a tap while it's
-            // hidden brings it in and starts the 4-second auto-hide timer;
-            // a tap while it's visible dismisses it immediately. Mirrors the
-            // video player overlay behavior. simultaneousGesture means the
-            // underlying tile taps (focus / audio routing) still fire — we
-            // just piggy-back on the same touch event. Only active in
-            // landscape equal mode since that's where the chrome auto-hides.
-            .simultaneousGesture(
-                TapGesture()
-                    .onEnded {
-                        if chromeAutoHideActive {
-                            toggleChrome()
-                        }
-                    }
-            )
             } // end NavigationStack
 
             // Search overlay sits OUTSIDE the NavigationStack so its
@@ -776,7 +777,11 @@ struct MultiViewHubHeader: View {
                 .buttonStyle(.plain)
 
             }
-            .padding(.horizontal, 20)
+            // Title at the hubs' 20pt; the + at the chrome row's 16pt, so it
+            // sits directly under the settings gear rather than 4pt inboard
+            // of it.
+            .padding(.leading, 20)
+            .padding(.trailing, 16)
         }
     }
 
