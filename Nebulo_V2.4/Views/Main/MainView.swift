@@ -504,9 +504,14 @@ struct DetailPageHost: SwiftUI.View {
 /// A leaf, so a frame of the drag re-renders this mask and nothing else.
 struct DockCoverMask: ViewModifier {
     @ObservedObject var cover: ScrollProgress
+    /// A second, independent cover, resolved together with the first. A
+    /// drill-down page and multi-view are never up at once, but each owns its
+    /// own progress and the bar has to answer to whichever is over it.
+    @ObservedObject var other: ScrollProgress
 
     func body(content: Content) -> some View {
-        let uncovered = 1 - min(max(cover.value, 0), 1)
+        let covered = max(cover.value, other.value)
+        let uncovered = 1 - min(max(covered, 0), 1)
         return content
             .mask(alignment: .leading) {
                 Rectangle()
@@ -718,7 +723,7 @@ struct MainViewModifiers: ViewModifier {
             // Recently Watched, Recordings) — those show the circular back
             // chevron, matching the reference's catalog pages.
             .overlay(alignment: .bottom) {
-                if !showMultiView && (dockVisible || showSearch) {
+                if dockVisible || showSearch {
                     NuvioBottomBar(
                         active: activeDockTab,
                         // The reference bar's exact selected-tab blue, sampled
@@ -755,7 +760,8 @@ struct MainViewModifiers: ViewModifier {
                     )
                     // Covered by a drill-down rather than removed, so the page
                     // sliding off uncovers it under your finger.
-                    .modifier(DockCoverMask(cover: backSwipe.cover))
+                    .modifier(DockCoverMask(cover: backSwipe.cover,
+                                            other: MultiViewDismiss.shared.cover))
                 }
             }
             // Pushed aside while a detail page covers this. At rest the value

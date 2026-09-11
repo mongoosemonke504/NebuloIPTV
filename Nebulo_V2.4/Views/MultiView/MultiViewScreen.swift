@@ -213,7 +213,14 @@ struct MultiViewScreen: View {
                     }
                 }
             }
-            .modifier(SwipeBackModifier(onBack: handleDismiss))
+            // NO SwipeBackModifier here. This screen has its own close swipe
+            // (`closeSwipe`, below) that tracks the finger and carries it off.
+            // With both installed, one edge drag fired both: the finger-
+            // tracked close started the screen moving, and on release the
+            // modifier's `handleDismiss` snapped the offset back to zero and
+            // ran a SECOND animated slide-off — two closes, one after the
+            // other. The modifier predates the finger-tracked close and was
+            // only ever a leftover once that arrived.
             .onAppear {
                 if !activeIndices.contains(focusedIndex), let first = activeIndices.first {
                     focusedIndex = first
@@ -376,6 +383,13 @@ struct MultiViewScreen: View {
         // sideways in one frame while multi-view was still sliding on — which is
         // the clip before the animation.
         .onAppear {
+            // A previous close swipe leaves `slide` at 1 (see the note in
+            // `closeSwipe`). Put the screen back over the app FIRST, with no
+            // animation — this fires on the insertion frame, where the move
+            // transition has it off-screen anyway, so nothing is seen.
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { MultiViewDismiss.shared.slide.set(0) }
             withAnimation(MainView.multiViewSlide) { MultiViewDismiss.shared.cover.set(1) }
         }
     }
@@ -423,8 +437,18 @@ struct MultiViewScreen: View {
                         var t = Transaction()
                         t.disablesAnimations = true
                         withTransaction(t) { showMultiView = false }
-                        state.slide.set(0)
                         closingBySwipe = false
+                        // `slide` is deliberately LEFT at 1 here. It is reset
+                        // on the next appearance instead.
+                        //
+                        // Resetting it now — even in the same disabled
+                        // transaction as the removal — put the screen back at
+                        // x = 0 while it was still in the tree: the write to
+                        // `showMultiView` goes through a Binding, and the
+                        // removal transition was playing regardless of the
+                        // transaction. So the screen snapped back over the app
+                        // and then slid off again over 0.35s. Left at 1, it
+                        // stays off-screen for whatever the removal does.
                     }
                 } else {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
