@@ -316,6 +316,15 @@ class ChannelViewModel: ObservableObject {
     /// Read-only view of the last successful EPG refresh, for the background
     /// scheduler to compute the next earliest run.
     var lastEPGUpdateDate: Date? { lastEPGUpdateTime }
+
+    /// How long a fetched playlist is trusted before a return to the app
+    /// re-downloads it. Channel line-ups change on the order of days; the
+    /// guide is what goes stale within one, and it has its own 12-hour rule.
+    static let playlistMaxAge: TimeInterval = 30 * 60
+
+    /// When every account's playlist last came back from the network, in
+    /// memory only — a relaunch always fetches.
+    private var lastPlaylistLoadTime: Date?
     
     
     private var visualProgress: Double = 0        // internal only — not published
@@ -409,6 +418,18 @@ class ChannelViewModel: ObservableObject {
         
         if let lastUpdate = lastEPGUpdateTime, now.timeIntervalSince(lastUpdate) < Self.epgMaxAge {
             print("✅ [ChannelViewModel] EPG is fresh (< 12h). Skipping update.")
+
+            // The guide is fresh; the only question left is the playlist, and
+            // it is trusted for half an hour. This used to fall through to a
+            // silent reload unconditionally, so EVERY return to the app —
+            // after glancing at a message, say — re-downloaded every account's
+            // full playlist, re-parsed it and swapped the channel list, which
+            // in turn dropped every cache built on it and rebuilt the home
+            // screen. A trip away that short changes nothing worth fetching.
+            if let loaded = lastPlaylistLoadTime, now.timeIntervalSince(loaded) < Self.playlistMaxAge {
+                print("✅ [ChannelViewModel] Playlist is fresh (< 30m). Nothing to reload.")
+                return
+            }
 
             await loadActiveAccounts(silent: true, performEpgCheck: false)
             return
@@ -557,6 +578,7 @@ class ChannelViewModel: ObservableObject {
                 self.categories = allCategories.sorted { $0.order < $1.order }
                 self.categorizeSports()
                 self.saveToCache()
+                self.lastPlaylistLoadTime = Date()
             }
             
             let silentEpg = silent || (hadCachedChannels && !force && !shouldUpdateEPG)
