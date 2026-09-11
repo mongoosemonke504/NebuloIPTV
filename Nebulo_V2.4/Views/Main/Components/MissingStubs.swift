@@ -98,6 +98,27 @@ struct SearchView: View {
     @State private var safeTop: CGFloat = 112
     /// Breathing room between the chips and the first result.
     private static let headerClearance: CGFloat = 24
+    /// The top content inset each scroll view applies on its own — see
+    /// `reserve(insetTop:)`. Keyed by page, because the two kinds differ.
+    /// Plain `@State`, unlike the per-frame scroll depth: it is written only
+    /// when an inset is first learned or changes, which is once per page.
+    @State private var pageInsets: [String: CGFloat] = [:]
+
+    /// How much a page must leave clear at its top, given the inset its
+    /// scroll view has ALREADY applied.
+    ///
+    /// The header sits `safeTop` below the top of the display, and content
+    /// belongs `headerHeight` + clearance below that. But the two kinds of
+    /// page start from different places: the scoped pages live inside the
+    /// pager, whose per-page controller re-applies the window's safe area as
+    /// a content inset, while the browse page is a bare scroll view that
+    /// ignores the safe area and gets no inset at all. Padded identically,
+    /// the browse page's content landed a whole chrome row too high — the
+    /// title over the Recently Watched header. Subtracting each page's own
+    /// measured inset makes both land in the same place by construction.
+    private func reserve(insetTop: CGFloat) -> CGFloat {
+        max(0, safeTop + headerHeight + Self.headerClearance - insetTop)
+    }
 
     /// Teams and leagues whose names match the query, offered for one-tap
     /// following. Ranked in a `.task(id:)` rather than in the body, so typing
@@ -242,15 +263,17 @@ struct SearchView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             // The header's height, plus clearance. The scroll view supplies
             // the status bar and chrome row itself as a safe-area content
-            // inset, so this must not add that distance again.
-            .padding(.top, headerHeight + Self.headerClearance)
+            // inset; `reserve` subtracts whatever it measured.
+            .padding(.top, reserve(insetTop: pageInsets[s.rawValue] ?? 0))
             // Clearance for the floating dock — results scroll behind its
             // translucent slab instead of stopping above it.
             .padding(.bottom, 118)
         }
-        .onScrollGeometryChange(for: CGFloat.self) { geo in
-            geo.contentOffset.y + geo.contentInsets.top
-        } action: { _, y in
+        .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geo in
+            let y = geo.contentOffset.y + geo.contentInsets.top
+            if pageInsets[s.rawValue] != geo.contentInsets.top {
+                pageInsets[s.rawValue] = geo.contentInsets.top
+            }
             guard s == scope else { return }
             let scrolled = max(0, y)
             headerScroll.set(scrolled)
@@ -271,12 +294,14 @@ struct SearchView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, headerHeight + Self.headerClearance)
+            .padding(.top, reserve(insetTop: pageInsets["browse"] ?? 0))
             .padding(.bottom, 118)
         }
-        .onScrollGeometryChange(for: CGFloat.self) { geo in
-            geo.contentOffset.y + geo.contentInsets.top
-        } action: { _, y in
+        .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geo in
+            let y = geo.contentOffset.y + geo.contentInsets.top
+            if pageInsets["browse"] != geo.contentInsets.top {
+                pageInsets["browse"] = geo.contentInsets.top
+            }
             let scrolled = max(0, y)
             headerScroll.set(scrolled)
             titleProgress.set(min(max(scrolled / max(bigTitleHeight, 1), 0), 1))
