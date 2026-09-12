@@ -244,8 +244,24 @@ class ScoreViewModel: ObservableObject {
         return URLSession(configuration: config)
     }()
     
-    private var masterGames: [SportType: [ESPNEvent]] = [:]
-    private var masterSectionsMap: [SportType: [SoccerGameSection]] = [:]
+    private var masterGames: [SportType: [ESPNEvent]] = [:] {
+        didSet { fixturesGeneration &+= 1 }
+    }
+    private var masterSectionsMap: [SportType: [SoccerGameSection]] = [:] {
+        didSet { fixturesGeneration &+= 1 }
+    }
+    /// Bumped on every write to the fixture tables — the cheapest possible
+    /// "has anything changed" for the memos below.
+    private var fixturesGeneration = 0
+    /// `liveGame(for:currentEPGTitle:)` memo. The player asks it from its
+    /// body — several times per render, and the player re-renders on every
+    /// tick of a recording's clock — and each uncached answer copies every
+    /// fixture in every sport into a pool and string-matches through the
+    /// live ones. Remembered per channel and guide title until the fixtures
+    /// change.
+    private var liveGameMemo: [String: ESPNEvent?] = [:]
+    private var liveGameMemoGeneration = -1
+    private var livePoolMemo: [ESPNEvent] = []
     
     private var cancellables = Set<AnyCancellable>()
     private var lastFetchTime = Date.distantPast
@@ -689,7 +705,28 @@ class ScoreViewModel: ObservableObject {
         }
     }
 
-    func fetchScores(forceRefresh: Bool = false, silent: Bool = false) async {
+    /// The sports whose feeds carry these games — what a Live Activity refresh
+    /// needs, as opposed to every feed in the app.
+    func sports(carrying gameIDs: Set<String>) -> Set<SportType> {
+        var found: Set<SportType> = []
+        for (sport, games) in masterGames where games.contains(where: { gameIDs.contains($0.id) }) {
+            found.insert(sport)
+        }
+        for (sport, sections) in masterSectionsMap
+        where sections.contains(where: { $0.games.contains { gameIDs.contains($0.id) } }) {
+            found.insert(sport)
+        }
+        return found
+    }
+
+    /// `limitedTo` restricts the refresh to those sports' feeds. The Live
+    /// Activity timer passes the sports of the games it is tracking: it fires
+    /// every twenty seconds for as long as one is pinned, and each firing used
+    /// to download and decode every scoreboard in the app — twenty-odd feeds,
+    /// three times a minute, to move one game's clock. A limited refresh also
+    /// leaves `lastFetchTime` alone, so the ordinary full refresh still comes
+    /// round on its own schedule.
+    func fetchScores(forceRefresh: Bool = false, silent: Bool = false, limitedTo: Set<SportType>? = nil) async {
         // `silent` means "don't show the spinner". It used to ALSO skip the
         // freshness check, which is a different thing entirely — and the app's
         // 60-second background timer passes it, so every minute the app was
@@ -718,7 +755,12 @@ class ScoreViewModel: ObservableObject {
                     // The soccer buckets all read from the shared competition
                     // catalog (SportType.soccerCompetitionGroups) — the same
                     // list that drives the team catalog and the pickers.
-                    for (bucket, competitions) in SportType.soccerCompetitionGroups {
+                    func wanted(_ sport: SportType) -> Bool {
+                        guard let limitedTo else { return true }
+                        return limitedTo.contains(sport)
+                    }
+
+                    for (bucket, competitions) in SportType.soccerCompetitionGroups where wanted(bucket) {
                         group.addTask {
                             do {
                                 let (sections, games) = try await self.fetchSoccerInternal(leagues: competitions)
@@ -729,12 +771,14 @@ class ScoreViewModel: ObservableObject {
 
                     // Tennis mirrors the soccer pattern: several feeds (ATP +
                     // WTA), sectioned output (one section per tournament draw).
-                    group.addTask {
-                        let (sections, games) = await self.fetchTennisInternal()
-                        return (SportType.tennis, games.isEmpty ? nil : games, sections.isEmpty ? nil : sections)
+                    if wanted(.tennis) {
+                        group.addTask {
+                            let (sections, games) = await self.fetchTennisInternal()
+                            return (SportType.tennis, games.isEmpty ? nil : games, sections.isEmpty ? nil : sections)
+                        }
                     }
 
-                    for sport in SportType.allCases {
+                    for sport in SportType.allCases where wanted(sport) {
                         if sport == .pinned || sport.isSoccer || sport == .tennis { continue }
                         group.addTask {
                             guard let url = URL(string: sport.endpoint) else { return (sport, nil, nil) }
@@ -798,7 +842,7 @@ class ScoreViewModel: ObservableObject {
                     // the logo warm-up — both only care whether anything moved.
                     let fingerprint = self.gamesFingerprint()
                     self.saveGamesCache(fingerprint: fingerprint)
-                    self.lastFetchTime = Date()
+                    if limitedTo == nil { self.lastFetchTime = Date() }
                     self.applyFilter(text: self.currentSearchText)
                     let fixturesChanged = self.preloadImages(fingerprint: fingerprint)
                     self.migrateLegacyTeamKeys()
@@ -1072,14 +1116,29 @@ class ScoreViewModel: ObservableObject {
     /// Look up a currently-live ESPN game that matches a given channel.
     /// Match priority: broadcast-name match → both team names appear in EPG title → shortName in EPG title.
     func liveGame(for channel: StreamChannel, currentEPGTitle: String?) -> ESPNEvent? {
-        // Collect every event we know about (master + soccer sections)
-        var pool: [ESPNEvent] = []
-        for games in masterGames.values { pool.append(contentsOf: games) }
-        for sections in masterSectionsMap.values {
-            for section in sections { pool.append(contentsOf: section.games) }
+        if liveGameMemoGeneration != fixturesGeneration {
+            liveGameMemoGeneration = fixturesGeneration
+            liveGameMemo.removeAll(keepingCapacity: true)
+            // Collect every live event we know about (master + soccer sections)
+            var pool: [ESPNEvent] = []
+            for games in masterGames.values {
+                for game in games where game.status.type.state == "in" { pool.append(game) }
+            }
+            for sections in masterSectionsMap.values {
+                for section in sections {
+                    for game in section.games where game.status.type.state == "in" { pool.append(game) }
+                }
+            }
+            livePoolMemo = pool
         }
-        // Only live ones
-        let live = pool.filter { $0.status.type.state == "in" }
+        let memoKey = "\(channel.id)|\(currentEPGTitle ?? "")"
+        if let remembered = liveGameMemo[memoKey] { return remembered }
+        let answer = resolveLiveGame(for: channel, currentEPGTitle: currentEPGTitle, live: livePoolMemo)
+        liveGameMemo[memoKey] = .some(answer)
+        return answer
+    }
+
+    private func resolveLiveGame(for channel: StreamChannel, currentEPGTitle: String?, live: [ESPNEvent]) -> ESPNEvent? {
         if live.isEmpty { return nil }
 
         let channelLower = channel.name.lowercased()

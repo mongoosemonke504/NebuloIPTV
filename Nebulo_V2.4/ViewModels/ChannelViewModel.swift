@@ -53,7 +53,16 @@ class ChannelViewModel: ObservableObject {
     @Published var lastSourceCategory: StreamCategory? = nil
     @Published var scrollRestoreTrigger = UUID()
     @Published var draggingChannel: StreamChannel? = nil
-    @Published var miniPlayerChannel: StreamChannel? = nil
+    @Published var miniPlayerChannel: StreamChannel? = nil {
+        didSet { if miniPlayerChannel == nil { miniPlayerRecording = nil } }
+    }
+    /// The recording behind `miniPlayerChannel`, when what was minimised was a
+    /// recording rather than a live channel. Set BEFORE the channel. Expanding
+    /// the mini player then brings back the recording player — with its
+    /// programme name, description and scrubber — instead of a live player
+    /// opened on the recording's file, which had nothing to say about it and
+    /// drew a live guide bar over it. Cleared with the channel.
+    var miniPlayerRecording: Recording? = nil
     @Published var currentTime: Date = Date() {
         didSet { invalidateProgramCaches() }
     }
@@ -818,6 +827,14 @@ class ChannelViewModel: ObservableObject {
         let program = epgData[id]?.first { currentTime >= $0.start && currentTime <= $0.stop }
         currentProgramCache[id] = program
         return program
+    }
+
+    /// The programme airing on `channel` at `date` — `getCurrentProgram` for
+    /// a moment other than now. Uncached: it is asked once, when a recording
+    /// is set up, not from a view body.
+    func program(for channel: StreamChannel, at date: Date) -> EPGProgram? {
+        guard let id = resolvedEPGID(for: channel) else { return nil }
+        return epgData[id]?.first { date >= $0.start && date < $0.stop }
     }
 
     func getNextProgram(for channel: StreamChannel) -> EPGProgram? {

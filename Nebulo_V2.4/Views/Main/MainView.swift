@@ -802,8 +802,14 @@ struct MainViewModifiers: ViewModifier {
             // player is dismissed, so minimising the recording drops back to
             // home rather than the old live player.
             .fullScreenCover(item: $selectedRecording) { recording in
-                RecordingPlayerView(recording: recording, viewModel: viewModel)
-                    .ignoresSafeArea()
+                RecordingPlayerView(recording: recording, viewModel: viewModel, onPlayChannel: { channel in
+                    // The mirror of `onPlayRecording` below: leave the
+                    // recording entirely, then open the channel live once the
+                    // cover has dismissed.
+                    selectedRecording = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { playAction(channel) }
+                })
+                .ignoresSafeArea()
             }
 
             // isPresented stays true while ANY channel is selected, so
@@ -910,7 +916,14 @@ extension MainView {
                     Spacer()
                     MiniPlayerView(channel: miniChannel, viewModel: viewModel, onExpand: { 
                         withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { 
-                            selectedChannel = miniChannel
+                            // A minimised recording comes back as the
+                            // recording player; `miniChannel` is only its
+                            // file dressed up as a channel.
+                            if let recording = viewModel.miniPlayerRecording {
+                                selectedRecording = recording
+                            } else {
+                                selectedChannel = miniChannel
+                            }
                             viewModel.miniPlayerChannel = nil 
                         } 
                     }, onClose: { 

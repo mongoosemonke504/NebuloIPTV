@@ -342,9 +342,9 @@ class RecordingManager: NSObject, ObservableObject {
     }
     
     func isRecording(channelName: String) -> Bool {
-        let recordingStatus = recordings.contains(where: { $0.channelName == channelName && $0.status == .recording })
-        print("RecordingManager: isRecording for \(channelName): \(recordingStatus)")
-        return recordingStatus
+        // No log line here: the player controls ask this from their body, so
+        // it ran on every render of the player.
+        recordings.contains(where: { $0.channelName == channelName && $0.status == .recording })
     }
     
     func getActiveRecordingURL(for channel: StreamChannel) -> URL? {

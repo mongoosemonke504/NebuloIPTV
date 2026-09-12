@@ -383,6 +383,12 @@ struct RecordingSetupSheet: View {
             finalEnd   = prog.stop
             title = prog.title
             desc  = prog.description
+        } else if let prog = ChannelViewModel.shared.program(for: channel, at: max(finalStart, Date())) {
+            // A manual window is still named after what is on: the guide
+            // knows what airs when it starts, and a recording called "ESPN"
+            // is no help in the list a week later.
+            title = prog.title
+            desc  = prog.description
         }
 
         guard finalEnd > finalStart else { return }

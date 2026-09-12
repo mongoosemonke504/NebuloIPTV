@@ -36,6 +36,12 @@ struct PlayerInfoPanel: View {
     /// When true (recording playback), hides the record button in the header
     /// and removes the bell record buttons from the schedule rows.
     var isRecordingPlayback: Bool = false
+    /// The recording being played, in recording playback. `channel` is then
+    /// the real live channel — that is what the schedule and the related
+    /// channels are for — but the HEADER is about the recording: its own
+    /// title, its own description, the time it was made. Reading the live
+    /// guide for it showed whatever happened to be on the channel right now.
+    var recording: Recording? = nil
 
     @Binding var showSubtitlePanel: Bool
     @Binding var showAudioPanel: Bool
@@ -204,6 +210,18 @@ struct PlayerInfoPanel: View {
 
     private var currentProgram: EPGProgram? { viewModel.getCurrentProgram(for: channel) }
 
+    /// What the header names: the recording, or else what is on air.
+    private var headerTitle: String {
+        if let recording { return recording.displayName }
+        return currentProgram?.title ?? channel.name
+    }
+
+    private var headerDescription: String? {
+        let desc = recording != nil ? recording?.programDescription : currentProgram?.description
+        guard let desc, !desc.isEmpty else { return nil }
+        return desc
+    }
+
     private var todaySchedule: [EPGProgram] {
         guard let id = channel.epgID, let schedule = viewModel.epgData[id] else { return [] }
         let cal = Calendar.current
@@ -256,7 +274,7 @@ struct PlayerInfoPanel: View {
             ZStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 12) {
                     programHeader
-                    if let prog = currentProgram, let desc = prog.description, !desc.isEmpty {
+                    if let desc = headerDescription {
                         descriptionView(desc: desc)
                     }
                     actionPills
@@ -654,7 +672,7 @@ struct PlayerInfoPanel: View {
                            padding: 4)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(currentProgram?.title ?? channel.name)
+                Text(headerTitle)
                     .font(.footnote.weight(.bold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
@@ -678,7 +696,7 @@ struct PlayerInfoPanel: View {
                            padding: 8)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(currentProgram?.title ?? channel.name)
+                Text(headerTitle)
                     .font(.title3.weight(.bold))
                     .foregroundStyle(.white)
                     .lineLimit(2)
@@ -695,6 +713,14 @@ struct PlayerInfoPanel: View {
     }
 
     private var headerSubtitle: String {
+        if let recording {
+            // The channel it came from and when — the live guide's times
+            // would describe a different programme.
+            let day = DateFormatter(); day.dateStyle = .medium; day.timeStyle = .none
+            let clock = DateFormatter(); clock.timeStyle = .short
+            let end = recording.startTime.addingTimeInterval(recording.duration)
+            return "\(recording.channelName) · \(day.string(from: recording.startTime)) · \(clock.string(from: recording.startTime))–\(clock.string(from: end))"
+        }
         if let prog = currentProgram {
             let f = DateFormatter(); f.timeStyle = .short
             return "\(channel.name) · \(f.string(from: prog.start))–\(f.string(from: prog.stop))"

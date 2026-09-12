@@ -14,6 +14,10 @@ struct CustomVideoPlayerView: SwiftUI.View {
     var onPlayRecording: ((Recording) -> Void)? = nil
     /// When true: suppresses the record button and active-recording URL hijack.
     var isRecordingPlayback: Bool = false
+    /// The recording being played, in recording playback. Rides along to the
+    /// mini player so that expanding it re-opens the recording player rather
+    /// than a live one on the same file.
+    var recording: Recording? = nil
     /// When true: stays fullscreen in portrait (skips the split video+info layout).
     var forceFullscreen: Bool = false
     /// Optional real channel passed to PlayerInfoPanel in recording playback mode,
@@ -293,6 +297,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
             channel: currentChannel ?? channel,
             viewModel: viewModel,
             isRecordingPlayback: isRecordingPlayback,
+            recording: recording,
             isInlineMode: false,
             isFullscreenInPortrait: $isFullscreenInPortrait,
             showControls: $showControls,
@@ -371,9 +376,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
                                   matchesButtonRow: Bool = false) -> some View {
         let shouldShow = isPortraitBottom ? true : showControls
 
-        if shouldShow,
-           let svm = scoreViewModel,
-           let game = svm.liveGame(for: currentChannel ?? channel, currentEPGTitle: viewModel?.getCurrentProgram(for: currentChannel ?? channel)?.title) {
+        if shouldShow, let game = currentLiveGame {
             if isPortraitBottom {
                 // Bottom position for portrait split mode — always visible
                 VStack {
@@ -428,6 +431,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
                     channel: currentChannel ?? channel,
                     viewModel: viewModel,
                     isRecordingPlayback: isRecordingPlayback,
+                    recording: recording,
                     isInlineMode: true,
                     isFullscreenInPortrait: $isFullscreenInPortrait,
                     showControls: $showControls,
@@ -460,6 +464,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
                     viewModel: vm,
                     playerManager: playerManager,
                     isRecordingPlayback: isRecordingPlayback,
+                    recording: recording,
                     showSubtitlePanel: $showSubtitlePanel,
                     showAudioPanel: $showAudioPanel
                 )
@@ -548,7 +553,9 @@ struct CustomVideoPlayerView: SwiftUI.View {
                     // already moving in the render server.
                     let vm = viewModel
                     let departingChannel = channel
+                    let departingRecording = recording
                     DispatchQueue.main.async {
+                        vm?.miniPlayerRecording = departingRecording
                         withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
                             vm?.miniPlayerChannel = departingChannel
                         }
@@ -590,12 +597,21 @@ struct CustomVideoPlayerView: SwiftUI.View {
     func updateMetadata() {
         let activeChannel = currentChannel ?? channel
 
+        if let recording {
+            // The recording's own card. `activeChannel` is its file dressed
+            // up as a channel, and its name can resolve in the guide (a
+            // recording named after its channel would), which put the live
+            // programme's title on the Lock Screen over a recording.
+            playerManager.updateNowPlayingMetadata(title: recording.displayName,
+                                                   subtitle: recording.channelName,
+                                                   imageURL: recording.channelIcon)
+            return
+        }
+
         // A live game gets the game's own card: the matchup as the title and
         // the Live Now graphic as the artwork, rather than the programme name
         // over the channel's logo.
-        if let svm = scoreViewModel,
-           let game = svm.liveGame(for: activeChannel,
-                                   currentEPGTitle: viewModel?.getCurrentProgram(for: activeChannel)?.title) {
+        if let game = currentLiveGame {
             let title = Self.nowPlayingTitle(for: game)
             // TWO passes, because waiting for two crests to download before
             // showing anything is what made the card arrive late. The first is
@@ -668,7 +684,8 @@ struct CustomVideoPlayerView: SwiftUI.View {
     /// badge resolves the same thing; this names it so the artwork can be built
     /// ahead of time from the same answer.
     private var currentLiveGame: ESPNEvent? {
-        guard let svm = scoreViewModel else { return nil }
+        // A recording is not live, whatever its name matches today.
+        guard !isRecordingPlayback, let svm = scoreViewModel else { return nil }
         let active = currentChannel ?? channel
         return svm.liveGame(for: active,
                             currentEPGTitle: viewModel?.getCurrentProgram(for: active)?.title)
@@ -882,20 +899,23 @@ struct CustomVideoPlayerView: SwiftUI.View {
             // Skip active-recording redirect when already in recording-playback mode
             // (avoids an infinite loop where playing a completed .ts file would be
             //  redirected back to the still-running live recorder for that channel).
-            if !isRecordingPlayback,
+            //
+            // Also skipped when THIS channel is already streaming live: the
+            // redirect exists to spare a second connection on providers that
+            // allow one, and a stream that is already up is that connection.
+            // Coming back to a channel from the mini player while it recorded
+            // used to drop the live picture and restart from the top of the
+            // file being written.
+            let alreadyLive = playerManager.activeBackendName != "None"
+                && playerManager.currentURL?.absoluteString == activeChannel.streamURL
+            if !isRecordingPlayback, !alreadyLive,
                let localURL = RecordingManager.shared.getActiveRecordingURL(for: activeChannel) {
                 print("⏺️ [Player] Playing from active recording file: \(localURL.lastPathComponent)")
                 await MainActor.run {
                     self.currentStreamURL = localURL
 
                     playerManager.play(url: localURL)
-
-                    let prog = viewModel?.getCurrentProgram(for: activeChannel)?.title
-                    if let p = prog, !p.isEmpty {
-                        playerManager.updateNowPlayingMetadata(title: p, subtitle: activeChannel.name, imageURL: activeChannel.icon)
-                    } else {
-                        playerManager.updateNowPlayingMetadata(title: activeChannel.name, subtitle: nil, imageURL: activeChannel.icon)
-                    }
+                    updateMetadata()
                 }
                 return
             }
@@ -943,14 +963,9 @@ struct CustomVideoPlayerView: SwiftUI.View {
                     playerManager.play(url: targetURL)
                 }
 
-
-
-                let prog = viewModel?.getCurrentProgram(for: activeChannel)?.title
-                if let p = prog, !p.isEmpty {
-                    playerManager.updateNowPlayingMetadata(title: p, subtitle: activeChannel.name, imageURL: activeChannel.icon)
-                } else {
-                    playerManager.updateNowPlayingMetadata(title: activeChannel.name, subtitle: nil, imageURL: activeChannel.icon)
-                }
+                // One place decides the card — a live game's matchup, a
+                // recording's own name, or the programme on air.
+                updateMetadata()
             }
         }
     }

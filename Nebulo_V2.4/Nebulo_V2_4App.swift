@@ -152,11 +152,19 @@ struct Nebulo_V2_4App: App {
                     }
                 }
                 .onReceive(liveActivityTimer) { _ in
-                    guard !GameActivityManager.shared.trackedGameIDs.isEmpty else { return }
+                    let tracked = GameActivityManager.shared.trackedGameIDs
+                    guard !tracked.isEmpty else { return }
                     // Explicitly forced: a tracked Live Activity is the one case
                     // that genuinely wants a refresh faster than the freshness
                     // window allows, and it only runs while one is on screen.
-                    Task { await scoreViewModel.fetchScores(forceRefresh: true, silent: true) }
+                    // Limited to the feeds those games are actually in — see
+                    // `fetchScores(limitedTo:)`. (Empty when a tracked game is
+                    // not in any table, in which case everything is fetched.)
+                    let sports = scoreViewModel.sports(carrying: tracked)
+                    Task {
+                        await scoreViewModel.fetchScores(forceRefresh: true, silent: true,
+                                                         limitedTo: sports.isEmpty ? nil : sports)
+                    }
                 }
         }
     }

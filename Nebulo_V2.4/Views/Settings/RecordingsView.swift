@@ -224,6 +224,7 @@ struct RecordingsView: View {
             if navigateToCategoryView {
                 RecordingsCategoryView(
                     viewModel: viewModel,
+                    playAction: playAction,
                     onBack: {
                         withAnimation(.easeOut(duration: DetailRouter.travel)) {
                             navigateToCategoryView = false
@@ -282,7 +283,12 @@ struct RecordingsView: View {
             }
         }
         .fullScreenCover(item: $selectedRecording) { recording in
-            RecordingPlayerView(recording: recording, viewModel: viewModel)
+            RecordingPlayerView(recording: recording, viewModel: viewModel, onPlayChannel: { channel in
+                // Leave the recording, then open the channel live once the
+                // cover has gone.
+                selectedRecording = nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { playAction?(channel) }
+            })
         }
         .alert("Rename Recording", isPresented: $showRenameAlert) {
             TextField("Name", text: $newNameInput)
@@ -886,6 +892,7 @@ struct ManageScheduledView: View {
 
 struct RecordingsCategoryView: View {
     var viewModel: ChannelViewModel? = nil
+    var playAction: ((StreamChannel) -> Void)? = nil
     var onBack: (() -> Void)? = nil
     var onOpenSearch: (() -> Void)? = nil
 
@@ -988,7 +995,12 @@ struct RecordingsCategoryView: View {
         }
         .tint(.white)
         .fullScreenCover(item: $selectedRecording) { recording in
-            RecordingPlayerView(recording: recording, viewModel: viewModel)
+            RecordingPlayerView(recording: recording, viewModel: viewModel, onPlayChannel: { channel in
+                // Leave the recording, then open the channel live once the
+                // cover has gone.
+                selectedRecording = nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { playAction?(channel) }
+            })
         }
         .alert("Rename Recording", isPresented: $showRenameAlert) {
             TextField("Name", text: $newNameInput)
@@ -1081,10 +1093,17 @@ struct RecordingPlayerView: View {
     /// Pass the app's ChannelViewModel so the info panel below the player
     /// can show EPG schedule, related channels, and recordings.
     var viewModel: ChannelViewModel? = nil
+    /// A live channel tapped in the info panel (the related channels, or a
+    /// channel from the picker). The presenter closes this player and opens
+    /// that channel live — without it a tap on a related channel did
+    /// nothing at all from a recording.
+    var onPlayChannel: ((StreamChannel) -> Void)? = nil
 
-    init(recording: Recording, viewModel: ChannelViewModel? = nil) {
+    init(recording: Recording, viewModel: ChannelViewModel? = nil,
+         onPlayChannel: ((StreamChannel) -> Void)? = nil) {
         _recording = State(initialValue: recording)
         self.viewModel = viewModel
+        self.onPlayChannel = onPlayChannel
     }
 
     @Environment(\.dismiss) var dismiss
@@ -1133,6 +1152,7 @@ struct RecordingPlayerView: View {
                     channel: ch,
                     viewModel: viewModel,          // enables the portrait split info panel
                     onDismiss: { dismiss() },
+                    onPlayChannel: onPlayChannel,
                     // Tapping another recording in the info panel swaps it in
                     // place: changing `recording` rebuilds `recordingChannel`,
                     // and the player re-sets-up on the new file (its channel
@@ -1143,6 +1163,7 @@ struct RecordingPlayerView: View {
                         recording = newRec
                     },
                     isRecordingPlayback: true,
+                    recording: currentRecording,
                     // forceFullscreen: false (default) — portrait split layout shows
                     // the info panel below, same as a live channel.
                     infoChannel: infoChannel,      // real channel for EPG / schedule lookup
@@ -1175,14 +1196,19 @@ struct RecordingPlayerView: View {
         // metadata (endTime – startTime).  Same applies to currentTime — VLC reports
         // it in the same broken PTS units, so the progress text/bar would stay frozen.
         //
-        // The fix: switch the engine into externalTimeManagement mode, override the
-        // duration with metadata, then advance currentTime ourselves via a wall-clock
-        // ticker while the player is playing. Seeks just set currentTime to the
-        // target — the manual ticker continues from there.
+        // The fix: switch the engine into externalTimeManagement mode and override
+        // the duration with metadata. The engine then advances currentTime on the
+        // wall clock itself (it used to be a ticker in this view, which meant the
+        // position stopped counting the moment the view left the screen — so a
+        // recording sent down to the mini player came back showing the time you
+        // minimised it at). Seeks just set currentTime to the target — the engine's
+        // clock continues from there.
         //
-        // Keyed on the recording id so swapping to another recording re-runs the
-        // duration override and restarts the ticker for the new file.
-        .task(id: recording.id) {
+        // Keyed on the FILE being played rather than the recording id: `play()`
+        // resets the engine's clock mode, and the file changes under a playing
+        // recording when the background .ts → .mp4 remux lands, so that swap has
+        // to re-arm it too.
+        .task(id: recordingChannel?.streamURL ?? "") {
             try? await Task.sleep(nanoseconds: 800_000_000) // 0.8s — after play() fires
             // currentRecording (not the captured struct) so we pick up the
             // actual recorded duration even if it was finalized just before
@@ -1197,38 +1223,14 @@ struct RecordingPlayerView: View {
                     engine.currentTime = 0
                 }
             }
-
-            // Manual wall-clock ticker — 5 fps is more than enough for the time
-            // text/progress bar to look smooth.
-            var lastTick = Date()
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                let now = Date()
-                let delta = now.timeIntervalSince(lastTick)
-                lastTick = now
-                await MainActor.run {
-                    let engine = NebuloPlayerEngine.shared
-                    guard engine.externalTimeManagement,
-                          engine.isPlaying else { return }
-                    let next = engine.currentTime + delta
-                    engine.currentTime = min(next, engine.duration)
-                }
-            }
-        }
-        .onDisappear {
-            // Restore default behaviour for the next playback session.
-            let engine = NebuloPlayerEngine.shared
-            engine.externalTimeManagement = false
-            engine.externalTimeOffset = 0
         }
         // When background remux finishes, `currentRecording.localFileName`
         // flips from "<uuid>.ts" to "<uuid>.mp4". CustomVideoPlayerView's own
         // .onChange(of: channel) handler will already detect the new URL and
-        // re-setupPlayer with KSPlayer (which has a real seek table from the
-        // mp4 moov atom — fixing the scrub-hangs-forever bug). We just need
-        // to leave externalTimeManagement on so the wall-clock ticker keeps
-        // advancing, and re-seek to the wall-clock position after the swap
-        // so the user doesn't lose their place.
+        // re-setupPlayer on the mp4 (which has a real seek table from the
+        // moov atom — fixing the scrub-hangs-forever bug). The task above
+        // re-arms the clock mode for the new file; this just re-seeks to the
+        // position from before the swap so the user doesn't lose their place.
         .onChangeCompat(of: currentRecording.localFileName ?? "") { newFile in
             guard newFile.hasSuffix(".mp4") else { return }
             let savedTime = NebuloPlayerEngine.shared.currentTime

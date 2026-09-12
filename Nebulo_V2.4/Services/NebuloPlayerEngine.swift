@@ -40,13 +40,18 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     @Published public var duration: Double = 0
     @Published public var progress: Double = 0
 
-    /// When true, the playback backends (VLC / KSPlayer) are NOT allowed to
-    /// overwrite `currentTime` or `duration` from their internal clocks. Used
-    /// for recording playback where:
+    /// When true, VLC is NOT allowed to overwrite `currentTime` or `duration`
+    /// from its internal clock. Used for recording playback where:
     ///   • VLC reports TS time in broadcast-epoch PTS (huge unusable numbers)
     ///   • The true duration is already known from recording metadata
-    /// The owning view supplies its own wall-clock time advance instead.
+    /// The engine advances `currentTime` on the wall clock instead (see
+    /// `updateState()`), so the position keeps counting for as long as the
+    /// recording plays — including while it is down in the mini player with
+    /// no recording view on screen. Cleared by `stop()`, so it never leaks
+    /// from a recording into the live stream played after it.
     @Published public var externalTimeManagement: Bool = false
+    /// When the wall-clock position was last advanced.
+    private var lastExternalTick: Date?
 
     /// PTS offset (in seconds) captured from VLC when an external-time-managed
     /// recording first starts playing. Recording TS files keep their original
@@ -126,6 +131,11 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
 
     private var lastProgressCheckTime: Date?
     private var lastProgressValue: Double = -1
+    /// Whether VLC's clock has been seen moving on the current stream. A
+    /// clock that never moved says nothing about a stall — some live streams
+    /// simply report none — so the stall watchdog only trusts a clock that
+    /// was advancing and then stopped.
+    private var clockEverAdvanced = false
     
     public enum VideoQuality: String, CaseIterable, Identifiable {
         case auto = "Auto", high = "1080p", medium = "720p", low = "480p"
@@ -335,6 +345,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
 
         self.lastProgressValue = -1
         self.lastProgressCheckTime = Date()
+        self.clockEverAdvanced = false
 
         // VLC plays everything — live streams and local recordings (.ts and the
         // remuxed .mp4 alike). For local files, probe the duration via AVURLAsset
@@ -423,7 +434,14 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         guard let away = backgroundedAt else { return }
         backgroundedAt = nil
 
-        guard Date().timeIntervalSince(away) >= Self.staleAfterBackground,
+        // `currentURL` outlives `stop()` — `play(url:)` relies on it to spot a
+        // re-tap of the channel already playing — so "there is a URL" is not
+        // "something is playing". Closing a stream, locking the phone and
+        // coming back used to land here and quietly reopen the closed stream
+        // with no player on screen: audio from nowhere, and no way to stop it
+        // short of playing something else.
+        guard currentBackend == .vlc,
+              Date().timeIntervalSince(away) >= Self.staleAfterBackground,
               let url = currentURL,
               !url.isFileURL,
               !userPaused,
@@ -465,11 +483,16 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     }
     
     private func handleStuckBuffer() {
-        guard let url = currentURL, !userPaused else { return }
+        guard currentBackend == .vlc, currentURL != nil, !userPaused else { return }
         print("🚨 [NebuloEngine] Buffer stuck for >20s or playback stalled. Reloading VLC...")
         stopBufferWatchdog()
+        // Through `reloadCurrentStream()`, not `play(url:)`: the latter
+        // returns early for the URL that is already loaded while it is
+        // buffering or playing — which is precisely the state a stuck
+        // stream is in — so the watchdog's "reload" had never reloaded
+        // anything.
         DispatchQueue.main.async {
-            self.play(url: url)
+            self.reloadCurrentStream()
         }
     }
     
@@ -485,6 +508,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
         if currentBackend == .vlc { vlcMediaPlayer.stop(); vlcMediaPlayer.drawable = nil }
         currentBackend = .none
         isPlaying = false; isBuffering = false; stopTicker(); currentTime = 0; duration = 0
+        externalTimeManagement = false; externalTimeOffset = 0; lastExternalTick = nil
         // A closed stream must not linger as "playing" on the Lock Screen /
         // Control Center. An active PiP window is the one exception.
         if !isPiPSessionActive {
@@ -575,6 +599,12 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
                 self.startLocalUnmutePoll()
             }
             self.vlcMediaPlayer.play()
+            // The half-second state poll: position, duration, track lists
+            // and the stall watchdog all live in `updateState()`, and none of
+            // them run without this. (The call went missing in a rewrite of
+            // this method, which is why the subtitle and audio pickers had
+            // been empty for every stream since.)
+            self.startTicker()
 
             // NO PiP side channel is built here any more. It used to be armed
             // three seconds into every live stream so that leaving the app
@@ -611,107 +641,133 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     
     private func stopTicker() { timeObserverTimer?.invalidate(); timeObserverTimer = nil }
     
+    /// Only a recording or a timeshift has a position worth showing; a live
+    /// stream's clock is nobody's business, and publishing it twice a second
+    /// would re-render the whole player for a number nothing displays.
+    private var isSeekableStream: Bool {
+        guard let url = currentURL else { return false }
+        return url.isFileURL || url.absoluteString.contains("/timeshift/")
+    }
+
     private func updateState() {
-        
-        if isPlaying && !userPaused && !isBuffering {
-            let now = Date()
-            
-            
-            if abs(currentTime - lastProgressValue) < 0.1 {
-                if let lastCheck = lastProgressCheckTime, now.timeIntervalSince(lastCheck) > 30.0 {
+        guard currentBackend == .vlc else { return }
+        let now = Date()
+
+        let vlcSeconds: Double? = vlcMediaPlayer.time.value.map { Double(truncating: $0) / 1000.0 }
+
+        // Stall watchdog, on VLC's RAW clock — `currentTime` is not fed from
+        // it for live streams any more, and during a recording it is the
+        // wall clock, which never stalls.
+        if let sec = vlcSeconds, isPlaying && !userPaused && !isBuffering {
+            if abs(sec - lastProgressValue) < 0.1 {
+                if clockEverAdvanced, let lastCheck = lastProgressCheckTime, now.timeIntervalSince(lastCheck) > 30.0 {
                     print("🚨 [NebuloEngine] Playback stalled (time not advancing). Triggering Watchdog.")
                     handleStuckBuffer()
-                    lastProgressCheckTime = now 
+                    lastProgressCheckTime = now
                 }
             } else {
-                
-                lastProgressValue = currentTime
+                if lastProgressValue >= 0 { clockEverAdvanced = true }
+                lastProgressValue = sec
                 lastProgressCheckTime = now
             }
         }
-        
-    
-        if currentBackend == .vlc {
-            let time = vlcMediaPlayer.time
-            if let val = time.value {
-                let valSec = Double(truncating: val) / 1000.0
-                if externalTimeManagement {
-                    // First time we see a nonzero PTS reading, snapshot it as
-                    // the offset. Subsequent reads are ignored — external code
-                    // (the recording view's wall-clock ticker) owns currentTime.
-                    if externalTimeOffset == 0 && valSec > 0 {
-                        externalTimeOffset = valSec
-                    }
-                } else if !isInteractionSeeking, self.currentTime != valSec {
-                    self.currentTime = valSec
-                }
-            }
-            if let media = vlcMediaPlayer.media, !externalTimeManagement {
-                let length = media.length
-                if let val = length.value {
-                    let d = Double(truncating: val) / 1000.0
-                    // Only accept a positive duration from VLC so we don't overwrite
-                    // the value probed via AVURLAsset for files where VLC returns -1.
-                    // Assigning an unchanged value still fires objectWillChange,
-                    // and a live stream reports the same number twice a second
-                    // forever — so re-render only on a real change.
-                    if d > 0, self.duration != d { self.duration = d }
-                }
-            }
-            // Guarded, because `isPlaying`'s didSet calls
-            // `updatePlaybackState(force: true)` — which reads and writes
-            // MPNowPlayingInfoCenter, a round trip to the media server.
-            // Assigning the same `true` on every tick meant doing that twice a
-            // second for the whole time something was playing, deliberately
-            // skipping the two-second throttle sitting right below it. Now the
-            // forced path runs on genuine play/pause transitions and the
-            // throttled call below handles the periodic refresh.
-            let playing = vlcMediaPlayer.isPlaying
-            if self.isPlaying != playing { self.isPlaying = playing }
-            self.updatePlaybackState()
-            // Refresh on every count change, NOT just once: live TS streams
-            // announce their closed-caption/teletext tracks seconds or
-            // minutes into playback, and the old fill-once guard locked the
-            // list before they ever appeared — which is why most streams
-            // showed no subtitles.
-            //
-            // Every two seconds rather than every tick, though. Each pass
-            // asks VLC for four bridged NSArrays and throws them away again,
-            // and a track list that takes seconds to appear is in no hurry.
-            let pollNow = Date()
-            guard pollNow.timeIntervalSince(lastTrackPollTime) >= 2.0 else { return }
-            lastTrackPollTime = pollNow
 
-            if let tracks = vlcMediaPlayer.videoSubTitlesNames as? [String],
-               let indexes = vlcMediaPlayer.videoSubTitlesIndexes as? [Int],
-               tracks.count == indexes.count {
-                if availableSubtitles.count != tracks.count {
-                    var subs: [VideoSubtitle] = []
-                    for (i, name) in tracks.enumerated() { subs.append(VideoSubtitle(id: "vlc_\(indexes[i])", name: name, index: indexes[i])) }
-                    self.availableSubtitles = subs
-                }
-                // Mirror VLC's actual selection so the UI never lies about
-                // which track (or Disable) is active.
-                let current = Int(vlcMediaPlayer.currentVideoSubTitleIndex)
-                if currentSubtitle?.index != current {
-                    self.currentSubtitle = availableSubtitles.first { $0.index == current }
-                }
+        if externalTimeManagement {
+            // First time we see a nonzero PTS reading, snapshot it as the
+            // offset every seek is corrected by.
+            if let sec = vlcSeconds, externalTimeOffset == 0, sec > 0 {
+                externalTimeOffset = sec
             }
-            // Audio tracks (VLC)
-            if let names = vlcMediaPlayer.audioTrackNames as? [String],
-               let indexes = vlcMediaPlayer.audioTrackIndexes as? [Int],
-               names.count == indexes.count {
-                if availableAudioTracks.count != names.count {
-                    var tracks: [VideoAudioTrack] = []
-                    for (i, name) in names.enumerated() {
-                        tracks.append(VideoAudioTrack(id: "vlc_\(indexes[i])", name: name, index: indexes[i]))
-                    }
-                    self.availableAudioTracks = tracks
+            // Wall-clock position. The same arithmetic the recording view
+            // used to do in a task of its own, moved here so that it does not
+            // stop the moment the view goes away: minimising a recording to
+            // the mini player used to freeze the position, and coming back
+            // showed a time from whenever you left.
+            if isPlaying && !userPaused, let last = lastExternalTick {
+                let next = currentTime + now.timeIntervalSince(last)
+                currentTime = duration > 0 ? min(next, duration) : next
+            }
+            lastExternalTick = now
+        } else if let sec = vlcSeconds, !isInteractionSeeking, isSeekableStream, self.currentTime != sec {
+            self.currentTime = sec
+        }
+
+        if let media = vlcMediaPlayer.media, !externalTimeManagement {
+            let length = media.length
+            if let val = length.value {
+                let d = Double(truncating: val) / 1000.0
+                // Only accept a positive duration from VLC so we don't overwrite
+                // the value probed via AVURLAsset for files where VLC returns -1.
+                // Assigning an unchanged value still fires objectWillChange,
+                // and a live stream reports the same number twice a second
+                // forever — so re-render only on a real change.
+                if d > 0, self.duration != d { self.duration = d }
+            }
+        }
+        // Keep `isPlaying` honest, but only on the transitions the delegate
+        // misses: VLC pausing on its own (an audio-session interruption —
+        // there is no `.paused` case in the state callback) and playback
+        // resuming without a state change. Mirroring VLC's flag wholesale
+        // flipped `isPlaying` off and on around every mid-stream rebuffer,
+        // and each flip is a forced Now Playing write plus a re-render of
+        // the play/pause button.
+        let playing = vlcMediaPlayer.isPlaying
+        if playing, !self.isPlaying, !userPaused {
+            // (`userPaused` because VLC answers a pause asynchronously — a
+            // tick landing right after the tap would have flipped the button
+            // back to "playing" for half a second.)
+            self.isPlaying = true
+        } else if !playing, self.isPlaying, vlcMediaPlayer.state == .paused {
+            self.isPlaying = false
+        }
+        // No periodic Now Playing refresh: the card is marked as a live
+        // stream with no duration, so there is no elapsed time for the
+        // Lock Screen to show, and the forced update on every play/pause
+        // transition already keeps its rate right. Re-sending the same
+        // dictionary every two seconds was an IPC round trip for nothing.
+        //
+        // Refresh on every count change, NOT just once: live TS streams
+        // announce their closed-caption/teletext tracks seconds or
+        // minutes into playback, and the old fill-once guard locked the
+        // list before they ever appeared — which is why most streams
+        // showed no subtitles.
+        //
+        // Every two seconds rather than every tick, though. Each pass
+        // asks VLC for four bridged NSArrays and throws them away again,
+        // and a track list that takes seconds to appear is in no hurry.
+        let pollNow = Date()
+        guard pollNow.timeIntervalSince(lastTrackPollTime) >= 2.0 else { return }
+        lastTrackPollTime = pollNow
+
+        if let tracks = vlcMediaPlayer.videoSubTitlesNames as? [String],
+           let indexes = vlcMediaPlayer.videoSubTitlesIndexes as? [Int],
+           tracks.count == indexes.count {
+            if availableSubtitles.count != tracks.count {
+                var subs: [VideoSubtitle] = []
+                for (i, name) in tracks.enumerated() { subs.append(VideoSubtitle(id: "vlc_\(indexes[i])", name: name, index: indexes[i])) }
+                self.availableSubtitles = subs
+            }
+            // Mirror VLC's actual selection so the UI never lies about
+            // which track (or Disable) is active.
+            let current = Int(vlcMediaPlayer.currentVideoSubTitleIndex)
+            if currentSubtitle?.index != current {
+                self.currentSubtitle = availableSubtitles.first { $0.index == current }
+            }
+        }
+        // Audio tracks (VLC)
+        if let names = vlcMediaPlayer.audioTrackNames as? [String],
+           let indexes = vlcMediaPlayer.audioTrackIndexes as? [Int],
+           names.count == indexes.count {
+            if availableAudioTracks.count != names.count {
+                var tracks: [VideoAudioTrack] = []
+                for (i, name) in names.enumerated() {
+                    tracks.append(VideoAudioTrack(id: "vlc_\(indexes[i])", name: name, index: indexes[i]))
                 }
-                let cur = Int(vlcMediaPlayer.currentAudioTrackIndex)
-                if currentAudioTrack?.index != cur, let match = availableAudioTracks.first(where: { $0.index == cur }) {
-                    self.currentAudioTrack = match
-                }
+                self.availableAudioTracks = tracks
+            }
+            let cur = Int(vlcMediaPlayer.currentAudioTrackIndex)
+            if currentAudioTrack?.index != cur, let match = availableAudioTracks.first(where: { $0.index == cur }) {
+                self.currentAudioTrack = match
             }
         }
     }

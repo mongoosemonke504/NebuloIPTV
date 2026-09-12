@@ -123,8 +123,9 @@ struct NuvioCircleButton: View {
                 .font(.system(size: size * 0.4, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: size, height: size)
-                .background(Circle().fill(NuvioTheme.surface.opacity(0.85)))
-                .contentShape(Circle())
+                // The same glass as the player's round buttons — this was a
+                // flat dark disc, the one back button in the app that wasn't.
+                .modifier(GlassEffect(cornerRadius: size / 2, isSelected: true, accentColor: nil))
         }
         .buttonStyle(.plain)
     }

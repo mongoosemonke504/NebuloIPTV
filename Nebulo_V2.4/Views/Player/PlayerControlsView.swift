@@ -7,6 +7,9 @@ struct PlayerControlsView: View {
     let channel: StreamChannel
     var viewModel: ChannelViewModel?
     var isRecordingPlayback: Bool = false
+    /// The recording being played, in recording playback — see
+    /// `CustomVideoPlayerView.recording`.
+    var recording: Recording? = nil
 
     /// When true, the controls render with smaller paddings and hide the bottom
     /// row of feature pills (Record / Subtitles / Aspect) — those live in the
@@ -70,9 +73,6 @@ struct PlayerControlsView: View {
                     .ignoresSafeArea()
                     .onTapGesture {
                         toggleControls()
-                    }
-                    .onChangeCompat(of: isRecording) { newValue in
-                        print("PlayerControlsView: isRecording state changed to \(newValue)")
                     }
                 
                 if showControls {
@@ -172,7 +172,7 @@ struct PlayerControlsView: View {
                                 if !isInlineMode {
                                     VStack(alignment: .leading, spacing: 2) {
                                         HStack(spacing: 8) {
-                                            Text(isRecordingPlayback ? (channel.originalName ?? channel.name) : (currentProg?.title ?? "No Information"))
+                                            Text(isRecordingPlayback ? (recording?.displayName ?? channel.name) : (currentProg?.title ?? "No Information"))
                                                 .font(.subheadline.bold())
                                                 .foregroundStyle(.primary)
                                                 .lineLimit(1)
@@ -180,7 +180,7 @@ struct PlayerControlsView: View {
                                             Spacer()
                                         }
 
-                                        let displayDesc = isRecordingPlayback ? (channel.epgID ?? "") : (currentProg?.description ?? "")
+                                        let displayDesc = isRecordingPlayback ? (recording?.programDescription ?? channel.epgID ?? "") : (currentProg?.description ?? "")
 
                                         if !displayDesc.isEmpty {
                                             Text(displayDesc)
@@ -584,6 +584,7 @@ struct PlayerControlsView: View {
                         if playerManager.isPiPSessionActive {
                             onDismiss()
                         } else if !AVPictureInPictureController.isPictureInPictureSupported() {
+                            vm.miniPlayerRecording = recording
                             vm.miniPlayerChannel = channel
                             onDismiss()
                         }
