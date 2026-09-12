@@ -22,8 +22,18 @@ struct GameActivityAttributes: ActivityAttributes {
         var situationText: String?
         /// FIELD EVENTS (a golf tournament, a race weekend): a leaderboard has
         /// no two sides, so it carries its top entrants instead of two scores.
-        /// Each line is already formatted — "1  Scheffler   −12".
-        var leaderboard: [String]?
+        var leaderboard: [LeaderboardEntry]?
+    }
+
+    /// One row of a field event's board. Kept as three pieces rather than one
+    /// formatted line so the widget can column-align position, name and score
+    /// — a leaderboard whose numbers don't line up doesn't read as one.
+    public struct LeaderboardEntry: Codable, Hashable {
+        /// "1", or "T2" where the score is shared.
+        var position: String
+        var name: String
+        /// Golf's score to par ("-12", "E"); a race's finishing time or gap.
+        var score: String
     }
 
     var gameID: String
@@ -49,6 +59,9 @@ struct GameActivityAttributes: ActivityAttributes {
     var isFieldEvent: Bool = false
     /// The event's own name, for field events — "BMW Championship".
     var eventName: String?
+    /// Which kind of field event: "golf" or "racing". Decides the glyph the
+    /// Dynamic Island shows in place of a crest, and how its board reads.
+    var fieldEventKind: String?
 }
 
 extension GameActivityAttributes {

@@ -217,7 +217,7 @@ struct MainView: SwiftUI.View {
             if shouldUseSidebar(isLandscape: isL) { 
                 SidebarLayout(viewModel: viewModel, scoreViewModel: scoreViewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $viewModel.searchText, isLandscape: isL, accentColor: accentColor, playAction: playChannel, showMultiView: $showMultiView, showSettings: $showSettings, zoomNS: zoomNS)
             } else { 
-                StandardLayout(viewModel: viewModel, scoreViewModel: scoreViewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $viewModel.searchText, accentColor: accentColor, playAction: playChannel, showMultiView: $showMultiView, showSettings: $showSettings, selectedRecording: $selectedRecording, zoomNS: zoomNS)
+                StandardLayout(viewModel: viewModel, scoreViewModel: scoreViewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $viewModel.searchText, accentColor: accentColor, playAction: playChannel, showMultiView: $showMultiView, showSettings: $showSettings, selectedRecording: $selectedRecording, zoomNS: zoomNS, searchOverlayOpen: showSearch)
             }
         }
         .zIndex(1)
@@ -670,7 +670,6 @@ struct MainViewModifiers: ViewModifier {
 
     func body(content: Content) -> some View {
         let showRenameAlert = Binding<Bool>(get: { viewModel.showRenameAlert }, set: { viewModel.showRenameAlert = $0 })
-        let renameInput = Binding<String>(get: { viewModel.renameInput }, set: { viewModel.renameInput = $0 })
         let showNoStreamsAlert = Binding<Bool>(get: { viewModel.showNoStreamsAlert }, set: { viewModel.showNoStreamsAlert = $0 })
         let categories = Binding<[StreamCategory]>(get: { viewModel.categories }, set: { viewModel.categories = $0 })
 
@@ -1004,6 +1003,12 @@ struct StandardLayout: SwiftUI.View {
     let accentColor: Color; let playAction: (StreamChannel) -> Void; @Binding var showMultiView: Bool; @Binding var showSettings: Bool
     @Binding var selectedRecording: Recording?
     var zoomNS: Namespace.ID? = nil
+    /// True while the Search section is showing over this layout. The results
+    /// list below (`searchView`) predates that section and is what the SIDEBAR
+    /// layout still uses; under the overlay it was being built and drawn for
+    /// nothing — glass cards and blurred thumbnails for every hit, behind an
+    /// opaque page — on every keystroke.
+    var searchOverlayOpen: Bool = false
 
     /// Push/pop tempo for DRILL-DOWNS (open a category, Recently Watched,
     /// Recordings, and the way back). Tab switches deliberately don't use it —
@@ -1569,7 +1574,7 @@ struct StandardLayout: SwiftUI.View {
         ZStack(alignment: .bottom) {
             if viewModel.isLoading {
                 homeSkeleton
-            } else if !searchText.isEmpty {
+            } else if !searchText.isEmpty, !searchOverlayOpen {
                 searchView
                     .modifier(SwipeBackModifier(
                         onBack: {

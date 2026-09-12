@@ -131,6 +131,50 @@ struct NuvioCircleButton: View {
     }
 }
 
+// MARK: - Soft glow
+
+/// A soft pool of colour — the halo behind a channel's logo tile, the wash at
+/// the top of a player page.
+///
+/// A radial gradient, deliberately NOT a blurred shape. A Gaussian blur is a
+/// filter the render server re-runs for every frame the layer is on screen,
+/// and these sit in list rows and behind scrolling pages: each one was a full
+/// blur pass, per row, per frame of every scroll — and on Home, where the
+/// hero's countdown keeps the screen compositing continuously, per frame at
+/// rest. A gradient is a single fill. The stops trace the profile a
+/// Gaussian-blurred disc actually has (84% a blur-radius inside the edge, 50%
+/// at it, 16% one radius out, gone at two), so it reads the same.
+///
+/// `radius` is the solid shape's radius; `softness` the blur it replaces.
+/// Its layout footprint is the solid shape's (`radius` × 2) — the soft edge
+/// spills past it as a blur's would, without widening whatever holds it.
+struct SoftGlow: View {
+    let color: Color
+    var opacity: Double = 0.5
+    let radius: CGFloat
+    let softness: CGFloat
+
+    var body: some View {
+        let reach = radius + softness * 2
+        Color.clear
+            .frame(width: radius * 2, height: radius * 2)
+            .overlay(
+                RadialGradient(
+                    stops: [
+                        .init(color: color.opacity(opacity), location: 0),
+                        .init(color: color.opacity(opacity * 0.84), location: max(0, radius - softness) / reach),
+                        .init(color: color.opacity(opacity * 0.5), location: radius / reach),
+                        .init(color: color.opacity(opacity * 0.16), location: (radius + softness) / reach),
+                        .init(color: color.opacity(0), location: 1)
+                    ],
+                    center: .center, startRadius: 0, endRadius: reach
+                )
+                .frame(width: reach * 2, height: reach * 2)
+            )
+            .allowsHitTesting(false)
+    }
+}
+
 // MARK: - Chips
 
 /// Dark rounded chip — the reference's "Movies ⌄" / "Saved" pills.

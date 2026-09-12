@@ -1394,12 +1394,8 @@ struct AllLiveSportsView: View {
                         endPoint: .bottomTrailing
                     )
 
-                    Circle()
-                        .fill(accentColor.opacity(0.45))
-                        .frame(width: 220, height: 220)
-                        .blur(radius: 70)
+                    SoftGlow(color: accentColor, opacity: 0.45, radius: 110, softness: 70)
                         .offset(x: -40, y: -40)
-                        .allowsHitTesting(false)
 
                     LinearGradient(
                         colors: [Color.black.opacity(0.05), Color.black.opacity(0.6)],

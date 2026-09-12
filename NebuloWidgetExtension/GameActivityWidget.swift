@@ -23,75 +23,160 @@ struct GameActivityWidget: Widget {
                 .widgetURL(deepLink(for: context))
         } dynamicIsland: { context in
             DynamicIsland {
+                // A field event has no two sides, so the crest-score-crest
+                // shape is dropped entirely: the flanks carry the event and
+                // where it has got to, and the board gets the full width
+                // underneath — the only layout in here wide enough to
+                // column-align it.
                 DynamicIslandExpandedRegion(.leading) {
-                    islandTeam(
-                        logoFile: context.attributes.awayLogoFile,
-                        abbrev: context.attributes.awayAbbrev,
-                        score: context.state.awayScore,
-                        colorHex: context.attributes.awayColorHex
-                    )
-                }
-                DynamicIslandExpandedRegion(.trailing) {
-                    islandTeam(
-                        logoFile: context.attributes.homeLogoFile,
-                        abbrev: context.attributes.homeAbbrev,
-                        score: context.state.homeScore,
-                        colorHex: context.attributes.homeColorHex
-                    )
-                }
-                DynamicIslandExpandedRegion(.center) {
-                    VStack(spacing: 4) {
-                        if context.attributes.isFieldEvent {
-                            Text(context.attributes.eventName ?? context.attributes.leagueName)
-                                .font(.system(size: 13, weight: .bold))
-                                .foregroundStyle(.white)
+                    if context.attributes.isFieldEvent {
+                        Label {
+                            Text(context.attributes.leagueName.uppercased())
+                                .font(.system(size: 11, weight: .semibold))
+                                .kerning(0.8)
+                                .foregroundStyle(.white.opacity(0.65))
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.8)
-                            if let leader = context.state.leaderboard?.first {
-                                Text(leader)
+                        } icon: {
+                            Image(systemName: fieldGlyph(context.attributes))
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.8))
+                        }
+                        .padding(.leading, 2)
+                    } else {
+                        islandTeam(
+                            logoFile: context.attributes.awayLogoFile,
+                            abbrev: context.attributes.awayAbbrev,
+                            score: context.state.awayScore,
+                            colorHex: context.attributes.awayColorHex
+                        )
+                    }
+                }
+                DynamicIslandExpandedRegion(.trailing) {
+                    if context.attributes.isFieldEvent {
+                        Text(roundLabel(context.state))
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                            .padding(.trailing, 2)
+                    } else {
+                        islandTeam(
+                            logoFile: context.attributes.homeLogoFile,
+                            abbrev: context.attributes.homeAbbrev,
+                            score: context.state.homeScore,
+                            colorHex: context.attributes.homeColorHex
+                        )
+                    }
+                }
+                DynamicIslandExpandedRegion(.center) {
+                    // Empty for field events — the centre is the narrowest
+                    // region, and crowding the event name in there is what
+                    // made this read as a squeezed scoreboard.
+                    if !context.attributes.isFieldEvent {
+                        VStack(spacing: 4) {
+                            liveClock(context: context, size: 13)
+                            situationLine(context.state)
+                            Text(context.attributes.leagueName.uppercased())
+                                .font(.system(size: 10, weight: .semibold))
+                                .kerning(1)
+                                .foregroundStyle(.white.opacity(0.45))
+                                .lineLimit(1)
+                        }
+                        .widgetURL(deepLink(for: context))
+                    }
+                }
+                DynamicIslandExpandedRegion(.bottom) {
+                    if context.attributes.isFieldEvent {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(context.attributes.eventName ?? context.attributes.leagueName)
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.75)
+
+                            if let board = context.state.leaderboard, !board.isEmpty {
+                                VStack(spacing: 3) {
+                                    ForEach(Array(board.prefix(3).enumerated()), id: \.offset) { index, entry in
+                                        leaderboardRow(entry, isLeader: index == 0)
+                                    }
+                                }
+                            } else {
+                                Text(context.state.statusDetail)
                                     .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(.white.opacity(0.8))
+                                    .foregroundStyle(.white.opacity(0.7))
                                     .lineLimit(1)
                             }
                         }
-                        liveClock(context: context, size: 13)
-                        situationLine(context.state)
-                        Text(context.attributes.leagueName.uppercased())
-                            .font(.system(size: 10, weight: .semibold))
-                            .kerning(1)
-                            .foregroundStyle(.white.opacity(0.45))
-                            .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 2)
+                        .widgetURL(deepLink(for: context))
                     }
-                    .widgetURL(deepLink(for: context))
                 }
             } compactLeading: {
-                HStack(spacing: 5) {
-                    teamLogo(context.attributes.awayLogoFile,
-                             abbrev: context.attributes.awayAbbrev,
-                             colorHex: context.attributes.awayColorHex,
-                             size: 20)
-                    Text(context.state.awayScore)
+                if context.attributes.isFieldEvent {
+                    Image(systemName: fieldGlyph(context.attributes))
                         .font(.system(size: 14, weight: .semibold))
-                        .contentTransition(.numericText())
+                } else {
+                    HStack(spacing: 5) {
+                        teamLogo(context.attributes.awayLogoFile,
+                                 abbrev: context.attributes.awayAbbrev,
+                                 colorHex: context.attributes.awayColorHex,
+                                 size: 20)
+                        Text(context.state.awayScore)
+                            .font(.system(size: 14, weight: .semibold))
+                            .contentTransition(.numericText())
+                    }
                 }
             } compactTrailing: {
-                HStack(spacing: 5) {
-                    Text(context.state.homeScore)
+                if context.attributes.isFieldEvent {
+                    // The one number worth a glance: what the lead is at.
+                    Text(context.state.leaderboard?.first?.score ?? roundLabel(context.state))
                         .font(.system(size: 14, weight: .semibold))
+                        .lineLimit(1)
                         .contentTransition(.numericText())
+                } else {
+                    HStack(spacing: 5) {
+                        Text(context.state.homeScore)
+                            .font(.system(size: 14, weight: .semibold))
+                            .contentTransition(.numericText())
+                        teamLogo(context.attributes.homeLogoFile,
+                                 abbrev: context.attributes.homeAbbrev,
+                                 colorHex: context.attributes.homeColorHex,
+                                 size: 20)
+                    }
+                }
+            } minimal: {
+                if context.attributes.isFieldEvent {
+                    Image(systemName: fieldGlyph(context.attributes))
+                        .font(.system(size: 14, weight: .semibold))
+                } else {
                     teamLogo(context.attributes.homeLogoFile,
                              abbrev: context.attributes.homeAbbrev,
                              colorHex: context.attributes.homeColorHex,
                              size: 20)
                 }
-            } minimal: {
-                teamLogo(context.attributes.homeLogoFile,
-                         abbrev: context.attributes.homeAbbrev,
-                         colorHex: context.attributes.homeColorHex,
-                         size: 20)
             }
             .keylineTint(.red)
         }
+    }
+
+    /// Golf and racing stand in for a crest with their own glyph — neither has
+    /// a badge that means anything at 20pt.
+    private func fieldGlyph(_ attributes: GameActivityAttributes) -> String {
+        attributes.fieldEventKind == "racing" ? "flag.checkered" : "figure.golf"
+    }
+
+    /// "Round 3" is too long for the island's flank; "R3" is not. Anything
+    /// else (Final, Suspended) is shown as-is, trimmed to fit.
+    private func roundLabel(_ state: GameActivityAttributes.ContentState) -> String {
+        let detail = state.statusDetail.trimmingCharacters(in: .whitespaces)
+        if let range = detail.range(of: #"Round\s+(\d+)"#, options: [.regularExpression, .caseInsensitive]) {
+            let digits = detail[range].filter(\.isNumber)
+            if !digits.isEmpty { return "R\(digits)" }
+        }
+        return detail.uppercased()
     }
 
     @ViewBuilder
@@ -108,6 +193,37 @@ struct GameActivityWidget: Widget {
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 2)
+    }
+}
+
+/// One board row, column-aligned: position and score are monospaced-digit and
+/// fixed-width so the numbers stack no matter the names beside them. Shared by
+/// the Dynamic Island and the Lock Screen card so a field event reads the same
+/// in both places.
+@ViewBuilder
+func leaderboardRow(_ entry: GameActivityAttributes.LeaderboardEntry,
+                    isLeader: Bool,
+                    scale: CGFloat = 1) -> some View {
+    HStack(spacing: 8) {
+        Text(entry.position)
+            .font(.system(size: 12 * scale, weight: .semibold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(.white.opacity(isLeader ? 0.85 : 0.5))
+            .frame(width: 24 * scale, alignment: .leading)
+
+        Text(entry.name)
+            .font(.system(size: 13 * scale, weight: isLeader ? .bold : .medium))
+            .foregroundStyle(.white.opacity(isLeader ? 1 : 0.75))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+
+        Spacer(minLength: 6)
+
+        Text(entry.score)
+            .font(.system(size: 13 * scale, weight: isLeader ? .bold : .semibold))
+            .monospacedDigit()
+            .foregroundStyle(.white.opacity(isLeader ? 1 : 0.75))
+            .contentTransition(.numericText())
     }
 }
 
@@ -154,13 +270,9 @@ struct LockScreenGameView: View {
                 }
 
                 if let board = context.state.leaderboard, !board.isEmpty {
-                    VStack(alignment: .leading, spacing: 3) {
-                        ForEach(Array(board.prefix(3).enumerated()), id: \.offset) { index, line in
-                            Text(line)
-                                .font(.system(size: index == 0 ? 14 : 12,
-                                              weight: index == 0 ? .bold : .medium))
-                                .foregroundStyle(.white.opacity(index == 0 ? 1 : 0.7))
-                                .lineLimit(1)
+                    VStack(spacing: 4) {
+                        ForEach(Array(board.prefix(3).enumerated()), id: \.offset) { index, entry in
+                            leaderboardRow(entry, isLeader: index == 0, scale: 1.05)
                         }
                     }
                 } else {

@@ -2958,16 +2958,34 @@ struct BoxSheetSection: Identifiable {
 }
 
 /// Soft team-color wash bleeding down from the top of a player page.
+///
+/// An elliptical gradient with the profile of the blurred ellipse it replaces
+/// (see `SoftGlow` for why): that blur covered the full width of the page and
+/// was re-run on every frame the page scrolled — the largest single filter in
+/// the app, on a screen that is nothing but a scroll.
 struct TeamGlow: View {
     let color: Color
+    private static let height: CGFloat = 260
+    private static let softness: CGFloat = 70
     var body: some View {
-        Ellipse()
-            .fill(color.opacity(0.45))
-            .frame(height: 260)
-            .padding(.horizontal, -60)
-            .blur(radius: 70)
-            .offset(y: -120)
-            .allowsHitTesting(false)
+        let reach = Self.height / 2 + Self.softness * 2
+        let edge = (Self.height / 2) / reach
+        let inner = (Self.height / 2 - Self.softness) / reach
+        let outer = (Self.height / 2 + Self.softness) / reach
+        EllipticalGradient(
+            stops: [
+                .init(color: color.opacity(0.45), location: 0),
+                .init(color: color.opacity(0.45 * 0.84), location: inner),
+                .init(color: color.opacity(0.45 * 0.5), location: edge),
+                .init(color: color.opacity(0.45 * 0.16), location: outer),
+                .init(color: color.opacity(0), location: 1)
+            ],
+            center: .center, startRadiusFraction: 0, endRadiusFraction: 0.5
+        )
+        .frame(height: reach * 2)
+        .padding(.horizontal, -(60 + Self.softness * 2))
+        .offset(y: -120 - Self.softness * 2)
+        .allowsHitTesting(false)
     }
 }
 

@@ -415,12 +415,14 @@ struct ChannelRow: View, Equatable {
                         .stroke(Color.white.opacity(0.14), lineWidth: 0.5)
                 )
                 // Soft brand-colour halo spilling out behind the logo tile.
-                .background(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill((glow ?? .clear).opacity(0.5))
-                        .blur(radius: 14)
-                        .padding(-3)
-                )
+                // A gradient, not a blur — see `SoftGlow`: this row is what
+                // every category page scrolls, and a blur here was a filter
+                // pass per visible row per frame.
+                .background {
+                    if let glow {
+                        SoftGlow(color: glow, opacity: 0.5, radius: logoSize / 2 + 3, softness: 14)
+                    }
+                }
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(channel.name)

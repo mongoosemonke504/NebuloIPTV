@@ -109,7 +109,8 @@ final class GameActivityManager: ObservableObject {
                 awayLogoFile: awayLogoFile,
                 sportKind: Self.surfaceKind(for: sport),
                 isFieldEvent: game.isFieldEvent,
-                eventName: game.shortName
+                eventName: game.shortName,
+                fieldEventKind: Self.fieldEventKind(for: game)
             )
 
             do {
@@ -227,7 +228,8 @@ final class GameActivityManager: ObservableObject {
     /// as "player vs player" picks two entrants arbitrarily and says nothing
     /// about the event. Racing reads its order from the session being run;
     /// golf from the leaderboard itself.
-    private static func leaderboardLines(for game: ESPNEvent, limit: Int = 3) -> [String]? {
+    private static func leaderboardEntries(for game: ESPNEvent,
+                                          limit: Int = 3) -> [GameActivityAttributes.LeaderboardEntry]? {
         guard game.isFieldEvent else { return nil }
 
         let entrants: [ESPNCompetitor]
@@ -241,14 +243,38 @@ final class GameActivityManager: ObservableObject {
         }
         guard !entrants.isEmpty else { return nil }
 
+        // Golf shares positions: three players at -10 are all T2, not 2/3/4.
+        // Position comes from where that score FIRST appears, so the numbers
+        // match what the leaderboard on TV says.
+        var firstRow: [String: Int] = [:]
+        var rowsPerScore: [String: Int] = [:]
+        for (index, entrant) in entrants.enumerated() {
+            guard let score = entrant.score, !score.isEmpty else { continue }
+            if firstRow[score] == nil { firstRow[score] = index }
+            rowsPerScore[score, default: 0] += 1
+        }
+
         return entrants.prefix(limit).enumerated().map { index, entrant in
             let name = entrant.athlete?.shortName
                 ?? entrant.athlete?.displayName
                 ?? entrant.team?.shortDisplayName
                 ?? "—"
-            let score = entrant.score.map { $0.isEmpty ? "" : "  \($0)" } ?? ""
-            return "\(index + 1)  \(name)\(score)"
+            let score = entrant.score ?? ""
+            let rank = (firstRow[score] ?? index) + 1
+            let shared = (rowsPerScore[score] ?? 0) > 1
+            return GameActivityAttributes.LeaderboardEntry(
+                position: shared ? "T\(rank)" : "\(rank)",
+                name: name,
+                score: score
+            )
         }
+    }
+
+    /// Golf and racing are both field events but read nothing alike, and the
+    /// island shows a glyph rather than a crest for each.
+    private nonisolated static func fieldEventKind(for game: ESPNEvent) -> String? {
+        guard game.isFieldEvent else { return nil }
+        return game.isRaceEvent ? "racing" : "golf"
     }
 
     private func contentState(for game: ESPNEvent) -> GameActivityAttributes.ContentState {
@@ -270,7 +296,7 @@ final class GameActivityManager: ObservableObject {
             strikes: situation?.strikes,
             outs: situation?.outs,
             situationText: situationText,
-            leaderboard: Self.leaderboardLines(for: game)
+            leaderboard: Self.leaderboardEntries(for: game)
         )
     }
 }

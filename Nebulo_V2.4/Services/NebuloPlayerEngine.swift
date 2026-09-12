@@ -278,17 +278,22 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
 
         if let artworkImage {
             nowPlayingInfo[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: artworkImage.size) { _ in artworkImage }
-        } else if let urlStr = imageURL, let url = URL(string: urlStr) {
-            URLSession.shared.dataTask(with: url) { data, _, _ in
-                if let data = data, let image = UIImage(data: data) {
-                    let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-                    DispatchQueue.main.async {
-                        var currentInfo = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [String: Any]()
-                        currentInfo[MPMediaItemPropertyArtwork] = artwork
-                        MPNowPlayingInfoCenter.default().nowPlayingInfo = currentInfo
-                    }
-                }
-            }.resume()
+        } else if let urlStr = imageURL, !urlStr.isEmpty {
+            // Through the app's image cache, not a bare download: the player
+            // refreshes this card on every guide tick, and each refresh used
+            // to fetch and decode the channel's logo at full size all over
+            // again — a network round trip every thirty seconds for the
+            // whole time a channel played. The cache already holds the logo
+            // (it is on the row you tapped), downsampled.
+            Task { @MainActor in
+                // `size: nil` is the key the channel rows decode under, so
+                // this is the same bitmap they already hold.
+                guard let image = await ImageCache.shared.image(forKey: urlStr, size: nil) else { return }
+                let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                var currentInfo = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [String: Any]()
+                currentInfo[MPMediaItemPropertyArtwork] = artwork
+                MPNowPlayingInfoCenter.default().nowPlayingInfo = currentInfo
+            }
         }
         
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
