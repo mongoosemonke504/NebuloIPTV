@@ -215,7 +215,11 @@ final class GameSummaryStore {
     /// whichever one is open, without holding the whole scoreboard.
     private let capacity = 40
 
-    private var cache: [String: GameSummary] = [:]
+    /// The decoded summary AND the bytes it came from. A card that starts
+    /// from a cached summary compares its first refresh against those bytes,
+    /// and an unchanged payload is never re-published — see
+    /// `GameDetailViewModel.fetch()`.
+    private var cache: [String: (summary: GameSummary, data: Data)] = [:]
     /// Insertion order, so the oldest entry is the one evicted at capacity.
     private var order: [String] = []
     /// Games with a prefetch in flight, so a scroll that re-triggers the hub's
@@ -232,9 +236,10 @@ final class GameSummaryStore {
         }
     }
 
-    func summary(for gameID: String) -> GameSummary? { cache[gameID] }
+    func summary(for gameID: String) -> GameSummary? { cache[gameID]?.summary }
+    func entry(for gameID: String) -> (summary: GameSummary, data: Data)? { cache[gameID] }
 
-    func store(_ summary: GameSummary, for gameID: String) {
+    func store(_ summary: GameSummary, data: Data, for gameID: String) {
         if cache[gameID] == nil {
             order.append(gameID)
             if order.count > capacity, let oldest = order.first {
@@ -242,7 +247,7 @@ final class GameSummaryStore {
                 cache[oldest] = nil
             }
         }
-        cache[gameID] = summary
+        cache[gameID] = (summary, data)
     }
 
     func clear() {
@@ -258,9 +263,9 @@ final class GameSummaryStore {
               let url = GameDetailViewModel.summaryURL(for: request) else { return }
         inFlight.insert(id)
         Task { [weak self] in
-            let fetched = try? await GameDetailViewModel.prefetchSummary(url: url)
+            let fetched = try? await GameDetailViewModel.fetchSummary(url: url)
             guard let self else { return }
-            if let fetched { self.store(fetched, for: id) }
+            if let fetched { self.store(fetched.summary, data: fetched.data, for: id) }
             self.inFlight.remove(id)
         }
     }
@@ -272,9 +277,20 @@ final class GameSummaryStore {
 final class GameDetailViewModel: ObservableObject {
     let request: GameDetailRequest
 
-    @Published private(set) var summary: GameSummary?
+    @Published private(set) var summary: GameSummary? {
+        didSet { derived = Derived() }
+    }
     @Published private(set) var isLoading = true
     @Published private(set) var failed = false
+    /// The bytes `summary` was decoded from. A refresh that comes back
+    /// byte-identical — every poll of a game that is over or hasn't started,
+    /// and the first refresh of a card opened on a summary the hub had just
+    /// prefetched — is dropped here rather than decoded and re-published,
+    /// because a publish re-lays out the whole card for a payload that says
+    /// nothing new.
+    private var lastSummaryData: Data?
+    /// Photos and ages found by name — see `PlayerLookupBook`.
+    let lookups = PlayerLookupBook()
 
     nonisolated private static let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
@@ -288,9 +304,15 @@ final class GameDetailViewModel: ObservableObject {
         // Reopening a game — or opening one the hub already prefetched — starts
         // fully populated instead of on a spinner. The refresh still runs, so
         // this is a head start, not stale data being pinned.
-        if let cached = GameSummaryStore.shared.summary(for: request.game.id) {
-            self.summary = cached
+        if let cached = GameSummaryStore.shared.entry(for: request.game.id) {
+            self.summary = cached.summary
+            self.lastSummaryData = cached.data
             self.isLoading = false
+            // Settled here, before the first body, rather than after the
+            // first refresh — which, for a payload that came back unchanged,
+            // was the one thing left that still re-published the model and
+            // re-laid out a card a second after it appeared.
+            recomputeTopRatedPlayer()
         }
     }
 
@@ -330,16 +352,21 @@ final class GameDetailViewModel: ObservableObject {
             return
         }
         do {
-            let fetched = try await Self.fetchSummary(url: url)
-            summary = fetched
-            GameSummaryStore.shared.store(fetched, for: request.game.id)
+            // Compared and decoded off the main actor; only a payload that
+            // actually changed comes back.
+            if let fetched = try await Self.fetchSummary(url: url, unchangedIf: lastSummaryData) {
+                summary = fetched.summary
+                lastSummaryData = fetched.data
+                GameSummaryStore.shared.store(fetched.summary, data: fetched.data, for: request.game.id)
+                // Only a changed payload can move the ratings.
+                recomputeTopRatedPlayer()
+            }
             // Every publish here re-renders the whole card — lineups, shot
             // map, momentum chart and all — so a flag that is already right
             // is left alone rather than re-announced on each 30-second poll.
             if failed { failed = false }
             prefetchPlayerImages()
             resolveSoccerHeadshots()
-            recomputeTopRatedPlayer()
         } catch {
             if summary == nil, !failed { failed = true }
         }
@@ -406,15 +433,55 @@ final class GameDetailViewModel: ObservableObject {
         }
     }
 
-    nonisolated private static func fetchSummary(url: URL) async throws -> GameSummary {
+    /// Downloads and decodes a summary. With `unchangedIf` set, a response
+    /// whose bytes match it returns nil before any decoding — the caller
+    /// already holds exactly this payload.
+    nonisolated static func fetchSummary(url: URL, unchangedIf previous: Data?) async throws -> (summary: GameSummary, data: Data)? {
         let (data, _) = try await session.data(from: url)
-        return try JSONDecoder().decode(GameSummary.self, from: data)
+        if let previous, previous == data { return nil }
+        return (try JSONDecoder().decode(GameSummary.self, from: data), data)
     }
 
-    /// Same fetch, exposed for `GameSummaryStore`'s background warming.
-    nonisolated static func prefetchSummary(url: URL) async throws -> GameSummary {
-        try await fetchSummary(url: url)
+    /// The same fetch for callers that only want the decoded summary.
+    nonisolated static func fetchSummary(url: URL) async throws -> (summary: GameSummary, data: Data) {
+        // No comparison to make, so the optional form never returns nil.
+        try await fetchSummary(url: url, unchangedIf: nil)!
     }
+
+    /// Same fetch, exposed for background warming and the team page.
+    nonisolated static func prefetchSummary(url: URL) async throws -> GameSummary {
+        try await fetchSummary(url: url).summary
+    }
+
+    // MARK: Derived-value memo
+
+    /// Everything below is derived from `summary`, and a body evaluation of
+    /// the card reads most of it — several things more than once: `shots`
+    /// three times, `statBars` four, and `homeSide`/`awaySide` once per PLAY
+    /// through `playIsHome`. Each read used to re-walk the payload — a soccer
+    /// summary carries a few hundred commentary plays — and the card's body
+    /// runs on every publish, so each score poll, photo batch and tab switch
+    /// spent tens of milliseconds re-deriving before a view was laid out.
+    /// Derived once per payload, the same body is dictionary lookups.
+    ///
+    /// Reset whenever `summary` changes. The lineups and the leaders also
+    /// bake in the photo/age lookups, so those two are dropped when the
+    /// lookups move — see `absorb`.
+    private struct Derived {
+        var homeSide: GDTeamSide?
+        var awaySide: GDTeamSide?
+        var statBars: [GDStatBar]?
+        var momentum: [Double]??
+        var derivedMomentum: [Double]??
+        var timeline: [GDTimelineEntry]?
+        var shots: [GDShot]?
+        var standingsGroups: [GDStandingsGroup]?
+        var meetings: [GDMeeting]?
+        var topPerformers: [GDLeaderRow]?
+        var lineups: [String: GDLineup?] = [:]
+        var boxGroups: [String: [GDBoxGroup]] = [:]
+    }
+    private var derived = Derived()
 
     // MARK: Header
 
@@ -440,8 +507,18 @@ final class GameDetailViewModel: ObservableObject {
         )
     }
 
-    var homeSide: GDTeamSide { teamSide(from: side("home"), fallback: request.game.homeCompetitor, color: resolvedColors.home) }
-    var awaySide: GDTeamSide { teamSide(from: side("away"), fallback: request.game.awayCompetitor, color: resolvedColors.away) }
+    var homeSide: GDTeamSide {
+        if let cached = derived.homeSide { return cached }
+        let value = teamSide(from: side("home"), fallback: request.game.homeCompetitor, color: resolvedColors.home)
+        derived.homeSide = value
+        return value
+    }
+    var awaySide: GDTeamSide {
+        if let cached = derived.awaySide { return cached }
+        let value = teamSide(from: side("away"), fallback: request.game.awayCompetitor, color: resolvedColors.away)
+        derived.awaySide = value
+        return value
+    }
 
     /// Both teams' chart/bar colors, resolved together: when the two primary
     /// colors are too close to tell apart (two red teams, two navy teams),
@@ -584,6 +661,13 @@ final class GameDetailViewModel: ObservableObject {
     /// Home-win probability per play, downsampled for drawing. Nil when ESPN
     /// doesn't provide a probability feed (soccer) or it's too short to read.
     var momentum: [Double]? {
+        if let cached = derived.momentum { return cached }
+        let value = computeMomentum()
+        derived.momentum = .some(value)
+        return value
+    }
+
+    private func computeMomentum() -> [Double]? {
         guard let raw = summary?.winprobability, raw.count >= 8 else { return nil }
         let values = raw.compactMap { $0.homeWinPercentage }
         guard values.count >= 8 else { return nil }
@@ -598,6 +682,13 @@ final class GameDetailViewModel: ObservableObject {
     /// weight for its team, smoothed over a ~3-minute window, mapped to the
     /// same 0…1 home-share scale the chart draws.
     var derivedMomentum: [Double]? {
+        if let cached = derived.derivedMomentum { return cached }
+        let value = computeDerivedMomentum()
+        derived.derivedMomentum = .some(value)
+        return value
+    }
+
+    private func computeDerivedMomentum() -> [Double]? {
         let allShots = shots
         guard allShots.count >= 4 else { return nil }
         var events: [(seconds: Double, weight: Double, isHome: Bool)] = []
@@ -643,6 +734,13 @@ final class GameDetailViewModel: ObservableObject {
     ]
 
     var statBars: [GDStatBar] {
+        if let cached = derived.statBars { return cached }
+        let value = computeStatBars()
+        derived.statBars = value
+        return value
+    }
+
+    private func computeStatBars() -> [GDStatBar] {
         guard let teams = summary?.boxscore?.teams, teams.count == 2 else { return [] }
         let home = teams.first { $0.homeAway == "home" } ?? teams[1]
         let away = teams.first { $0.homeAway == "away" } ?? teams[0]
@@ -727,11 +825,12 @@ final class GameDetailViewModel: ObservableObject {
     }
 
     /// athleteID → photo URL found by name via TheSportsDB/Wikipedia, for
-    /// soccer players ESPN has no image for.
-    @Published var resolvedHeadshots: [String: String] = [:]
+    /// soccer players ESPN has no image for. Lives in `lookups`; read here
+    /// for the derivations that bake it into their rows.
+    var resolvedHeadshots: [String: String] { lookups.photos }
     /// athleteID → age in years, from the same name lookups (ESPN's soccer
     /// feed has no birth data at all).
-    @Published var resolvedAges: [String: Int] = [:]
+    var resolvedAges: [String: Int] { lookups.ages }
     private var headshotResolveStarted = false
     /// Athletes with a definitive lookup answer (even "no photo, no age") —
     /// keeps the periodic re-sweep from re-targeting them forever.
@@ -764,13 +863,30 @@ final class GameDetailViewModel: ObservableObject {
         guard !targets.isEmpty else { return }
         headshotResolveStarted = true
         Task { [weak self] in
-            // Small batches with a breather between them — the free API
-            // tier rate-limits bursts, and a full two-squad burst is what
-            // left the second team photo-less. Cached names cost nothing,
-            // so only the first-ever look at each player pays this pace.
+            // Pass one: every player already answered on disk, in one go and
+            // one publish. This is most of both squads for any team seen
+            // before, and it used to go through the same four-at-a-time
+            // cadence as the network lookups — fourteen seconds of sleeping
+            // between batches of answers that were already in hand, each
+            // batch re-drawing the card.
+            var pending: [(id: String, name: String)] = []
+            var known: [(String, SoccerHeadshotService.PlayerInfo)] = []
+            for target in targets {
+                if let info = await SoccerHeadshotService.shared.cached(for: target.name) {
+                    known.append((target.id, info))
+                } else {
+                    pending.append(target)
+                }
+            }
+            guard let self else { return }
+            self.absorb(known)
+
+            // Pass two: the rest, in small batches with a breather between
+            // them — the free API tier rate-limits bursts, and a full
+            // two-squad burst is what left the second team photo-less.
             var index = 0
-            while index < targets.count {
-                let batch = Array(targets[index..<min(index + 4, targets.count)])
+            while index < pending.count {
+                let batch = Array(pending[index..<min(index + 4, pending.count)])
                 index += 4
                 var found: [(String, SoccerHeadshotService.PlayerInfo)] = []
                 await withTaskGroup(of: (String, SoccerHeadshotService.PlayerInfo?).self) { group in
@@ -781,36 +897,40 @@ final class GameDetailViewModel: ObservableObject {
                         if let info { found.append((id, info)) }
                     }
                 }
-                guard let self else { return }
-                // ONE write per dictionary per batch. Writing each player's
-                // photo and age as it was found published the model up to
-                // eight times a batch — and every publish re-renders the
-                // whole card, formation pitch included, every two seconds
-                // for the first half-minute a soccer card is open. That is
-                // the stutter while scrolling a freshly opened game.
-                var headshots = self.resolvedHeadshots
-                var ages = self.resolvedAges
-                for (id, info) in found {
-                    self.lookupCompleted.insert(id)
-                    if !info.url.isEmpty {
-                        headshots[id] = info.url
-                        Task { _ = await ImageCache.shared.image(forKey: info.url) }
-                    }
-                    if let age = SoccerHeadshotService.age(fromBorn: info.born) {
-                        ages[id] = age
-                    }
-                }
-                if headshots != self.resolvedHeadshots { self.resolvedHeadshots = headshots }
-                if ages != self.resolvedAges { self.resolvedAges = ages }
-                if index < targets.count {
+                self.absorb(found)
+                if index < pending.count {
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
                 }
             }
             // Rate-limited lookups aren't cached, so let the next live-poll
             // cycle sweep up anything still missing (cached answers make a
             // re-sweep nearly free).
-            self?.headshotResolveStarted = false
+            self.headshotResolveStarted = false
         }
+    }
+
+    /// Files a batch of lookup answers: one write per map, only if it moved,
+    /// into the book the lineup and leaders observe — the page itself hears
+    /// nothing. The derivations that bake photos into their rows are dropped
+    /// first so the views re-reading them see the new answers.
+    private func absorb(_ found: [(String, SoccerHeadshotService.PlayerInfo)]) {
+        guard !found.isEmpty else { return }
+        var photos = lookups.photos
+        var ages = lookups.ages
+        for (id, info) in found {
+            lookupCompleted.insert(id)
+            if !info.url.isEmpty {
+                photos[id] = info.url
+                Task { _ = await ImageCache.shared.image(forKey: info.url) }
+            }
+            if let age = SoccerHeadshotService.age(fromBorn: info.born) {
+                ages[id] = age
+            }
+        }
+        guard photos != lookups.photos || ages != lookups.ages else { return }
+        derived.lineups = [:]
+        derived.topPerformers = nil
+        lookups.merge(photos: photos, ages: ages)
     }
 
     // MARK: Soccer lineups
@@ -869,7 +989,8 @@ final class GameDetailViewModel: ObservableObject {
     }
 
     func lineup(homeAway: String) -> GDLineup? {
-        Self.buildLineup(
+        if let cached = derived.lineups[homeAway] { return cached }
+        let value = Self.buildLineup(
             roster: summary?.rosters?.first { $0.homeAway == homeAway },
             ratingsAvailable: ratingsAvailable,
             headshot: { [self] athlete in
@@ -877,6 +998,10 @@ final class GameDetailViewModel: ObservableObject {
             },
             age: { [self] id in resolvedAges[id] }
         )
+        // `.some`, so a side with no lineup yet is remembered as such rather
+        // than the nil assignment deleting the key and re-deriving each read.
+        derived.lineups[homeAway] = .some(value)
+        return value
     }
 
     /// The lineup laid out from one team's roster entry.
@@ -1032,6 +1157,13 @@ final class GameDetailViewModel: ObservableObject {
     // MARK: Box scores (US sports)
 
     func boxGroups(homeAway: String) -> [GDBoxGroup] {
+        if let cached = derived.boxGroups[homeAway] { return cached }
+        let value = computeBoxGroups(homeAway: homeAway)
+        derived.boxGroups[homeAway] = value
+        return value
+    }
+
+    private func computeBoxGroups(homeAway: String) -> [GDBoxGroup] {
         guard let teams = summary?.boxscore?.players else { return [] }
         let homeID = homeSide.id
         let entry = teams.first { ($0.team?.id == homeID) == (homeAway == "home") }
@@ -1077,6 +1209,13 @@ final class GameDetailViewModel: ObservableObject {
     // MARK: Key events timeline
 
     var timeline: [GDTimelineEntry] {
+        if let cached = derived.timeline { return cached }
+        let value = computeTimeline()
+        derived.timeline = value
+        return value
+    }
+
+    private func computeTimeline() -> [GDTimelineEntry] {
         guard let events = summary?.keyEvents else { return [] }
         return events.compactMap { event in
             guard let typeText = event.type?.type?.lowercased() ?? event.type?.text?.lowercased() else { return nil }
@@ -1142,6 +1281,13 @@ final class GameDetailViewModel: ObservableObject {
     /// (key events only cover goals). Coordinates arrive normalized toward
     /// the attacked goal (x → 100 at the goal line) for both teams.
     var shots: [GDShot] {
+        if let cached = derived.shots { return cached }
+        let value = computeShots()
+        derived.shots = value
+        return value
+    }
+
+    private func computeShots() -> [GDShot] {
         var plays: [GSKeyEvent] = (summary?.commentary ?? []).compactMap { $0.play }
         // Older/lighter payloads only carry coordinates on key events.
         plays.append(contentsOf: summary?.keyEvents ?? [])
@@ -1229,6 +1375,13 @@ final class GameDetailViewModel: ObservableObject {
     private static let usTableColumns = ["W", "L", "PCT", "GB", "STRK"]
 
     var standingsGroups: [GDStandingsGroup] {
+        if let cached = derived.standingsGroups { return cached }
+        let value = computeStandingsGroups()
+        derived.standingsGroups = value
+        return value
+    }
+
+    private func computeStandingsGroups() -> [GDStandingsGroup] {
         guard let groups = summary?.standings?.groups, !groups.isEmpty else { return [] }
         let isSoccer = request.leagueCode != nil || request.sport.isSoccer
         let preferred = isSoccer ? Self.soccerTableColumns : Self.usTableColumns
@@ -1276,13 +1429,25 @@ final class GameDetailViewModel: ObservableObject {
     }
 
     var meetings: [GDMeeting] {
-        guard let events = summary?.headToHeadGames?.first?.events, !events.isEmpty else { return [] }
-        let abbrevByID = [homeSide.id: homeSide.abbreviation, awaySide.id: awaySide.abbreviation]
-        let nameHint = summary?.headToHeadGames?.first?.team
+        if let cached = derived.meetings { return cached }
+        let value = computeMeetings()
+        derived.meetings = value
+        return value
+    }
 
+    /// Built once: a `DateFormatter` costs about a millisecond to make.
+    nonisolated private static let meetingDateFormatter: DateFormatter = {
         let df = DateFormatter()
         df.locale = Locale(identifier: "en_US_POSIX")
         df.dateFormat = "MMM yyyy"
+        return df
+    }()
+
+    private func computeMeetings() -> [GDMeeting] {
+        guard let events = summary?.headToHeadGames?.first?.events, !events.isEmpty else { return [] }
+        let abbrevByID = [homeSide.id: homeSide.abbreviation, awaySide.id: awaySide.abbreviation]
+        let nameHint = summary?.headToHeadGames?.first?.team
+        let df = Self.meetingDateFormatter
 
         return events.prefix(6).map { meeting in
             let date = meeting.gameDate.flatMap { ESPNEventDateParser.parse($0) }
@@ -1313,6 +1478,13 @@ final class GameDetailViewModel: ObservableObject {
     // MARK: Leaders
 
     var topPerformers: [GDLeaderRow] {
+        if let cached = derived.topPerformers { return cached }
+        let value = computeTopPerformers()
+        derived.topPerformers = value
+        return value
+    }
+
+    private func computeTopPerformers() -> [GDLeaderRow] {
         guard let teamLeaders = summary?.leaders else { return [] }
         let homeID = homeSide.id
         var rows: [GDLeaderRow] = []
@@ -1423,14 +1595,45 @@ final class GameDetailViewModel: ObservableObject {
 
 /// Shared date parsing for ESPN's slightly inconsistent date strings.
 nonisolated enum ESPNEventDateParser {
-    static func parse(_ raw: String) -> Date? {
+    // Built once. Both formatters were being created per call — and this is
+    // called per fixture while a scoreboard decodes. Configured and never
+    // mutated again, both are safe to share between threads.
+    private static let iso: ISO8601DateFormatter = {
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime]
-        if let d = iso.date(from: raw) { return d }
+        return iso
+    }()
+    private static let minuteOnly: DateFormatter = {
         let df = DateFormatter()
         df.locale = Locale(identifier: "en_US_POSIX")
         df.timeZone = TimeZone(identifier: "UTC")
         df.dateFormat = "yyyy-MM-dd'T'HH:mm'Z'"
-        return df.date(from: raw)
+        return df
+    }()
+
+    static func parse(_ raw: String) -> Date? {
+        if let d = iso.date(from: raw) { return d }
+        return minuteOnly.date(from: raw)
+    }
+}
+
+/// Photos and ages found by name for the players ESPN has neither for.
+///
+/// Its own object rather than two @Published maps on the game model: the
+/// whole card observes the model, so each batch of lookups landing re-ran
+/// the card's entire body — header, chips, every tab — every two seconds for
+/// as long as the sweep took. Only the views that draw a player observe
+/// this, so a batch re-renders the lineup and the leaders and nothing else.
+@MainActor
+final class PlayerLookupBook: ObservableObject {
+    /// athleteID → photo URL.
+    @Published private(set) var photos: [String: String] = [:]
+    /// athleteID → age in years.
+    @Published private(set) var ages: [String: Int] = [:]
+
+    /// Replaces both maps, publishing each only if it moved.
+    func merge(photos newPhotos: [String: String], ages newAges: [String: Int]) {
+        if newPhotos != photos { photos = newPhotos }
+        if newAges != ages { ages = newAges }
     }
 }

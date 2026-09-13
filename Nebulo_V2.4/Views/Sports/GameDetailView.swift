@@ -268,14 +268,6 @@ struct GameDetailPresenter: View {
     /// A plain flag with no latch: worst case it is stale-true on a reopen,
     /// which only forfeits the optimisation. Nothing can get stuck off-screen.
     @State private var neighborsReady = false
-    /// Gates the open card's OTHER tabs (Stats, Table…). They sit off-screen
-    /// in the tab pager, yet were built in the same pass as the header and
-    /// the Overview — the pass whose length is the wait between the tap and
-    /// the card starting to move. Two staggered releases rather than one:
-    /// the tabs first (a tap on a chip is more likely than a swipe to the
-    /// next game), the neighbours later, so neither build lands on the same
-    /// frame as the other or as the landing.
-    @State private var tabsReady = false
     @StateObject private var playerHost = PlayerSheetHost()
 
     var body: some View {
@@ -291,8 +283,7 @@ struct GameDetailPresenter: View {
                 viewModel: viewModel,
                 scoreViewModel: scoreViewModel,
                 accentColor: accentColor,
-                neighborsReady: neighborsReady,
-                tabsReady: tabsReady
+                neighborsReady: neighborsReady
             )
                 .environment(\.gameDetailDismiss, onDismiss)
                 // The content reports when it's scrolled to the top; only then
@@ -357,7 +348,6 @@ struct GameDetailPresenter: View {
             // Re-armed here so a reopen gets the fast path too, then released
             // once the card has landed and the build cost is invisible.
             neighborsReady = false
-            tabsReady = false
             // The slide starts on the NEXT runloop pass, not in this one.
             //
             // This pass is the one that builds and lays out the card for the
@@ -379,10 +369,11 @@ struct GameDetailPresenter: View {
                 withAnimation(.spring(response: 0.32, dampingFraction: 0.92)) { dragY.set(0) }
             }
             // Past the spring's settle (~0.5s), not at its response time: the
-            // neighbours are two full detail pages, and building them under
+            // neighbours are two more detail pages, and building them under
             // the tail of the landing was the hitch right as the card arrived.
-            // The card's own other tabs come first, once it has landed.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { tabsReady = true }
+            // (The card's OTHER tabs are not on a timer at all any more —
+            // they build the moment the user first reaches for them; see
+            // `GameDetailContentView.wantsAllTabs`.)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { neighborsReady = true }
         }
     }
@@ -536,17 +527,13 @@ struct GameDetailView: View {
     /// False only for the brief window between the tap and the card landing,
     /// while the neighbours stand in as their own background.
     private let neighborsReady: Bool
-    /// False for the same window: the open card shows its first tab only,
-    /// the others build once it has landed. See `GameDetailPresenter`.
-    private let tabsReady: Bool
 
     @MainActor
-    init(request: GameDetailRequest, viewModel: ChannelViewModel, scoreViewModel: ScoreViewModel, accentColor: Color, neighborsReady: Bool = true, tabsReady: Bool = true) {
+    init(request: GameDetailRequest, viewModel: ChannelViewModel, scoreViewModel: ScoreViewModel, accentColor: Color, neighborsReady: Bool = true) {
         self.viewModel = viewModel
         self.scoreViewModel = scoreViewModel
         self.accentColor = accentColor
         self.neighborsReady = neighborsReady
-        self.tabsReady = tabsReady
         // A window around the tapped game, not the whole scoreboard — a
         // 100+ page lazy carousel makes the initial scroll-to-page landing
         // unreliable, and nobody swipes farther than this anyway.
@@ -581,9 +568,16 @@ struct GameDetailView: View {
                 viewModel: viewModel,
                 scoreViewModel: scoreViewModel,
                 accentColor: accentColor,
-                onPageGame: pageGame,
-                settled: tabsReady
+                onPageGame: pageGame
             )
+            // Compared by game, not memberwise. Landing on a page changes
+            // `currentID`, which re-runs this pager's body and hands every
+            // mounted page a fresh copy of itself; the closure it carries
+            // made those copies incomparable, so all three (or four) pages
+            // re-ran their bodies and re-laid out at the moment of landing —
+            // the frame the user's finger comes down to scroll. Equal by
+            // `==`, a page whose game hasn't changed is left exactly as it is.
+            .equatable()
         }
     }
 
@@ -668,6 +662,16 @@ private final class TabHeightsBox: ObservableObject {
     }
 }
 
+/// Re-renders its content when the game's photo/age lookups land. The
+/// lineup and the leaders are the only things on the card that draw those,
+/// so wrapping them here means a batch of headshots redraws the pitch it
+/// belongs to and nothing else — the page's own body never hears about it.
+private struct LookupDependent<Content: View>: View {
+    @ObservedObject var lookups: PlayerLookupBook
+    @ViewBuilder let content: () -> Content
+    var body: some View { content() }
+}
+
 /// Frames the tab pager to the visible tab's measured height. The only
 /// subscriber to the heights, so a measurement re-renders this and not the
 /// page it sits in.
@@ -687,7 +691,7 @@ private struct TabHeightFrame: ViewModifier {
 ///   • Table — league/tournament standings with both teams highlighted.
 /// Sections render only when the summary payload actually carries their
 /// data, so the same screen works across every sport the hub shows.
-struct GameDetailContentView: View {
+struct GameDetailContentView: View, Equatable {
     let request: GameDetailRequest
     /// Plain references, NOT observed. This body never READS either model —
     /// it calls them (the stream search, the reminder toggle) — and observing
@@ -702,12 +706,19 @@ struct GameDetailContentView: View {
     let scoreViewModel: ScoreViewModel
     let accentColor: Color
     let onPageGame: (Int) -> Void
-    /// False while the card is still arriving. Only the selected tab is
-    /// built then; the others are stand-ins until this flips — see
-    /// `GameDetailPresenter.tabsReady`.
-    let settled: Bool
 
     @StateObject private var detail: GameDetailViewModel
+    /// Whether the tabs OTHER than the selected one are built.
+    ///
+    /// False until the user first reaches for them — a chip tap, or a finger
+    /// on the tab pager — and then for good. They sit off-screen in the tab
+    /// pager, and building them with the rest of the card was a third or
+    /// more of the card's cost: paid on every open, and for every neighbour
+    /// page whose tabs nobody would ever see. Built on demand, the build
+    /// lands in the frame of the tap or the first frame of the tab drag —
+    /// moments when nothing else is moving — instead of under the open or
+    /// the first scroll after a swipe.
+    @State private var wantsAllTabs = false
     @Environment(\.gameDetailDismiss) private var dismiss
     /// Reports scroll-at-top to the presenter, which owns the dismiss drag.
     @Environment(\.gameDetailAtTop) private var reportAtTop
@@ -809,14 +820,18 @@ struct GameDetailContentView: View {
         case info = "Info"
     }
 
-    init(request: GameDetailRequest, viewModel: ChannelViewModel, scoreViewModel: ScoreViewModel, accentColor: Color, onPageGame: @escaping (Int) -> Void = { _ in }, settled: Bool = true) {
+    init(request: GameDetailRequest, viewModel: ChannelViewModel, scoreViewModel: ScoreViewModel, accentColor: Color, onPageGame: @escaping (Int) -> Void = { _ in }) {
         self.request = request
         self.viewModel = viewModel
         self.scoreViewModel = scoreViewModel
         self.accentColor = accentColor
         self.onPageGame = onPageGame
-        self.settled = settled
         _detail = StateObject(wrappedValue: GameDetailViewModel(request: request))
+    }
+
+    /// One game, one page: see the `.equatable()` in `GameDetailView`.
+    static func == (lhs: GameDetailContentView, rhs: GameDetailContentView) -> Bool {
+        lhs.request.id == rhs.request.id && lhs.accentColor == rhs.accentColor
     }
 
     /// Coordinate space anchored to the scroll CONTENT. The chips' position
@@ -1054,7 +1069,12 @@ struct GameDetailContentView: View {
             // nothing jumps when it appears — content just slides under it.
             .overlay(alignment: .top) {
                 compactHeader
-                    .scrollProgressReveal(collapseProgress)
+                    // The field bar carries the app's material scrim, and a
+                    // material samples its backdrop every frame even at
+                    // opacity 0 — so it is culled until the page collapses.
+                    // The matchup bar has no material and keeps rendering so
+                    // its height is measured before it is ever needed.
+                    .scrollProgressReveal(collapseProgress, cullWhenHidden: isFieldEvent)
                     .background(
                         GeometryReader { g in
                             Color.clear
@@ -1258,6 +1278,7 @@ struct GameDetailContentView: View {
     /// the app buzzes.
     private func switchTab(to newTab: GDTab) {
         guard scrolledTab != newTab else { return }
+        wantsAllTabs = true
         withAnimation(.easeOut(duration: 0.3)) { scrolledTab = newTab }
     }
 
@@ -1321,6 +1342,12 @@ struct GameDetailContentView: View {
         .safeAreaPadding(.horizontal, 9)
         .scrollPosition(id: $scrolledTab)
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        // A finger on the pager is the other way to reach the next tab. The
+        // build lands in the first frame of the drag, before there is
+        // anything to see of the tab it reveals.
+        .onScrollPhaseChange { _, newPhase in
+            if newPhase != .idle && !wantsAllTabs { wantsAllTabs = true }
+        }
         .onScrollGeometryChange(for: CGFloat.self) { geometry in
             let restX = -geometry.contentInsets.leading
             let maxX = max(restX, geometry.contentSize.width - geometry.containerSize.width
@@ -1345,9 +1372,9 @@ struct GameDetailContentView: View {
 
     @ViewBuilder
     private func tabContent(for candidate: GDTab) -> some View {
-        if !settled && candidate != tab {
-            // Off-screen in the pager until the card has landed; nothing of
-            // it can be seen, so nothing of it is built yet.
+        if !wantsAllTabs && candidate != tab {
+            // Off-screen in the pager; nothing of it can be seen, so nothing
+            // of it is built until the user reaches for it.
             Color.clear.frame(height: 1)
         } else {
             settledTabContent(for: candidate)
@@ -2109,6 +2136,10 @@ struct GameDetailContentView: View {
     // MARK: Lineups (soccer)
 
     private var soccerLineupSection: some View {
+        LookupDependent(lookups: detail.lookups) { soccerLineupCard }
+    }
+
+    private var soccerLineupCard: some View {
         sectionCard("Lineups") {
             VStack(spacing: 12) {
                 sidePicker(selection: $lineupSide)
@@ -2440,6 +2471,10 @@ struct GameDetailContentView: View {
     // MARK: Top performers
 
     private var performersSection: some View {
+        LookupDependent(lookups: detail.lookups) { performersCard }
+    }
+
+    private var performersCard: some View {
         sectionCard("Top Performers") {
             VStack(spacing: 10) {
                 ForEach(detail.topPerformers) { leader in

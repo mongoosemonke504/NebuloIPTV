@@ -26,6 +26,15 @@ actor SoccerHeadshotService {
         cache = (try? JSONDecoder().decode([String: PlayerInfo].self, from: Data(contentsOf: cacheURL))) ?? [:]
     }
 
+    /// The answer already on disk, or nil when this name has never been
+    /// looked up. Never touches the network, so a caller can settle every
+    /// known player in one pass before paying the lookup cadence for the rest.
+    func cached(for name: String) -> PlayerInfo? {
+        let key = Self.normalize(name)
+        guard !key.isEmpty else { return PlayerInfo(url: "", born: nil) }
+        return cache[key]
+    }
+
     /// nil = transient failure (rate limit / network) — retry later.
     /// Otherwise a definitive answer, possibly with an empty photo.
     func info(for name: String) async -> PlayerInfo? {
