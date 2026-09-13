@@ -1977,12 +1977,20 @@ struct SportSelectorView: View {
                         .id(s)
                     }
                 }
-                .padding(.horizontal)
                 // Trimmed from 10. The chips keep their own pill padding, so
                 // they are the same size; it is the gap around the row that
                 // was making the pinned header taller than it needs to be.
                 .padding(.vertical, 6)
             }
+            // The side margins as CONTENT MARGINS of the scroll view, not
+            // padding on the row inside it. Padding is part of the content,
+            // and the minimum scroll below stops as soon as a chip is inside
+            // the scroll view's edge — so paging to a sport whose chip was
+            // off-screen parked that chip hard against the edge of the
+            // screen, while every game below it sat 16pt in. As margins the
+            // visible area itself is inset, and the chip comes to rest on the
+            // same line as everything else.
+            .contentMargins(.horizontal, 16, for: .scrollContent)
             // anchor nil = scroll the MINIMUM needed to bring the chip fully
             // into view, and not at all if it's already visible — centring
             // on every swipe dragged the whole row around unnecessarily.

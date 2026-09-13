@@ -57,13 +57,27 @@ class ScoreViewModel: ObservableObject {
     /// independent of what's on today's scoreboards. Loaded from disk
     /// instantly at launch, refreshed in the background at most once a week.
     @Published private(set) var teamCatalog: [TeamCatalogService.Entry] = []
+    /// Which game card is open — see `GameDetailRoute`. Deliberately NOT a
+    /// `@Published` property of this model: this model is observed by the
+    /// home screen, both hubs, the player and more, so opening or closing a
+    /// card used to republish it and re-evaluate every one of those in the
+    /// same frame the card started moving. That frame is the stutter at the
+    /// start of every open and close. Only the root's host observes the
+    /// route, so a tap now re-renders the overlay and nothing else.
+    let detailRoute = GameDetailRoute()
     /// When set, the sports hub presents the match detail sheet for this game.
-    @Published var detailRequest: GameDetailRequest? { didSet { dropPagingSnapshotIfClosed() } }
+    var detailRequest: GameDetailRequest? {
+        get { detailRoute.request }
+        set { detailRoute.request = newValue }
+    }
     /// Deep-link presentation (Live Activity tap): separate from
     /// `detailRequest` because the hub's sheet only exists while the Sports
     /// section is on screen — this one presents from the app root over
     /// whatever is showing.
-    @Published var deepLinkRequest: GameDetailRequest? { didSet { dropPagingSnapshotIfClosed() } }
+    var deepLinkRequest: GameDetailRequest? {
+        get { detailRoute.deepLinkRequest }
+        set { detailRoute.deepLinkRequest = newValue }
+    }
     /// The carousel's page list for the detail that's currently open, held for
     /// as long as it stays open. `detailPagingList` is called from
     /// `GameDetailView.init`, which SwiftUI re-runs whenever the app root's
@@ -307,6 +321,7 @@ class ScoreViewModel: ObservableObject {
     }
     
     init() {
+        detailRoute.onChange = { [weak self] in self?.dropPagingSnapshotIfClosed() }
         loadCachedData()
         loadTeamCatalog()
         Task { await fetchScores() }
@@ -1741,4 +1756,19 @@ struct SoccerGameSection: Identifiable, Sendable, Codable {
         self.league = league
         self.games = games
     }
+}
+/// The one piece of game-card state the app root watches: which card is open.
+///
+/// Its own object so that presenting a card publishes to the root's overlay
+/// host alone. As `@Published` properties of `ScoreViewModel` (which the
+/// whole app observes) a tap re-rendered every screen in the app before the
+/// card could begin to move.
+@MainActor
+final class GameDetailRoute: ObservableObject {
+    @Published var request: GameDetailRequest? { didSet { onChange?() } }
+    @Published var deepLinkRequest: GameDetailRequest? { didSet { onChange?() } }
+    /// The owning model's bookkeeping when either slot changes.
+    var onChange: (() -> Void)?
+
+    var current: GameDetailRequest? { request ?? deepLinkRequest }
 }

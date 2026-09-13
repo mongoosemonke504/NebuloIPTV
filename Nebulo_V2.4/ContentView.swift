@@ -14,9 +14,12 @@ extension Notification.Name {
 
 struct ContentView: View {
     @ObservedObject private var accountManager = AccountManager.shared
-    @ObservedObject var viewModel: ChannelViewModel
-    @ObservedObject var scoreViewModel: ScoreViewModel
-    @AppStorage("customAccentHex") private var customAccentHex = "#FFFFFF"
+    // Plain references, NOT observed. Nothing in this body reads either
+    // model; they are handed down to MainView, which observes them itself.
+    // Observed here, every score refresh and guide tick re-ran the root's
+    // body — and with it a re-diff of the entire app.
+    let viewModel: ChannelViewModel
+    let scoreViewModel: ScoreViewModel
 
     var body: some View {
         Group {
@@ -47,21 +50,40 @@ struct ContentView: View {
         // the Live-Activity deep link (`deepLinkRequest`, which first
         // dismisses any full-screen player) route through the one presenter.
         .overlay {
-            if let request = scoreViewModel.detailRequest ?? scoreViewModel.deepLinkRequest {
-                GameDetailPresenter(
-                    request: request,
-                    viewModel: viewModel,
-                    scoreViewModel: scoreViewModel,
-                    accentColor: Color(hex: customAccentHex) ?? .white,
-                    onDismiss: closeDetail
-                )
-                // Identity, NOT a move transition: sliding the presenter would
-                // carry its black backdrop up with the card. The backdrop must
-                // be there the instant the overlay mounts, so the presenter
-                // appears in place and animates only the card up itself.
-                .transition(.identity)
-                .zIndex(50)
-            }
+            GameDetailHost(viewModel: viewModel, scoreViewModel: scoreViewModel)
+        }
+    }
+}
+
+/// Mounts the game card. The only view that observes `GameDetailRoute`, so
+/// a tap re-renders this — an overlay with one child — and nothing above it.
+private struct GameDetailHost: View {
+    let viewModel: ChannelViewModel
+    let scoreViewModel: ScoreViewModel
+    @ObservedObject private var route: GameDetailRoute
+    @AppStorage("customAccentHex") private var customAccentHex = "#FFFFFF"
+
+    init(viewModel: ChannelViewModel, scoreViewModel: ScoreViewModel) {
+        self.viewModel = viewModel
+        self.scoreViewModel = scoreViewModel
+        _route = ObservedObject(wrappedValue: scoreViewModel.detailRoute)
+    }
+
+    var body: some View {
+        if let request = route.current {
+            GameDetailPresenter(
+                request: request,
+                viewModel: viewModel,
+                scoreViewModel: scoreViewModel,
+                accentColor: Color(hex: customAccentHex) ?? .white,
+                onDismiss: closeDetail
+            )
+            // Identity, NOT a move transition: sliding the presenter would
+            // carry its black backdrop up with the card. The backdrop must
+            // be there the instant the overlay mounts, so the presenter
+            // appears in place and animates only the card up itself.
+            .transition(.identity)
+            .zIndex(50)
         }
     }
 
@@ -73,8 +95,8 @@ struct ContentView: View {
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
-            scoreViewModel.detailRequest = nil
-            scoreViewModel.deepLinkRequest = nil
+            route.request = nil
+            route.deepLinkRequest = nil
         }
     }
 }

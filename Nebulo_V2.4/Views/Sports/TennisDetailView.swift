@@ -171,7 +171,9 @@ final class TennisDetailViewModel: ObservableObject {
 /// note, player comparison, and match info.
 struct TennisDetailContentView: View {
     let request: GameDetailRequest
-    @ObservedObject var viewModel: ChannelViewModel
+    /// Called from this body (the stream search), never read — so not
+    /// observed. See the note on `GameDetailContentView.viewModel`.
+    let viewModel: ChannelViewModel
     let accentColor: Color
 
     @StateObject private var detail: TennisDetailViewModel

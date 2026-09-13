@@ -209,8 +209,12 @@ private struct BackdropTint: View {
 
 struct GameDetailPresenter: View {
     let request: GameDetailRequest
-    @ObservedObject var viewModel: ChannelViewModel
-    @ObservedObject var scoreViewModel: ScoreViewModel
+    /// Handed down, not observed: this body reads nothing from either, and
+    /// re-running it re-runs `GameDetailView.init` and a re-diff of every
+    /// mounted page — which observing them did on every score refresh and
+    /// guide tick for as long as a card was open.
+    let viewModel: ChannelViewModel
+    let scoreViewModel: ScoreViewModel
     let accentColor: Color
     let onDismiss: () -> Void
 
@@ -264,6 +268,14 @@ struct GameDetailPresenter: View {
     /// A plain flag with no latch: worst case it is stale-true on a reopen,
     /// which only forfeits the optimisation. Nothing can get stuck off-screen.
     @State private var neighborsReady = false
+    /// Gates the open card's OTHER tabs (Stats, Table…). They sit off-screen
+    /// in the tab pager, yet were built in the same pass as the header and
+    /// the Overview — the pass whose length is the wait between the tap and
+    /// the card starting to move. Two staggered releases rather than one:
+    /// the tabs first (a tap on a chip is more likely than a swipe to the
+    /// next game), the neighbours later, so neither build lands on the same
+    /// frame as the other or as the landing.
+    @State private var tabsReady = false
     @StateObject private var playerHost = PlayerSheetHost()
 
     var body: some View {
@@ -279,7 +291,8 @@ struct GameDetailPresenter: View {
                 viewModel: viewModel,
                 scoreViewModel: scoreViewModel,
                 accentColor: accentColor,
-                neighborsReady: neighborsReady
+                neighborsReady: neighborsReady,
+                tabsReady: tabsReady
             )
                 .environment(\.gameDetailDismiss, onDismiss)
                 // The content reports when it's scrolled to the top; only then
@@ -341,16 +354,36 @@ struct GameDetailPresenter: View {
         // score updates churn this view.
         .onAppear {
             withAnimation(.easeOut(duration: 0.12)) { tintOpacity.set(0.78) }
+            // Re-armed here so a reopen gets the fast path too, then released
+            // once the card has landed and the build cost is invisible.
+            neighborsReady = false
+            tabsReady = false
+            // The slide starts on the NEXT runloop pass, not in this one.
+            //
+            // This pass is the one that builds and lays out the card for the
+            // first time — the header, the chips, every tab's content — and
+            // that takes longer than a frame. An animation begun in the same
+            // pass has its clock running while that work happens, so by the
+            // time the first frame of it is drawn the card is already part of
+            // the way up: it appears to jump, then move. One pass later the
+            // layers exist and the spring runs on a card that only has to be
+            // translated. The tint above still starts immediately, so the tap
+            // is answered in the same frame either way.
+            //
             // A spring rather than .smooth: smooth eases IN, so the card
             // barely moves for the first few frames and the tap reads as
             // having not registered. A high-damping spring leaves at speed and
             // settles without overshoot — faster off the mark and shorter
             // overall, while still arriving softly.
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.92)) { dragY.set(0) }
-            // Re-armed here so a reopen gets the fast path too, then released
-            // once the card has landed and the build cost is invisible.
-            neighborsReady = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { neighborsReady = true }
+            DispatchQueue.main.async {
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.92)) { dragY.set(0) }
+            }
+            // Past the spring's settle (~0.5s), not at its response time: the
+            // neighbours are two full detail pages, and building them under
+            // the tail of the landing was the hitch right as the card arrived.
+            // The card's own other tabs come first, once it has landed.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { tabsReady = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { neighborsReady = true }
         }
     }
 
@@ -491,8 +524,11 @@ private struct PlayerSheetContainer<Content: View>: View {
 /// peeking edges to page between games. The list is snapshotted when the
 /// detail opens so score refreshes never shuffle pages mid-swipe.
 struct GameDetailView: View {
-    @ObservedObject var viewModel: ChannelViewModel
-    @ObservedObject var scoreViewModel: ScoreViewModel
+    /// Not observed — nothing here reads either model, and the pages below
+    /// hold their own. Observed, every publish of either re-diffed all three
+    /// mounted detail pages.
+    let viewModel: ChannelViewModel
+    let scoreViewModel: ScoreViewModel
     let accentColor: Color
 
     private let pages: [GameDetailRequest]
@@ -500,13 +536,17 @@ struct GameDetailView: View {
     /// False only for the brief window between the tap and the card landing,
     /// while the neighbours stand in as their own background.
     private let neighborsReady: Bool
+    /// False for the same window: the open card shows its first tab only,
+    /// the others build once it has landed. See `GameDetailPresenter`.
+    private let tabsReady: Bool
 
     @MainActor
-    init(request: GameDetailRequest, viewModel: ChannelViewModel, scoreViewModel: ScoreViewModel, accentColor: Color, neighborsReady: Bool = true) {
+    init(request: GameDetailRequest, viewModel: ChannelViewModel, scoreViewModel: ScoreViewModel, accentColor: Color, neighborsReady: Bool = true, tabsReady: Bool = true) {
         self.viewModel = viewModel
         self.scoreViewModel = scoreViewModel
         self.accentColor = accentColor
         self.neighborsReady = neighborsReady
+        self.tabsReady = tabsReady
         // A window around the tapped game, not the whole scoreboard — a
         // 100+ page lazy carousel makes the initial scroll-to-page landing
         // unreliable, and nobody swipes farther than this anyway.
@@ -541,7 +581,8 @@ struct GameDetailView: View {
                 viewModel: viewModel,
                 scoreViewModel: scoreViewModel,
                 accentColor: accentColor,
-                onPageGame: pageGame
+                onPageGame: pageGame,
+                settled: tabsReady
             )
         }
     }
@@ -611,6 +652,31 @@ struct GameDetailView: View {
 private struct GDScrollMetrics: Equatable {
     let scrolled: CGFloat
     let maxScrolled: CGFloat
+    /// The scroll view's own top inset — the content's resting top edge sits
+    /// this far below the container's.
+    let insetTop: CGFloat
+}
+
+/// Per-tab measured content heights — see `GameDetailContentView.tabHeights`.
+private final class TabHeightsBox: ObservableObject {
+    @Published private(set) var values: [String: CGFloat] = [:]
+    func set(_ height: CGFloat, for tab: String) {
+        // Same value again is not a change — and a publish would still
+        // re-run the frame modifier.
+        guard values[tab] != height else { return }
+        values[tab] = height
+    }
+}
+
+/// Frames the tab pager to the visible tab's measured height. The only
+/// subscriber to the heights, so a measurement re-renders this and not the
+/// page it sits in.
+private struct TabHeightFrame: ViewModifier {
+    @ObservedObject var heights: TabHeightsBox
+    let tab: String
+    func body(content: Content) -> some View {
+        content.frame(height: heights.values[tab], alignment: .top)
+    }
 }
 
 /// FotMob-style match detail page, split into tabs:
@@ -623,13 +689,25 @@ private struct GDScrollMetrics: Equatable {
 /// data, so the same screen works across every sport the hub shows.
 struct GameDetailContentView: View {
     let request: GameDetailRequest
-    @ObservedObject var viewModel: ChannelViewModel
-    @ObservedObject var scoreViewModel: ScoreViewModel
+    /// Plain references, NOT observed. This body never READS either model —
+    /// it calls them (the stream search, the reminder toggle) — and observing
+    /// them re-ran the whole card on every publish of each: the guide clock
+    /// every thirty seconds, every score refresh, every keystroke in the
+    /// app-wide search. Each of those was a re-derivation of every stat, the
+    /// timeline, the lineups and the momentum curve from the summary, plus a
+    /// re-layout of the page — landing whenever it liked, mid-scroll included.
+    /// The one thing on this page that does read a model (the reminder bell)
+    /// observes it by itself; see `ReminderBell`.
+    let viewModel: ChannelViewModel
+    let scoreViewModel: ScoreViewModel
     let accentColor: Color
     let onPageGame: (Int) -> Void
+    /// False while the card is still arriving. Only the selected tab is
+    /// built then; the others are stand-ins until this flips — see
+    /// `GameDetailPresenter.tabsReady`.
+    let settled: Bool
 
     @StateObject private var detail: GameDetailViewModel
-    @ObservedObject private var activityManager = GameActivityManager.shared
     @Environment(\.gameDetailDismiss) private var dismiss
     /// Reports scroll-at-top to the presenter, which owns the dismiss drag.
     @Environment(\.gameDetailAtTop) private var reportAtTop
@@ -670,10 +748,18 @@ struct GameDetailContentView: View {
     /// Measured height of each tab's content, so the pager can be framed to
     /// the visible tab and a short tab can't scroll as deep as its tallest
     /// neighbor.
-    @State private var tabHeights: [GDTab: CGFloat] = [:]
+    ///
+    /// A box, observed only by the modifier that applies the frame. As plain
+    /// `@State` every measurement — one per tab as they mount, then again as
+    /// their async sections (lineups, events, momentum) grow — re-rendered
+    /// this entire page, all tabs included, which is a re-layout of the whole
+    /// card several times over during the first half-second it is on screen:
+    /// exactly while it is sliding up.
+    @State private var tabHeights = TabHeightsBox()
     /// Measured height of the compact score bar — the dock line for the
-    /// sticky chips.
-    @State private var barHeight: CGFloat = 64
+    /// sticky chips. Read only inside the preference callback below, so it
+    /// needs no re-render when it lands.
+    @State private var barHeight = ValueBox<CGFloat>(64)
     @State private var scrollTarget = ScrollPosition(edge: .top)
     /// Per-gesture latch for the edge-overscroll game paging; a box so the
     /// per-frame writes never invalidate the page.
@@ -686,8 +772,27 @@ struct GameDetailContentView: View {
     /// with the card instead of also bouncing on its own — otherwise the
     /// content drifts twice as far as the card at the top.
     @State private var bounceCancel = ScrollProgress()
+    /// Where the tab chips sit in the CONTENT, measured from its top. Fixed
+    /// under scrolling — it only moves when the header above them changes
+    /// height — so the chip dock can be worked out from the scroll offset
+    /// alone. See the scroll handler.
+    @State private var chipsNaturalY = ValueBox<CGFloat>(.greatestFiniteMagnitude)
+    /// The last scroll reading, kept so a header re-layout can re-dock the
+    /// chips without waiting for the next scroll frame.
+    @State private var lastScroll = ValueBox<(scrolled: CGFloat, insetTop: CGFloat)>((0, 0))
 
     private var tab: GDTab { scrolledTab ?? .overview }
+
+    /// Docks the chips under the compact bar. Their top edge, in the
+    /// container, is `insetTop − scrolled + natural`; the bar's bottom is
+    /// `barHeight`. Once the former passes the latter the chips are held back
+    /// by the difference. Frozen while a player carousel is up: its arrival
+    /// can shift the layout underneath.
+    private func updateChipDock() {
+        guard !playerHost.isPresenting else { return }
+        let chipsTop = lastScroll.value.insetTop - lastScroll.value.scrolled + chipsNaturalY.value
+        chipStick.set(max(0, barHeight.value - chipsTop))
+    }
 
     private enum GDTab: String, CaseIterable {
         case overview = "Overview"
@@ -704,18 +809,21 @@ struct GameDetailContentView: View {
         case info = "Info"
     }
 
-    init(request: GameDetailRequest, viewModel: ChannelViewModel, scoreViewModel: ScoreViewModel, accentColor: Color, onPageGame: @escaping (Int) -> Void = { _ in }) {
+    init(request: GameDetailRequest, viewModel: ChannelViewModel, scoreViewModel: ScoreViewModel, accentColor: Color, onPageGame: @escaping (Int) -> Void = { _ in }, settled: Bool = true) {
         self.request = request
         self.viewModel = viewModel
         self.scoreViewModel = scoreViewModel
         self.accentColor = accentColor
         self.onPageGame = onPageGame
+        self.settled = settled
         _detail = StateObject(wrappedValue: GameDetailViewModel(request: request))
     }
 
-    /// Coordinate space anchored to this card, so the chip-dock probes measure
-    /// positions that don't move when the whole card is slid up or down.
-    private static let cardSpace = "gdCard"
+    /// Coordinate space anchored to the scroll CONTENT. The chips' position
+    /// in it is a layout fact, not a scroll fact: it does not change while
+    /// the page scrolls or the card slides, so the probe measuring it fires
+    /// only when the header actually re-lays out.
+    private static let contentSpace = "gdContent"
 
     /// Writes the drag-handle boundary into the presenter's box: a downward
     /// drag starting above it closes the card, matching the grey grabber.
@@ -862,12 +970,28 @@ struct GameDetailContentView: View {
                                         }
                                     )
                             }
-                            .background(GlobalOffsetProbe(id: "gdChips", space: .named(Self.cardSpace)))
+                            // The chips' resting position, for the dock
+                            // maths in the scroll handler. This used to be a
+                            // preference probe paired with one on the
+                            // container, combined at the page root: a value
+                            // that changed on EVERY scroll frame, carried up
+                            // through the whole card's tree by the preference
+                            // pipeline before the handler could subtract the
+                            // two. The difference it wanted is available for
+                            // free from the scroll geometry.
+                            .background(
+                                GeometryReader { g in
+                                    let y = g.frame(in: .named(Self.contentSpace)).minY
+                                    Color.clear
+                                        .onAppear { chipsNaturalY.value = y; updateChipDock() }
+                                        .onChangeCompat(of: y) { chipsNaturalY.value = $0; updateChipDock() }
+                                }
+                            )
                             .zIndex(1)
                         }
                         tabPager
                             .padding(.horizontal, -9)
-                            .frame(height: tabHeights[tab], alignment: .top)
+                            .modifier(TabHeightFrame(heights: tabHeights, tab: tab.rawValue))
                             .clipped()
                             .animation(.easeOut(duration: 0.25), value: tab)
                     }
@@ -880,6 +1004,10 @@ struct GameDetailContentView: View {
                 // Clears the home-indicator strip so the last stats row
                 // isn't tucked under it at the bottom of the scroll.
                 .padding(.bottom, 80)
+                // INSIDE the bounce offset below, so the chips' measured
+                // position ignores it — the same way the dock maths ignores
+                // it, since the cancelled bounce moves chips and bar alike.
+                .coordinateSpace(name: Self.contentSpace)
                 // Undo the top rubber-band so the content rides down with the
                 // card, not ahead of it, during a pull-to-close.
                 .scrollProgressOffset(bounceCancel)
@@ -894,13 +1022,16 @@ struct GameDetailContentView: View {
                 GDScrollMetrics(
                     scrolled: geometry.contentOffset.y + geometry.contentInsets.top,
                     maxScrolled: max(0, geometry.contentSize.height + geometry.contentInsets.top
-                        + geometry.contentInsets.bottom - geometry.containerSize.height)
+                        + geometry.contentInsets.bottom - geometry.containerSize.height),
+                    insetTop: geometry.contentInsets.top
                 )
             } action: { _, metrics in
                 collapseProgress.set(min(max((metrics.scrolled - 105) / 50, 0), 1))
                 // Pin the header vignette against the scroll (offset by the
                 // live scroll distance so it holds at the top).
                 headerPin.set(metrics.scrolled)
+                lastScroll.value = (metrics.scrolled, metrics.insetTop)
+                updateChipDock()
                 // Report at-top to the presenter's dismiss drag. Cancel the
                 // scroll's own top rubber-band ONLY while the card is being
                 // dragged to dismiss (so the content doesn't over-bounce past
@@ -919,7 +1050,6 @@ struct GameDetailContentView: View {
             .onScrollPhaseChange { _, newPhase in
                 scrollIdle.value = newPhase == .idle
             }
-            .background(GlobalOffsetProbe(id: "gdContainer", space: .named(Self.cardSpace)))
             // Overlay, not safeAreaInset: the bar takes no layout space, so
             // nothing jumps when it appears — content just slides under it.
             .overlay(alignment: .top) {
@@ -928,21 +1058,11 @@ struct GameDetailContentView: View {
                     .background(
                         GeometryReader { g in
                             Color.clear
-                                .onAppear { barHeight = g.size.height }
-                                .onChangeCompat(of: g.size.height) { barHeight = $0 }
+                                .onAppear { barHeight.value = g.size.height; updateChipDock() }
+                                .onChangeCompat(of: g.size.height) { barHeight.value = $0; updateChipDock() }
                         }
                     )
             }
-        }
-        // Anchors the probes above: both are measured relative to this, so the
-        // open/dismiss translation leaves their readings untouched.
-        .coordinateSpace(name: Self.cardSpace)
-        .onPreferenceChange(SectionScrollOffsetsKey.self) { offsets in
-            // A player carousel over the page can shift the probes' reported
-            // frames; freeze the chip dock while one is up.
-            guard !playerHost.isPresenting else { return }
-            guard let containerTop = offsets["gdContainer"], let chipsTop = offsets["gdChips"] else { return }
-            chipStick.set(max(0, containerTop + barHeight - chipsTop))
         }
         .preferredColorScheme(.dark)
         .task(id: request.id) {
@@ -1186,8 +1306,8 @@ struct GameDetailContentView: View {
                                 // slightly short permanently chops the tab's
                                 // own bottom. A hair too tall just leaves a
                                 // few points of blank space, which is fine.
-                                .onAppear { tabHeights[candidate] = g.size.height + 40 }
-                                .onChangeCompat(of: g.size.height) { tabHeights[candidate] = $0 + 40 }
+                                .onAppear { tabHeights.set(g.size.height + 40, for: candidate.rawValue) }
+                                .onChangeCompat(of: g.size.height) { tabHeights.set($0 + 40, for: candidate.rawValue) }
                         }
                     )
                     .containerRelativeFrame(.horizontal)
@@ -1225,6 +1345,17 @@ struct GameDetailContentView: View {
 
     @ViewBuilder
     private func tabContent(for candidate: GDTab) -> some View {
+        if !settled && candidate != tab {
+            // Off-screen in the pager until the card has landed; nothing of
+            // it can be seen, so nothing of it is built yet.
+            Color.clear.frame(height: 1)
+        } else {
+            settledTabContent(for: candidate)
+        }
+    }
+
+    @ViewBuilder
+    private func settledTabContent(for candidate: GDTab) -> some View {
         switch candidate {
         case .overview:
             if isRace {
@@ -1551,22 +1682,7 @@ struct GameDetailContentView: View {
             )
 
             if detail.statusState == "pre" {
-                // Reminder toggle — mirrors the app's chip language: glass
-                // at rest, solid white with black glyph once armed.
-                let isReminderSet = scoreViewModel.reminderGameIDs.contains(request.game.id)
-                Button {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
-                        scoreViewModel.toggleReminder(request.game)
-                    }
-                } label: {
-                    detailPillIcon(
-                        systemName: isReminderSet ? "bell.fill" : "bell",
-                        active: isReminderSet,
-                        fill: .white,
-                        activeGlyph: .black
-                    )
-                }
-                .buttonStyle(.plain)
+                ReminderBell(game: request.game, scoreViewModel: scoreViewModel)
             } else if detail.statusState == "in" {
                 LiveActivityPillButton(
                     game: request.game,
@@ -1575,31 +1691,6 @@ struct GameDetailContentView: View {
                 )
             }
         }
-    }
-
-    /// Circular-pill icon button beside the watch button. At rest it's the
-    /// same glass as the watch pill; active, it fills solid with the state
-    /// color so the toggle reads at a glance — the same idle/selected
-    /// treatment the app's chips use.
-    private func detailPillIcon(systemName: String, active: Bool, fill: Color, activeGlyph: Color) -> some View {
-        Image(systemName: systemName)
-            .font(.system(size: 16, weight: .bold))
-            .foregroundStyle(active ? activeGlyph : .white)
-            .contentTransition(.symbolEffect(.replace))
-            .frame(width: 52, height: 22)
-            .padding(.vertical, 13)
-            .background {
-                if active {
-                    Capsule().fill(fill)
-                }
-            }
-            .modifier(ConditionalWatchGlass(showGlass: !active))
-            .overlay {
-                if active {
-                    Capsule().stroke(Color.white.opacity(0.25), lineWidth: 0.5)
-                }
-            }
-            .shadow(color: active ? fill.opacity(0.45) : .clear, radius: 10, y: 2)
     }
 
     // MARK: Live situation
@@ -2522,6 +2613,62 @@ struct GameDetailContentView: View {
 /// Liquid-glass capsule for the detail pages' watch buttons — real
 /// glassEffect on iOS 26, ultra-thin material below, matching the app's
 /// other glass controls.
+/// Circular-pill icon button beside the watch button. At rest it's the same
+/// glass as the watch pill; active, it fills solid with the state colour so
+/// the toggle reads at a glance — the same idle/selected treatment the app's
+/// chips use.
+struct DetailPillIcon: View {
+    let systemName: String
+    let active: Bool
+    let fill: Color
+    let activeGlyph: Color
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.system(size: 16, weight: .bold))
+            .foregroundStyle(active ? activeGlyph : .white)
+            .contentTransition(.symbolEffect(.replace))
+            .frame(width: 52, height: 22)
+            .padding(.vertical, 13)
+            .background {
+                if active {
+                    Capsule().fill(fill)
+                }
+            }
+            .modifier(ConditionalWatchGlass(showGlass: !active))
+            .overlay {
+                if active {
+                    Capsule().stroke(Color.white.opacity(0.25), lineWidth: 0.5)
+                }
+            }
+            .shadow(color: active ? fill.opacity(0.45) : .clear, radius: 10, y: 2)
+    }
+}
+
+/// Reminder toggle for a game that hasn't started — glass at rest, solid
+/// white with a black glyph once armed, in the app's chip language.
+///
+/// The one thing on the detail page that reads `ScoreViewModel`, so it is the
+/// one thing that observes it: a score refresh re-renders this bell and
+/// nothing else on the card.
+struct ReminderBell: View {
+    let game: ESPNEvent
+    @ObservedObject var scoreViewModel: ScoreViewModel
+
+    var body: some View {
+        let isSet = scoreViewModel.reminderGameIDs.contains(game.id)
+        Button {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+                scoreViewModel.toggleReminder(game)
+            }
+        } label: {
+            DetailPillIcon(systemName: isSet ? "bell.fill" : "bell",
+                           active: isSet, fill: .white, activeGlyph: .black)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 struct WatchButtonGlass: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {

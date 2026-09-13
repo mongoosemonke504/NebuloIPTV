@@ -333,14 +333,17 @@ final class GameDetailViewModel: ObservableObject {
             let fetched = try await Self.fetchSummary(url: url)
             summary = fetched
             GameSummaryStore.shared.store(fetched, for: request.game.id)
-            failed = false
+            // Every publish here re-renders the whole card — lineups, shot
+            // map, momentum chart and all — so a flag that is already right
+            // is left alone rather than re-announced on each 30-second poll.
+            if failed { failed = false }
             prefetchPlayerImages()
             resolveSoccerHeadshots()
             recomputeTopRatedPlayer()
         } catch {
-            if summary == nil { failed = true }
+            if summary == nil, !failed { failed = true }
         }
-        isLoading = false
+        if isLoading { isLoading = false }
     }
 
     /// The single best-rated player across BOTH teams — the only one whose
@@ -366,7 +369,7 @@ final class GameDetailViewModel: ObservableObject {
                 }
             }
         }
-        topRatedPlayerID = best?.id
+        if topRatedPlayerID != best?.id { topRatedPlayerID = best?.id }
     }
 
     private var didPrefetchImages = false
@@ -779,16 +782,26 @@ final class GameDetailViewModel: ObservableObject {
                     }
                 }
                 guard let self else { return }
+                // ONE write per dictionary per batch. Writing each player's
+                // photo and age as it was found published the model up to
+                // eight times a batch — and every publish re-renders the
+                // whole card, formation pitch included, every two seconds
+                // for the first half-minute a soccer card is open. That is
+                // the stutter while scrolling a freshly opened game.
+                var headshots = self.resolvedHeadshots
+                var ages = self.resolvedAges
                 for (id, info) in found {
                     self.lookupCompleted.insert(id)
                     if !info.url.isEmpty {
-                        self.resolvedHeadshots[id] = info.url
+                        headshots[id] = info.url
                         Task { _ = await ImageCache.shared.image(forKey: info.url) }
                     }
                     if let age = SoccerHeadshotService.age(fromBorn: info.born) {
-                        self.resolvedAges[id] = age
+                        ages[id] = age
                     }
                 }
+                if headshots != self.resolvedHeadshots { self.resolvedHeadshots = headshots }
+                if ages != self.resolvedAges { self.resolvedAges = ages }
                 if index < targets.count {
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
                 }

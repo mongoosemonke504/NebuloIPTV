@@ -177,7 +177,9 @@ final class MMADetailViewModel: ObservableObject {
 /// method for completed bouts.
 struct MMADetailContentView: View {
     let request: GameDetailRequest
-    @ObservedObject var viewModel: ChannelViewModel
+    /// Called from this body (the stream search), never read — so not
+    /// observed. See the note on `GameDetailContentView.viewModel`.
+    let viewModel: ChannelViewModel
     let accentColor: Color
 
     @StateObject private var detail: MMADetailViewModel
