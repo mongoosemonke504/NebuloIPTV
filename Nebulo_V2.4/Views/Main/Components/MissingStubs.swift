@@ -666,14 +666,7 @@ struct SearchView: View {
                     .font(.title3.weight(.bold))
                     .foregroundStyle(.white)
                 ForEach(shown) { hit in
-                    SearchFavoritableRow(
-                        hit: hit,
-                        isFavorite: svm.isFavorite(hit),
-                        onToggle: {
-                            guard SwipeTapGuard.tapsAllowed else { return }
-                            svm.toggleFavorite(hit)
-                        }
-                    )
+                    SearchFavoritableRow(hit: hit, scoreViewModel: svm)
                 }
             }
         }

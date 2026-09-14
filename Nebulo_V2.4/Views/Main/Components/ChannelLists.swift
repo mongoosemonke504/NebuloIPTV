@@ -1140,11 +1140,26 @@ struct SpotlightItem: Identifiable {
 /// mark, two lines of text, and a trailing control.
 struct SearchFavoritableRow: View {
     let hit: ScoreViewModel.FavoritableHit
-    let isFavorite: Bool
-    let onToggle: () -> Void
+    /// Observed HERE, by the row, not by the search screen. The screen holds
+    /// the model without watching it — a score refresh must not rebuild the
+    /// search page — so it never re-rendered its rows when a favourite
+    /// changed: a tap saved the team and showed nothing, which read as the
+    /// tap not registering. Each row watches for itself, the way the game
+    /// card's reminder bell does.
+    @ObservedObject var scoreViewModel: ScoreViewModel
+    /// Bumped on a FOLLOW, so the heart bounces in; letting go gets the
+    /// plain swap back to the plus.
+    @State private var followPulse = 0
 
     var body: some View {
-        Button(action: onToggle) {
+        let isFavorite = scoreViewModel.isFavorite(hit)
+        Button {
+            guard SwipeTapGuard.tapsAllowed else { return }
+            if !isFavorite { followPulse += 1 }
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
+                scoreViewModel.toggleFavorite(hit)
+            }
+        } label: {
             HStack(spacing: 12) {
                 FavoriteSquareLogo(
                     logo: hit.logo,
@@ -1162,6 +1177,7 @@ struct SearchFavoritableRow: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .contentTransition(.opacity)
                 }
 
                 Spacer()
@@ -1169,11 +1185,12 @@ struct SearchFavoritableRow: View {
                 Image(systemName: isFavorite ? "heart.fill" : "plus.circle")
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(isFavorite ? Color.pink : Color.white.opacity(0.7))
+                    .contentTransition(.symbolEffect(.replace))
+                    .symbolEffect(.bounce, value: followPulse)
             }
             .padding(.vertical, 8)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .animation(.easeOut(duration: 0.18), value: isFavorite)
     }
 }
