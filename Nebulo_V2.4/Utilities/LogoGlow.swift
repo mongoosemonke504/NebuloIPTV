@@ -142,13 +142,23 @@ enum LogoGlow {
         return abs(mean.lum - luminance(field)) < 0.16 && distance < 0.38
     }
 
-    /// The tile behind a club crest: nil for the brand colour, or — when the
-    /// crest would vanish on it — the tile the channel cards give the same
-    /// artwork, which is chosen for contrast against it (light for a dark
-    /// mark, charcoal for a white one, a deep slab of its hue otherwise).
-    static func crestTile(logo: String?, brand hex: String?) -> Color? {
-        guard blends(logo: logo, on: hex) else { return nil }
-        return tone(for: logo)
+    /// The plate a lost crest is set on, inside its brand tile: pale for a
+    /// dark or a saturated mark, near-black for a pale one.
+    ///
+    /// A plate, not a different tile. The first fix swapped the whole tile
+    /// for the channel cards' "tone" — a deep slab of the mark's own hue —
+    /// which is right for a white channel logo with a coloured accent and
+    /// wrong for a solid mid-tone mark: the Longhorns' burnt orange on a
+    /// dark burnt orange was better, and still lost. The tile keeps the
+    /// club's colour; the crest sits on a plate it cannot vanish into.
+    static func plateIsPale(forLogo icon: String?) -> Bool {
+        guard let mean = mean(for: icon) else { return true }
+        return mean.lum < 0.6
+    }
+
+    /// The plate colour itself — see `plateIsPale`.
+    static func plate(forLogo icon: String?) -> Color {
+        plateIsPale(forLogo: icon) ? Color.white.opacity(0.94) : Color(white: 0.12)
     }
 
     /// Whether a field colour is dark enough that a light backplate is what
