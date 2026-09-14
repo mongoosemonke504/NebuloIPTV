@@ -53,10 +53,17 @@ struct TeamDetailPage: View {
     @State private var headerScroll = ScrollProgress()
     /// Measured height of the floating header (hero + chip row). Each page
     /// reserves exactly this at its top.
-    @State private var headerHeight: CGFloat = 0
+    /// Seeded with what the chrome comes to — the hero plus the chip row —
+    /// rather than zero, so the pages' reserve is right on the very first
+    /// frame; the measurement then only corrects it by a point or two.
+    /// Started at zero, the content sat under the hero for a frame and then
+    /// jumped down by the header's whole height — mid-push.
+    @State private var headerHeight: CGFloat = UIScreen.main.bounds.height * 0.47 + 50
     /// The top content inset the pages' scroll views apply on their own —
     /// see the reserve in `tabPage`.
-    @State private var pageInsetTop: CGFloat = 0
+    /// Seeded with the status-bar inset, which is what the pager's controller
+    /// applies to every page — see `tabPage`.
+    @State private var pageInsetTop: CGFloat = WindowInsets.top
 
     /// Points of scroll over which the header collapses: the big title hands
     /// over to the compact one, and the chip row's scrim ramps in.
@@ -194,8 +201,16 @@ struct TeamDetailPage: View {
 
     /// Tabs with nothing behind them are dropped rather than opening empty —
     /// plenty of competitions have no table, and some sports no roster.
+    ///
+    /// Every tab while the page is still loading, though. Nearly every team
+    /// has all five, and deciding from the data in hand meant the row opened
+    /// as one chip — Overview, the full width — and split into five a beat
+    /// later, as the page was still arriving; the row rebuilding itself was
+    /// the thing that read as the tabs arriving separately from the page. A
+    /// tab that turns out to be empty is dropped once, after the load.
     private var availableTabs: [Tab] {
         Tab.allCases.filter { t in
+            if loading { return true }
             switch t {
             case .overview: return true
             case .matches:  return !allGames.isEmpty
@@ -568,7 +583,7 @@ struct TeamDetailPage: View {
         // preferences do not reliably cross that.
         .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geo in
             let scrolled = geo.contentOffset.y + geo.contentInsets.top
-            if geo.contentInsets.top != pageInsetTop { pageInsetTop = geo.contentInsets.top }
+            if geo.contentInsets.top != pageInsetTop { withoutAnimation { pageInsetTop = geo.contentInsets.top } }
             tabDepths.values[t] = scrolled
             // Only the page you are on drives the header; the neighbours are
             // mounted and reporting too.
@@ -593,8 +608,8 @@ struct TeamDetailPage: View {
         .background(
             GeometryReader { g in
                 Color.clear
-                    .onAppear { headerHeight = g.size.height }
-                    .onChangeCompat(of: g.size.height) { headerHeight = $0 }
+                    .onAppear { withoutAnimation { headerHeight = g.size.height } }
+                    .onChangeCompat(of: g.size.height) { h in withoutAnimation { headerHeight = h } }
             }
         )
         .modifier(HeaderSlide(offset: headerScroll, limit: headerTravel))

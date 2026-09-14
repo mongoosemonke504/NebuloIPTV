@@ -643,6 +643,33 @@ final class ValueBox<Value> {
     init(_ value: Value) { self.value = value }
 }
 
+/// The key window's top safe-area inset — the status bar, or the band the
+/// Dynamic Island sits in. For screens that ignore the top safe area (so a
+/// hero can bleed behind it) and add it back by hand where they need it.
+enum WindowInsets {
+    @MainActor static var top: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow }
+            .first?.safeAreaInsets.top ?? 0
+    }
+}
+
+/// Runs `body` with animations off, whatever transaction is in flight.
+///
+/// For MEASUREMENTS. A view's first `onAppear` runs inside the transaction
+/// that inserted it — for a detail page, the push's own animated one — so a
+/// measured height written there was tweened: the content of the team page
+/// slid down from under its header over the same 0.3s the page slid in from
+/// the side, and the two motions read as the tabs arriving separately from
+/// the page. A measurement describes where something already is; nothing
+/// about it should move.
+@MainActor
+func withoutAnimation(_ body: () -> Void) {
+    var transaction = Transaction()
+    transaction.disablesAnimations = true
+    withTransaction(transaction, body)
+}
+
 struct GlassEffect: ViewModifier {
     let cornerRadius: CGFloat
     let isSelected: Bool

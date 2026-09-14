@@ -236,9 +236,16 @@ struct LeagueDetailPage: View {
     /// LEAF, so a scroll frame moves the header and re-renders nothing else.
     @State private var headerScroll = ScrollProgress()
     /// Measured height of the floating header (hero + chip row).
-    @State private var headerHeight: CGFloat = 0
+    /// Seeded with what the chrome comes to — the hero plus the chip row —
+    /// rather than zero, so the pages' reserve is right on the very first
+    /// frame; the measurement then only corrects it by a point or two.
+    /// Started at zero, the content sat under the hero for a frame and then
+    /// jumped down by the header's whole height — mid-push.
+    @State private var headerHeight: CGFloat = UIScreen.main.bounds.height * 0.42 + 59
     /// The top inset the pages' scroll views apply on their own.
-    @State private var pageInsetTop: CGFloat = 0
+    /// Seeded with the status-bar inset, which is what the pager's controller
+    /// applies to every page — see `tabPage`.
+    @State private var pageInsetTop: CGFloat = WindowInsets.top
 
     private static let dateFmt: DateFormatter = {
         let f = DateFormatter(); f.dateStyle = .medium; f.timeStyle = .short; return f
@@ -425,7 +432,7 @@ struct LeagueDetailPage: View {
         .scrollLocked(DetailRouter.shared.dragLock)
         .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geo in
             let scrolled = geo.contentOffset.y + geo.contentInsets.top
-            if geo.contentInsets.top != pageInsetTop { pageInsetTop = geo.contentInsets.top }
+            if geo.contentInsets.top != pageInsetTop { withoutAnimation { pageInsetTop = geo.contentInsets.top } }
             tabDepths.values[t] = scrolled
             // Only the page you are on drives the header; the neighbours are
             // mounted and reporting too.
@@ -467,8 +474,8 @@ struct LeagueDetailPage: View {
         .background(
             GeometryReader { g in
                 Color.clear
-                    .onAppear { headerHeight = g.size.height }
-                    .onChangeCompat(of: g.size.height) { headerHeight = $0 }
+                    .onAppear { withoutAnimation { headerHeight = g.size.height } }
+                    .onChangeCompat(of: g.size.height) { h in withoutAnimation { headerHeight = h } }
             }
         )
         .modifier(HeaderSlide(offset: headerScroll, limit: headerHeight))
@@ -563,8 +570,10 @@ struct LeagueDetailPage: View {
         var tabs: [Tab] = liveGames.isEmpty ? [] : [.live]
         guard isSeries else { return tabs + [.table, .fixtures, .results] }
         tabs.append(.schedule)
-        if !(season?.standings.isEmpty ?? true) { tabs.append(.drivers) }
-        if !(season?.constructors.isEmpty ?? true) { tabs.append(.constructors) }
+        // Both while loading — the row must not rebuild itself as the page
+        // arrives; an empty one is dropped once, after.
+        if loading || !(season?.standings.isEmpty ?? true) { tabs.append(.drivers) }
+        if loading || !(season?.constructors.isEmpty ?? true) { tabs.append(.constructors) }
         return tabs
     }
 

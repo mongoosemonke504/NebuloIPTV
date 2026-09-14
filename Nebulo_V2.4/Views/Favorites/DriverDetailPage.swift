@@ -36,9 +36,16 @@ struct DriverDetailPage: View {
     /// Live scroll depth of the ACTIVE page, driving the header slide.
     @State private var headerScroll = ScrollProgress()
     /// Measured height of the floating header (hero + chip row).
-    @State private var headerHeight: CGFloat = 0
+    /// Seeded with what the chrome comes to — the hero plus the chip row —
+    /// rather than zero, so the pages' reserve is right on the very first
+    /// frame; the measurement then only corrects it by a point or two.
+    /// Started at zero, the content sat under the hero for a frame and then
+    /// jumped down by the header's whole height — mid-push.
+    @State private var headerHeight: CGFloat = UIScreen.main.bounds.height * 0.47 + 50
     /// The top inset the pages' scroll views apply on their own.
-    @State private var pageInsetTop: CGFloat = 0
+    /// Seeded with the status-bar inset, which is what the pager's controller
+    /// applies to every page — see `tabPage`.
+    @State private var pageInsetTop: CGFloat = WindowInsets.top
 
     /// Points of scroll the header collapse runs over — see the team page.
     private static let handoverSpan: CGFloat = 90
@@ -89,8 +96,11 @@ struct DriverDetailPage: View {
         return parts
     }
 
+    /// Every tab while loading, for the reason the team page gives: the row
+    /// must not rebuild itself as the page arrives.
     private var availableTabs: [Tab] {
         Tab.allCases.filter { t in
+            if loading { return true }
             switch t {
             case .overview:  return true
             case .season:    return !rounds.isEmpty
@@ -345,7 +355,7 @@ struct DriverDetailPage: View {
         .scrollLocked(DetailRouter.shared.dragLock)
         .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geo in
             let scrolled = geo.contentOffset.y + geo.contentInsets.top
-            if geo.contentInsets.top != pageInsetTop { pageInsetTop = geo.contentInsets.top }
+            if geo.contentInsets.top != pageInsetTop { withoutAnimation { pageInsetTop = geo.contentInsets.top } }
             tabDepths.values[t] = scrolled
             // Only the page you are on drives the header; the neighbours are
             // mounted and reporting too.
@@ -367,8 +377,8 @@ struct DriverDetailPage: View {
         .background(
             GeometryReader { g in
                 Color.clear
-                    .onAppear { headerHeight = g.size.height }
-                    .onChangeCompat(of: g.size.height) { headerHeight = $0 }
+                    .onAppear { withoutAnimation { headerHeight = g.size.height } }
+                    .onChangeCompat(of: g.size.height) { h in withoutAnimation { headerHeight = h } }
             }
         )
         .modifier(HeaderSlide(offset: headerScroll, limit: headerTravel))
