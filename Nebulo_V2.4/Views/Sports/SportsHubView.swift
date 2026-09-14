@@ -66,15 +66,44 @@ private struct CollapsibleSection<Content: View>: View {
     /// nothing to keep folded.
     @State private var rendered: Bool = true
 
+    /// The rows are present while open, and while folding until the roll-up
+    /// has finished.
+    private var showsRows: Bool { rendered || !collapsed }
+
     var body: some View {
-        Group {
-            if naturalHeight > 0 {
-                body(height: collapsed ? 0 : naturalHeight)
-            } else {
-                // First pass, before anything has been measured.
-                body(height: nil)
-            }
+        // Folded is zero whether or not the height has been measured yet.
+        //
+        // A section that MOUNTS folded — the hub rebuilt after a spell
+        // elsewhere in the app, a page scrolled back into a lazy stack — used
+        // to take the "not measured yet" path, which is the rows at their
+        // natural height: drawn at opacity 0, never measured (measuring only
+        // ran while open), and never dropped (that only ran on a change). A
+        // league's worth of blank space under every collapsed header.
+        let height: CGFloat? = collapsed ? 0 : (naturalHeight > 0 ? naturalHeight : nil)
+        VStack(spacing: 12) {
+            if showsRows { content() }
         }
+        // Lets the rows settle at their own height ONCE, so the animating
+        // frame below clips them rather than re-proposing a new height to
+        // every row on every frame — which is what made the fold stutter.
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            GeometryReader { g in
+                Color.clear
+                    .onAppear { learn(g.size.height) }
+                    .onChangeCompat(of: g.size.height) { learn($0) }
+            }
+        )
+        // Two interpolatable numbers. The previous version animated to `nil`,
+        // which SwiftUI cannot tween at all — it fell back to re-measuring the
+        // section every frame, which is why the fold ran rough. (`nil` still
+        // appears here, but only for an OPEN section on its first, unmeasured
+        // pass — and a measured value replaces it at the same size.)
+        .frame(height: height, alignment: .top)
+        .clipped()
+        .opacity(collapsed ? 0 : 1)
+        .allowsHitTesting(!collapsed)
         .onChangeCompat(of: collapsed) { isCollapsed in
             if isCollapsed {
                 DispatchQueue.main.asyncAfter(deadline: .now() + SectionFold.seconds) {
@@ -86,34 +115,16 @@ private struct CollapsibleSection<Content: View>: View {
         }
     }
 
-    private func body(height: CGFloat?) -> some View {
-        VStack(spacing: 12) {
-            if rendered || !collapsed { content() }
-        }
-        // Lets the rows settle at their own height ONCE, so the animating
-        // frame below clips them rather than re-proposing a new height to
-        // every row on every frame — which is what made the fold stutter.
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            GeometryReader { g in
-                Color.clear
-                    .onAppear { if !collapsed { naturalHeight = g.size.height } }
-                    .onChangeCompat(of: g.size.height) { h in
-                        // Only ever learn the height while OPEN; measuring the
-                        // clipped state would record zero and the section
-                        // could never open again.
-                        if !collapsed, h > 0 { naturalHeight = h }
-                    }
-            }
-        )
-        // Two interpolatable numbers. The previous version animated to `nil`,
-        // which SwiftUI cannot tween at all — it fell back to re-measuring the
-        // section every frame, which is why the fold ran rough.
-        .frame(height: height, alignment: .top)
-        .clipped()
-        .opacity(collapsed ? 0 : 1)
-        .allowsHitTesting(!collapsed)
+    /// Records the rows' natural height. The measuring `.background` sits
+    /// INSIDE the animating frame, so it reads the rows' own size whatever
+    /// the frame is doing; the one reading to ignore is zero, which only
+    /// means the rows are not in the tree. A section that mounted folded is
+    /// measured on this hidden first pass and then drops its rows — so it
+    /// costs nothing folded, and still knows how far to roll open.
+    private func learn(_ h: CGFloat) {
+        guard showsRows, h > 0 else { return }
+        naturalHeight = h
+        if collapsed { rendered = false }
     }
 }
 
