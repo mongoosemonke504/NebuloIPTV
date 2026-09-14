@@ -840,9 +840,11 @@ struct FavoriteBadge: View {
             ZStack(alignment: .bottom) {
                 Group {
                     if let logo, !logo.isEmpty {
-                        CachedAsyncImage(urlString: logo,
-                                         size: CGSize(width: 58, height: 58),
-                                         failurePlaceholder: AnyView(initialsTile))
+                        // On a plate when the crest is the card's own colour
+                        // — the Longhorns' burnt orange on burnt orange was
+                        // an empty card. See `TeamCrest`.
+                        TeamCrest(logo: logo, size: 58, fieldHex: colorHex,
+                                  failurePlaceholder: AnyView(initialsTile))
                     } else {
                         // No crest to draw. Without this the tile was empty
                         // apart from its caption — a favourite that looked as

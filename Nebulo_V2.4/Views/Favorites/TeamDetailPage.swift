@@ -106,10 +106,13 @@ struct TeamDetailPage: View {
         profile?.displayName ?? team.displayName ?? team.shortDisplayName ?? "Team"
     }
 
+    /// The brand colour's hex, for the crest's contrast test — see `hero`.
+    private var brandHex: String? { profile?.color ?? team.color }
+
     /// The team's brand colour: ESPN's team profile first (it carries the real
     /// hex), then whatever the scoreboard attached, then a neutral slate.
     private var brand: Color {
-        let hex = profile?.color ?? team.color
+        let hex = brandHex
         guard let hex, !hex.isEmpty,
               let c = Color(hex: hex.hasPrefix("#") ? hex : "#\(hex)") else {
             return Color(white: 0.20)
@@ -379,8 +382,10 @@ struct TeamDetailPage: View {
                     startRadius: 0,
                     endRadius: 260
                 )
-                CachedAsyncImage(urlString: logo ?? "", size: nil)
-                    .frame(maxWidth: 150, maxHeight: 150)
+                // The crest sits on a field of its own colour here, so a
+                // one-colour mark gets a pool of light behind it — see
+                // `TeamCrest`.
+                TeamCrest(logo: logo ?? "", size: 150, fieldHex: brandHex)
                     .offset(y: -heroHeight * 0.13)
                     .shadow(color: .black.opacity(0.45), radius: 14, x: 0, y: 5)
             }

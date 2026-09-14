@@ -1333,6 +1333,8 @@ struct TeamCrest: View {
     let size: CGFloat
     /// The colour under the crest — the club's own, usually.
     let fieldHex: String?
+    /// Shown in the crest's place once its fetch has definitively failed.
+    var failurePlaceholder: AnyView? = nil
     @State private var sampled = false
 
     var body: some View {
@@ -1358,7 +1360,8 @@ struct TeamCrest: View {
             }
             // Inset on its plate; full size otherwise.
             let crest = lost && size < 80 ? size * 0.8 : size
-            CachedAsyncImage(urlString: logo, size: CGSize(width: crest, height: crest))
+            CachedAsyncImage(urlString: logo, size: CGSize(width: crest, height: crest),
+                             failurePlaceholder: failurePlaceholder)
         }
         .frame(width: size, height: size)
         .task(id: logo) {
