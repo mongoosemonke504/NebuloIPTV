@@ -1274,16 +1274,28 @@ struct FavoriteSquareLogo: View {
     let logo: String?
     let abbreviation: String
     let color: String?
+    /// Flipped once the crest has been sampled, so a tile that started on
+    /// the brand colour can switch to a contrasting one.
+    @State private var sampled = false
 
-    private var fallbackColor: Color {
+    private var brandColor: Color {
         guard let hex = color, !hex.isEmpty else { return Color.white.opacity(0.18) }
         return Color(hex: hex.hasPrefix("#") ? hex : "#\(hex)") ?? Color.white.opacity(0.18)
+    }
+
+    /// The brand colour — unless the crest would vanish on it. Some clubs'
+    /// marks are one flat colour, and that colour IS the brand colour: a
+    /// black crest on a black tile, a red one on red. Those get the tile the
+    /// channel cards would give the same artwork, chosen for contrast
+    /// against it. See `LogoGlow.crestTile`.
+    private var fill: Color {
+        LogoGlow.crestTile(logo: logo, brand: color) ?? brandColor
     }
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(fallbackColor)
+                .fill(fill)
             if let logo = logo, !logo.isEmpty {
                 CachedAsyncImage(urlString: logo)
                     .padding(6)
@@ -1295,6 +1307,45 @@ struct FavoriteSquareLogo: View {
         }
         .frame(width: 56, height: 56)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .task(id: logo ?? "") {
+            // Only a crest on a brand tile can be lost; nothing to learn
+            // otherwise, and nothing to do once the sample is in.
+            guard let logo, !logo.isEmpty, color != nil, LogoGlow.mean(for: logo) == nil else { return }
+            await LogoGlow.sampleIfNeeded(logo)
+            sampled = true
+        }
+    }
+}
+
+/// A club crest over a field of colour — a tile, a wash, one side of a split
+/// — with a soft backplate behind it whenever the crest would otherwise
+/// vanish into that field (see `LogoGlow.blends`). Light behind a crest on a
+/// dark field, dark on a light one; nothing at all for the crests that read
+/// on their own, which is nearly all of them.
+struct TeamCrest: View {
+    let logo: String
+    let size: CGFloat
+    /// The colour under the crest — the club's own, usually.
+    let fieldHex: String?
+    @State private var sampled = false
+
+    var body: some View {
+        ZStack {
+            if LogoGlow.blends(logo: logo, on: fieldHex) {
+                let dark = LogoGlow.isDark(hex: fieldHex)
+                SoftGlow(color: dark ? .white : .black,
+                         opacity: dark ? 0.55 : 0.5,
+                         radius: size * 0.34,
+                         softness: size * 0.3)
+            }
+            CachedAsyncImage(urlString: logo, size: CGSize(width: size, height: size))
+        }
+        .frame(width: size, height: size)
+        .task(id: logo) {
+            guard !logo.isEmpty, fieldHex != nil, LogoGlow.mean(for: logo) == nil else { return }
+            await LogoGlow.sampleIfNeeded(logo)
+            sampled = true
+        }
     }
 }
 

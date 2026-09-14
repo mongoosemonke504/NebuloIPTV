@@ -19,6 +19,15 @@ enum LogoGlow {
     /// still reads over a pale field.
     static var lightToneIcons: Set<String> = []
 
+    /// What a logo's artwork actually reads as: the mean of its opaque
+    /// pixels, un-brightened, and that colour's luminance.
+    struct LogoMean {
+        let r: Double, g: Double, b: Double
+        let lum: Double
+    }
+    /// Per logo URL, filled in alongside the glow.
+    static var meanCache: [String: LogoMean] = [:]
+
     /// Resolves the glow colour for a logo. Returns the cached value instantly,
     /// otherwise waits (briefly) for the logo to land in the image cache and
     /// samples it. Returns nil when there's no logo or it never decodes.
@@ -57,6 +66,8 @@ enum LogoGlow {
                     cache[icon] = c
                     toneCache[icon] = Color(sample.tone)
                     if sample.isLightTone { lightToneIcons.insert(icon) }
+                    meanCache[icon] = LogoMean(r: sample.mean.r, g: sample.mean.g, b: sample.mean.b,
+                                               lum: sample.meanLuminance)
                     return c
                 }
                 try? await Task.sleep(nanoseconds: 250_000_000)
@@ -83,6 +94,77 @@ enum LogoGlow {
         guard let icon, !icon.isEmpty else { return false }
         return lightToneIcons.contains(icon)
     }
+
+    // MARK: Crests on a field of their own colour
+
+    /// The logo's mean colour, or nil until it has been sampled.
+    static func mean(for icon: String?) -> LogoMean? {
+        guard let icon, !icon.isEmpty else { return nil }
+        return meanCache[icon]
+    }
+
+    /// "#RRGGBB" or "RRGGBB" — the form ESPN's team colours arrive in.
+    nonisolated static func rgb(hex: String?) -> (r: Double, g: Double, b: Double)? {
+        guard let raw = hex?.trimmingCharacters(in: CharacterSet(charactersIn: "# ")),
+              raw.count == 6 else { return nil }
+        var v: UInt64 = 0
+        guard Scanner(string: raw).scanHexInt64(&v) else { return nil }
+        return (Double((v & 0xFF0000) >> 16) / 255,
+                Double((v & 0x00FF00) >> 8) / 255,
+                Double(v & 0x0000FF) / 255)
+    }
+
+    nonisolated static func luminance(_ c: (r: Double, g: Double, b: Double)) -> Double {
+        0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
+    }
+
+    /// True when a logo drawn on a field of this colour would be lost in it.
+    ///
+    /// Some clubs' marks are one flat colour, and that colour is the club's
+    /// brand colour — the one every tile, wash and split behind the crest is
+    /// painted with. A black crest on a black tile, a red one on red: the
+    /// artwork is there and cannot be seen. A mark of several colours averages
+    /// to something the field is not, so this only fires for the marks that
+    /// really do disappear: close in brightness AND close in colour. A pure
+    /// red crest on a navy field is as dark as the field and still reads by
+    /// hue, so brightness alone is not the test.
+    ///
+    /// False until the logo has been sampled, or when there is no field
+    /// colour to lose it against.
+    static func blends(logo: String?, on hex: String?) -> Bool {
+        guard let mean = mean(for: logo), let field = rgb(hex: hex) else { return false }
+        return blends(mean, on: field)
+    }
+
+    nonisolated static func blends(_ mean: LogoMean, on field: (r: Double, g: Double, b: Double)) -> Bool {
+        let dr = mean.r - field.r, dg = mean.g - field.g, db = mean.b - field.b
+        let distance = (dr * dr + dg * dg + db * db).squareRoot()
+        return abs(mean.lum - luminance(field)) < 0.16 && distance < 0.38
+    }
+
+    /// The tile behind a club crest: nil for the brand colour, or — when the
+    /// crest would vanish on it — the tile the channel cards give the same
+    /// artwork, which is chosen for contrast against it (light for a dark
+    /// mark, charcoal for a white one, a deep slab of its hue otherwise).
+    static func crestTile(logo: String?, brand hex: String?) -> Color? {
+        guard blends(logo: logo, on: hex) else { return nil }
+        return tone(for: logo)
+    }
+
+    /// Whether a field colour is dark enough that a light backplate is what
+    /// lifts a crest off it (rather than a dark one).
+    nonisolated static func isDark(hex: String?) -> Bool {
+        guard let field = rgb(hex: hex) else { return true }
+        return luminance(field) < 0.5
+    }
+
+    /// Samples a crest if it hasn't been yet, so `blends`/`crestTile` can
+    /// answer. Waits for the artwork to land in the image cache the way the
+    /// glow does; nothing to do once the answer is known.
+    static func sampleIfNeeded(_ icon: String?) async {
+        guard let icon, !icon.isEmpty, meanCache[icon] == nil else { return }
+        _ = await color(for: icon)
+    }
 }
 
 /// What one pass over a logo yields: the bright colour used for glows and
@@ -98,6 +180,10 @@ nonisolated struct BrandSample {
     let tone: UIColor
     /// The tone came out pale, because the logo is dark.
     let isLightTone: Bool
+    /// The raw mean of the opaque pixels, before the glow is brightened —
+    /// what the artwork reads as, for `LogoGlow.blends`.
+    let mean: (r: Double, g: Double, b: Double)
+    let meanLuminance: Double
 }
 
 extension UIImage {
@@ -158,6 +244,7 @@ extension UIImage {
         guard allN > 0 else { return nil }
 
         let useSat = satN >= max(4, allN * 0.05)
+        let mean = (r: allR / allN, g: allG / allN, b: allB / allN)
         var r = useSat ? satR / satN : allR / allN
         var g = useSat ? satG / satN : allG / allN
         var b = useSat ? satB / satN : allB / allN
@@ -194,7 +281,9 @@ extension UIImage {
         if mx > 0, mx < 0.55 { let k = 0.55 / mx; r *= k; g *= k; b *= k }
         return BrandSample(glow: UIColor(red: r, green: g, blue: b, alpha: 1),
                            tone: tone,
-                           isLightTone: isLightTone)
+                           isLightTone: isLightTone,
+                           mean: mean,
+                           meanLuminance: lum)
     }
 }
 

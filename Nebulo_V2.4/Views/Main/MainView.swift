@@ -325,8 +325,8 @@ struct NowPlayingMatchupArt: View {
             // Each crest centred in its own half, so neither crosses the seam
             // onto the other club's colour.
             HStack(spacing: 0) {
-                crest(awayCrest)
-                crest(homeCrest)
+                crest(awayCrest, fieldHex: game.awayCompetitor?.team?.color)
+                crest(homeCrest, fieldHex: game.homeCompetitor?.team?.color)
             }
 
             // The same soft floor the card has, so a pale kit never leaves the
@@ -341,13 +341,31 @@ struct NowPlayingMatchupArt: View {
         }
     }
 
+    /// Whether this crest would vanish into its own half. The image is in
+    /// hand, so it is sampled right here (a 16x16 pass) rather than through
+    /// the async cache the on-screen crests use.
+    private func crestBlends(_ image: UIImage, on hex: String?) -> Bool {
+        guard let field = LogoGlow.rgb(hex: hex), let sample = image.brandSample() else { return false }
+        let mean = LogoGlow.LogoMean(r: sample.mean.r, g: sample.mean.g, b: sample.mean.b, lum: sample.meanLuminance)
+        return LogoGlow.blends(mean, on: field)
+    }
+
     @ViewBuilder
-    private func crest(_ image: UIImage?) -> some View {
+    private func crest(_ image: UIImage?, fieldHex: String?) -> some View {
         Group {
             if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
+                ZStack {
+                    if crestBlends(image, on: fieldHex) {
+                        let dark = LogoGlow.isDark(hex: fieldHex)
+                        SoftGlow(color: dark ? .white : .black,
+                                 opacity: dark ? 0.55 : 0.5,
+                                 radius: edge * 0.32 * 0.34,
+                                 softness: edge * 0.32 * 0.3)
+                    }
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                }
             } else {
                 Color.clear
             }
@@ -3333,13 +3351,11 @@ struct MatchupHeroContent: View {
                 // they bleed slightly off each edge and everything else
                 // (score, names, pills) reads over them.
                 HStack {
-                    CachedAsyncImage(urlString: away?.team?.logo ?? "",
-                                     size: CGSize(width: 150, height: 150))
+                    TeamCrest(logo: away?.team?.logo ?? "", size: 150, fieldHex: away?.team?.color)
                         .opacity(0.55)
                         .offset(x: -18)
                     Spacer()
-                    CachedAsyncImage(urlString: home?.team?.logo ?? "",
-                                     size: CGSize(width: 150, height: 150))
+                    TeamCrest(logo: home?.team?.logo ?? "", size: 150, fieldHex: home?.team?.color)
                         .opacity(0.55)
                         .offset(x: 18)
                 }
@@ -3739,12 +3755,12 @@ struct LiveGameCard: View {
             // the width, home at three quarters — so neither one crosses the
             // diagonal onto the other club's colour. Centring them as a pair
             // put the away crest right on the seam.
+            // Each crest sits on a solid field of ITS OWN club's colour here,
+            // so a one-colour mark gets a backplate — see `TeamCrest`.
             HStack(spacing: 0) {
-                CachedAsyncImage(urlString: awayLogo, size: CGSize(width: 46, height: 46))
-                    .frame(width: 46, height: 46)
+                TeamCrest(logo: awayLogo, size: 46, fieldHex: game.awayCompetitor?.team?.color)
                     .frame(maxWidth: .infinity)
-                CachedAsyncImage(urlString: homeLogo, size: CGSize(width: 46, height: 46))
-                    .frame(width: 46, height: 46)
+                TeamCrest(logo: homeLogo, size: 46, fieldHex: game.homeCompetitor?.team?.color)
                     .frame(maxWidth: .infinity)
             }
             .frame(width: Self.cardWidth, height: Self.cardHeight)
@@ -4637,11 +4653,9 @@ struct NuvioHeroBackdrop: View {
                         endPoint: UnitPoint(x: 0.28, y: 0.5)
                     )
                     HStack(spacing: 0) {
-                        CachedAsyncImage(urlString: away?.team?.logo ?? "",
-                                         size: CGSize(width: 150, height: 150))
+                        TeamCrest(logo: away?.team?.logo ?? "", size: 150, fieldHex: away?.team?.color)
                             .frame(maxWidth: .infinity)
-                        CachedAsyncImage(urlString: home?.team?.logo ?? "",
-                                         size: CGSize(width: 150, height: 150))
+                        TeamCrest(logo: home?.team?.logo ?? "", size: 150, fieldHex: home?.team?.color)
                             .frame(maxWidth: .infinity)
                     }
                     .padding(.horizontal, 16)
