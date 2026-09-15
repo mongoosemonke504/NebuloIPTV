@@ -68,6 +68,10 @@ struct MainView: SwiftUI.View {
 
     @State private var showQuickSwitcher = false
     @State private var showSupportAlert = false
+    /// The channel waiting on the second-connection warning below.
+    @State private var pendingSecondConnection: StreamChannel?
+    /// "Don't Warn Again" on that warning.
+    @AppStorage("suppressSecondConnectionWarning") private var suppressSecondConnectionWarning = false
     @State private var selectedRecording: Recording?
     @State private var isPlayerActive: Bool = false
     @Namespace private var zoomNS
@@ -115,6 +119,19 @@ struct MainView: SwiftUI.View {
         // inside the navigation stack, which re-establishes its own safe area.)
         // Multi-view's search bar is the case that exposed it.
         .ignoresSafeArea(.container)
+        .alert("Recording in Progress", isPresented: Binding(
+            get: { pendingSecondConnection != nil },
+            set: { if !$0 { pendingSecondConnection = nil } }
+        ), presenting: pendingSecondConnection) { channel in
+            Button("Watch Anyway") { openLive(channel) }
+            Button("Don't Warn Again") {
+                suppressSecondConnectionWarning = true
+                openLive(channel)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { channel in
+            Text(secondConnectionMessage(for: channel))
+        }
         .task { 
             if viewModel.channels.isEmpty { 
                 await viewModel.loadData(url: xstreamURL, user: username, pass: password, type: LoginType(rawValue: loginTypeRaw) ?? .xtream) 
@@ -989,13 +1006,33 @@ extension MainView {
             viewModel.addToMultiView(channel)
             viewModel.multiViewModeActive = false
             withAnimation(MainView.multiViewSlide) { showMultiView = true } 
-        } else { 
-            viewModel.addToRecent(channel.id)
-            viewModel.lastPlayedChannelID = channel.id
-            viewModel.lastSourceCategory = selectedCategory
-            selectedChannel = channel
+        } else if !suppressSecondConnectionWarning, viewModel.secondConnectionRisk(for: channel) {
+            // A recording holds a connection, and this stream would be a
+            // second one on a line that may allow only one — which is the
+            // stream failing to connect, or the recording being cut off,
+            // with nothing to say why. Ask first; the recording used to
+            // sidestep this by playing its own file instead of the stream.
+            pendingSecondConnection = channel
+        } else {
+            openLive(channel)
+        }
+    }
 
-        } 
+    /// The live-playback path proper, once any warning has been answered.
+    private func openLive(_ channel: StreamChannel) {
+        viewModel.addToRecent(channel.id)
+        viewModel.lastPlayedChannelID = channel.id
+        viewModel.lastSourceCategory = selectedCategory
+        selectedChannel = channel
+    }
+
+    /// The warning's wording: specific when the provider has said how many
+    /// streams the line allows, a caution when it hasn't.
+    private func secondConnectionMessage(for channel: StreamChannel) -> String {
+        if let limit = viewModel.connectionLimit(for: channel), limit <= 1 {
+            return "Your provider allows one stream at a time, and a recording is using it. Watching now may fail to connect, or cut the recording off."
+        }
+        return "A recording is running. If your provider allows only one stream at a time, watching now may fail to connect, or cut the recording off."
     }
     // Automatic must NOT flip to the sidebar layout on device rotation: the
     // home UI is portrait-only, and swapping the layout branch while a video

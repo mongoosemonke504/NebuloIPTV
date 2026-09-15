@@ -678,6 +678,63 @@ class ChannelViewModel: ObservableObject {
     }
     
     
+    // MARK: - Connection limit
+
+    /// How many streams each line may hold open at once, when its provider
+    /// says: Xtream's `user_info.max_connections`, keyed by account. An M3U
+    /// line never says. Read before the app opens a SECOND connection — a
+    /// live stream while a recording is running, which on a one-connection
+    /// line is one too many — so the warning can be specific where the
+    /// number is known and only a caution where it isn't.
+    @Published private(set) var connectionLimits: [UUID: Int] = ChannelViewModel.loadConnectionLimits()
+
+    private static let connectionLimitsKey = "connectionLimits"
+
+    private static func loadConnectionLimits() -> [UUID: Int] {
+        guard let data = UserDefaults.standard.data(forKey: connectionLimitsKey),
+              let decoded = try? JSONDecoder().decode([UUID: Int].self, from: data) else { return [:] }
+        return decoded
+    }
+
+    private func setConnectionLimit(_ limit: Int, for accountID: UUID) {
+        guard connectionLimits[accountID] != limit else { return }
+        connectionLimits[accountID] = limit
+        if let data = try? JSONEncoder().encode(connectionLimits) {
+            UserDefaults.standard.set(data, forKey: Self.connectionLimitsKey)
+        }
+    }
+
+    /// The limit for the line a channel comes from, or nil when its provider
+    /// never said.
+    func connectionLimit(for channel: StreamChannel) -> Int? {
+        guard let id = channel.accountID else { return nil }
+        return connectionLimits[id]
+    }
+
+    /// Whether playing this channel now would put a second stream on a line
+    /// that may not allow one: a recording is running, and the line is either
+    /// known to allow a single connection or has never said. A line known to
+    /// allow more is never warned about.
+    func secondConnectionRisk(for channel: StreamChannel) -> Bool {
+        guard RecordingManager.shared.recordings.contains(where: { $0.status == .recording }) else { return false }
+        guard let limit = connectionLimit(for: channel) else { return true }
+        return limit <= 1
+    }
+
+    /// `player_api.php` with no action answers with the account itself,
+    /// `max_connections` included — as a number or, more often, a string.
+    nonisolated private static func fetchConnectionLimit(base: URL, user: String, pass: String) async -> Int? {
+        var components = URLComponents(url: base.appendingPathComponent("player_api.php"), resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "username", value: user), URLQueryItem(name: "password", value: pass)]
+        guard let url = components?.url,
+              let (data, _) = try? await URLSession.shared.data(from: url),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let info = object["user_info"] as? [String: Any] else { return nil }
+        if let number = info["max_connections"] as? Int { return number }
+        if let text = info["max_connections"] as? String, let number = Int(text.trimmingCharacters(in: .whitespaces)) { return number }
+        return nil
+    }
+
     func fetchAccountData(_ account: Account) async -> ([StreamChannel], [StreamCategory], [URL]) {
         let offset = account.stableID * 100_000_000
         let prefix = "acc_\(account.stableID)_" 
@@ -691,6 +748,14 @@ class ChannelViewModel: ObservableObject {
                 guard let baseURL = URL(string: account.url) else { return ([], [], []) }
                 let user = account.username ?? ""
                 let pass = account.password ?? ""
+
+                // Alongside the playlist, never blocking it: a limit that
+                // fails to arrive just leaves the warning cautious.
+                Task { [weak self] in
+                    if let limit = await Self.fetchConnectionLimit(base: baseURL, user: user, pass: pass) {
+                        self?.setConnectionLimit(limit, for: account.id)
+                    }
+                }
                 
                 
                 let catUrl = try await ChannelViewModel.buildApiUrl(base: baseURL, user: user, pass: pass, action: "get_live_categories")

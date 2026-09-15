@@ -113,6 +113,28 @@ struct RecordingSetupSheet: View {
                 .padding(.horizontal, 22)
                 .padding(.bottom, 18)
 
+                // A recording is its own connection to the provider. On a
+                // line that allows one, recording while watching means one
+                // of the two does not get through — say so here, where the
+                // recording is set up, rather than let the stream fail later
+                // with nothing to say why.
+                if let limit = ChannelViewModel.shared.connectionLimit(for: channel), limit <= 1 {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.yellow)
+                        Text("Your provider allows one stream at a time. A recording uses it, so watching a channel while this records may fail to connect or cut the recording off.")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.yellow.opacity(0.12)))
+                    .padding(.horizontal, 22)
+                    .padding(.bottom, 14)
+                }
+
                 // Mode picker — app chip language: solid white when active.
                 HStack(spacing: 8) {
                     ForEach(SetupMode.allCases, id: \.self) { m in
