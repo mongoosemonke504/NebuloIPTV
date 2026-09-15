@@ -823,7 +823,15 @@ struct FavoriteBadge: View {
         return letters.isEmpty ? "?" : letters.uppercased()
     }
 
+    /// Flipped once the crest has been sampled — see `fill`.
+    @State private var crestSampled = false
+
+    /// The club's colour, pushed lighter or darker when its own crest would
+    /// vanish on it — the Longhorns' burnt orange on burnt orange was an
+    /// empty card. See `LogoGlow.field`.
     private var fill: Color {
+        _ = crestSampled
+        if let adjusted = LogoGlow.field(hex: colorHex, forLogo: logo) { return adjusted }
         guard let hex = colorHex, !hex.isEmpty,
               let c = Color(hex: hex.hasPrefix("#") ? hex : "#\(hex)") else {
             return Color(white: 0.15)
@@ -840,11 +848,9 @@ struct FavoriteBadge: View {
             ZStack(alignment: .bottom) {
                 Group {
                     if let logo, !logo.isEmpty {
-                        // On a plate when the crest is the card's own colour
-                        // — the Longhorns' burnt orange on burnt orange was
-                        // an empty card. See `TeamCrest`.
-                        TeamCrest(logo: logo, size: 58, fieldHex: colorHex,
-                                  failurePlaceholder: AnyView(initialsTile))
+                        CachedAsyncImage(urlString: logo,
+                                         size: CGSize(width: 58, height: 58),
+                                         failurePlaceholder: AnyView(initialsTile))
                     } else {
                         // No crest to draw. Without this the tile was empty
                         // apart from its caption — a favourite that looked as
@@ -889,6 +895,7 @@ struct FavoriteBadge: View {
             )
         }
         .buttonStyle(PressableCardStyle())
+        .samplesCrests(colorHex == nil ? [] : [logo], flag: $crestSampled)
     }
 }
 

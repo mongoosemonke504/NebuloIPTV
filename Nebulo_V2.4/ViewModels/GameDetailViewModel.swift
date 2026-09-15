@@ -25,6 +25,10 @@ struct GDTeamSide {
     let abbreviation: String
     let logo: String?
     let color: Color
+    /// The hex `color` was resolved from, for the card's washes: a crest can
+    /// vanish into a wash of its own colour, and the test needs the number.
+    /// Nil when the colour is a fallback rather than the club's.
+    let colorHex: String?
     let score: String
     let record: String?
     let winner: Bool
@@ -493,7 +497,7 @@ final class GameDetailViewModel: ObservableObject {
         headerCompetitors.first { $0.homeAway == homeAway }
     }
 
-    private func teamSide(from competitor: GSHeaderCompetitor?, fallback: ESPNCompetitor?, color: Color) -> GDTeamSide {
+    private func teamSide(from competitor: GSHeaderCompetitor?, fallback: ESPNCompetitor?, color: Color, colorHex: String?) -> GDTeamSide {
         let team = competitor?.team
         return GDTeamSide(
             id: team?.id ?? fallback?.team?.id ?? "",
@@ -501,6 +505,7 @@ final class GameDetailViewModel: ObservableObject {
             abbreviation: team?.abbreviation ?? fallback?.team?.abbreviation ?? "—",
             logo: team?.anyLogo ?? fallback?.team?.logo,
             color: color,
+            colorHex: colorHex,
             score: competitor?.score ?? fallback?.score ?? "",
             record: competitor?.record?.first?.summary ?? competitor?.record?.first?.displayValue,
             winner: competitor?.winner ?? false
@@ -509,13 +514,17 @@ final class GameDetailViewModel: ObservableObject {
 
     var homeSide: GDTeamSide {
         if let cached = derived.homeSide { return cached }
-        let value = teamSide(from: side("home"), fallback: request.game.homeCompetitor, color: resolvedColors.home)
+        let colors = resolvedColors
+        let value = teamSide(from: side("home"), fallback: request.game.homeCompetitor,
+                             color: colors.home, colorHex: colors.homeHex)
         derived.homeSide = value
         return value
     }
     var awaySide: GDTeamSide {
         if let cached = derived.awaySide { return cached }
-        let value = teamSide(from: side("away"), fallback: request.game.awayCompetitor, color: resolvedColors.away)
+        let colors = resolvedColors
+        let value = teamSide(from: side("away"), fallback: request.game.awayCompetitor,
+                             color: colors.away, colorHex: colors.awayHex)
         derived.awaySide = value
         return value
     }
@@ -523,7 +532,7 @@ final class GameDetailViewModel: ObservableObject {
     /// Both teams' chart/bar colors, resolved together: when the two primary
     /// colors are too close to tell apart (two red teams, two navy teams),
     /// swap in an alternate color on whichever side makes the pair distinct.
-    private var resolvedColors: (home: Color, away: Color) {
+    private var resolvedColors: (home: Color, away: Color, homeHex: String?, awayHex: String?) {
         let homeTeam = side("home")?.team
         let awayTeam = side("away")?.team
         let hp = homeTeam?.color ?? request.game.homeCompetitor?.team?.color
@@ -535,7 +544,7 @@ final class GameDetailViewModel: ObservableObject {
             (homeTeam?.alternateColor, awayTeam?.alternateColor),
         ]
 
-        var best: (home: Color, away: Color)?
+        var best: (home: Color, away: Color, homeHex: String?, awayHex: String?)?
         var bestDistance = -1.0
         for (homeHex, awayHex) in combos {
             guard let h = Self.rgb(homeHex), let a = Self.rgb(awayHex) else { continue }
@@ -543,14 +552,14 @@ final class GameDetailViewModel: ObservableObject {
             // Skip near-black picks — they vanish against the dark UI.
             let visible = Self.luminance(h) >= 0.06 && Self.luminance(a) >= 0.06
             if distance >= 0.32 && visible {
-                return (Self.color(h), Self.color(a))
+                return (Self.color(h), Self.color(a), homeHex, awayHex)
             }
             if distance > bestDistance {
                 bestDistance = distance
-                best = (Self.color(h), Self.color(a))
+                best = (Self.color(h), Self.color(a), homeHex, awayHex)
             }
         }
-        return best ?? (.gray, .blue)
+        return best ?? (.gray, .blue, nil, nil)
     }
 
     nonisolated private static func rgb(_ hex: String?) -> (r: Double, g: Double, b: Double)? {

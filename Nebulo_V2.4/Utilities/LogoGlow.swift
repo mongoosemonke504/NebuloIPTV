@@ -24,6 +24,11 @@ enum LogoGlow {
     struct LogoMean {
         let r: Double, g: Double, b: Double
         let lum: Double
+        /// HSB-style saturation of the mean, 0…1.
+        var sat: Double {
+            let mx = max(r, g, b), mn = min(r, g, b)
+            return mx == 0 ? 0 : (mx - mn) / mx
+        }
     }
     /// Per logo URL, filled in alongside the glow.
     static var meanCache: [String: LogoMean] = [:]
@@ -142,33 +147,50 @@ enum LogoGlow {
         return abs(mean.lum - luminance(field)) < 0.16 && distance < 0.38
     }
 
-    /// The plate a lost crest is set on, inside its brand tile: pale for a
-    /// dark or a saturated mark, near-black for a pale one.
+    /// The field to paint behind a crest: the club's colour as given, unless
+    /// the crest would be lost on it — then that colour pushed far enough
+    /// away in brightness that the crest reads.
     ///
-    /// A plate, not a different tile. The first fix swapped the whole tile
-    /// for the channel cards' "tone" — a deep slab of the mark's own hue —
-    /// which is right for a white channel logo with a coloured accent and
-    /// wrong for a solid mid-tone mark: the Longhorns' burnt orange on a
-    /// dark burnt orange was better, and still lost. The tile keeps the
-    /// club's colour; the crest sits on a plate it cannot vanish into.
-    static func plateIsPale(forLogo icon: String?) -> Bool {
-        guard let mean = mean(for: icon) else { return true }
-        return mean.lum < 0.6
+    /// Lighter or darker is decided by the MARK. A dark mark — black, navy —
+    /// can only be seen on something paler, so its field is lifted most of
+    /// the way to white while keeping a tint of the club. Everything else is
+    /// sunk most of the way to black: a pale mark needs it, and a saturated
+    /// mid-tone (the Longhorns' burnt orange, a pure red) reads far better
+    /// glowing out of a deep field than sitting on a pastel one. The split
+    /// uses the sampler's own "effective lightness" — luminance plus an
+    /// allowance for saturation — because a saturated colour separates from
+    /// a field by hue as well as by brightness.
+    ///
+    /// Nil until the logo has been sampled, or when there is nothing to fix;
+    /// callers fall back to the brand colour either way.
+    static func field(hex: String?, forLogo icon: String?) -> Color? {
+        guard let mean = mean(for: icon), let brand = rgb(hex: hex),
+              blends(mean, on: brand) else { return nil }
+        return Color(adjustedField(brand, forMean: mean))
     }
 
-    /// The plate colour itself — see `plateIsPale`.
-    static func plate(forLogo icon: String?) -> Color {
-        plateIsPale(forLogo: icon) ? Color.white.opacity(0.94) : Color(white: 0.12)
+    /// `field(hex:forLogo:)` for a mark already sampled in hand — the
+    /// lock-screen art, which renders in one synchronous pass.
+    nonisolated static func adjustedField(_ brand: (r: Double, g: Double, b: Double), forMean mean: LogoMean) -> UIColor {
+        let effective = mean.lum + 0.18 * mean.sat
+        if effective < 0.32 {
+            // Dark mark: lift the field towards white.
+            return mix(brand, toward: (1, 1, 1), by: 0.70)
+        }
+        // Pale or saturated mark: sink the field towards black.
+        return mix(brand, toward: (0, 0, 0), by: 0.72)
     }
 
-    /// Whether a field colour is dark enough that a light backplate is what
-    /// lifts a crest off it (rather than a dark one).
-    nonisolated static func isDark(hex: String?) -> Bool {
-        guard let field = rgb(hex: hex) else { return true }
-        return luminance(field) < 0.5
+    nonisolated private static func mix(_ a: (r: Double, g: Double, b: Double),
+                                        toward b: (r: Double, g: Double, b: Double),
+                                        by t: Double) -> UIColor {
+        UIColor(red: a.r + (b.r - a.r) * t,
+                green: a.g + (b.g - a.g) * t,
+                blue: a.b + (b.b - a.b) * t,
+                alpha: 1)
     }
 
-    /// Samples a crest if it hasn't been yet, so `blends`/`crestTile` can
+    /// Samples a crest if it hasn't been yet, so `blends`/`field` can
     /// answer. Waits for the artwork to land in the image cache the way the
     /// glow does; nothing to do once the answer is known.
     static func sampleIfNeeded(_ icon: String?) async {

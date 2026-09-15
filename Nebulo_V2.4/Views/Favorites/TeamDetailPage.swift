@@ -111,7 +111,13 @@ struct TeamDetailPage: View {
 
     /// The team's brand colour: ESPN's team profile first (it carries the real
     /// hex), then whatever the scoreboard attached, then a neutral slate.
+    ///
+    /// Pushed lighter or darker when the crest would vanish on it — see
+    /// `LogoGlow.field`. The hero is the one place the club's colour fills
+    /// the screen, and a one-colour crest was disappearing into it.
     private var brand: Color {
+        _ = crestSampled
+        if let adjusted = LogoGlow.field(hex: brandHex, forLogo: logo) { return adjusted }
         let hex = brandHex
         guard let hex, !hex.isEmpty,
               let c = Color(hex: hex.hasPrefix("#") ? hex : "#\(hex)") else {
@@ -119,6 +125,8 @@ struct TeamDetailPage: View {
         }
         return c
     }
+    /// Flipped once the crest has been sampled — see `brand`.
+    @State private var crestSampled = false
 
     private var secondary: Color {
         guard let hex = profile?.alternateColor, !hex.isEmpty,
@@ -294,6 +302,7 @@ struct TeamDetailPage: View {
         // re-sync hangs off the value itself.
         .onChangeCompat(of: tab) { _ in syncHeaderToSelectedTab() }
         .preferredColorScheme(.dark)
+        .samplesCrests([logo], flag: $crestSampled)
         .task(id: team.id) {
             loading = true
             async let p = TeamDetailService.fetchProfile(sport: sport, leagueLabel: leagueLabel, teamID: team.id)
@@ -382,10 +391,8 @@ struct TeamDetailPage: View {
                     startRadius: 0,
                     endRadius: 260
                 )
-                // The crest sits on a field of its own colour here, so a
-                // one-colour mark gets a pool of light behind it — see
-                // `TeamCrest`.
-                TeamCrest(logo: logo ?? "", size: 150, fieldHex: brandHex)
+                CachedAsyncImage(urlString: logo ?? "", size: nil)
+                    .frame(maxWidth: 150, maxHeight: 150)
                     .offset(y: -heroHeight * 0.13)
                     .shadow(color: .black.opacity(0.45), radius: 14, x: 0, y: 5)
             }

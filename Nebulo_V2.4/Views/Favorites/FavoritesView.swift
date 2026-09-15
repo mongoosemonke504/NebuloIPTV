@@ -1275,36 +1275,31 @@ struct FavoriteSquareLogo: View {
     let abbreviation: String
     let color: String?
     /// Flipped once the crest has been sampled, so a tile that started on
-    /// the brand colour can switch to a contrasting one.
-    @State private var sampled = false
+    /// the brand colour can move off it.
+    @State private var crestSampled = false
 
     private var brandColor: Color {
         guard let hex = color, !hex.isEmpty else { return Color.white.opacity(0.18) }
         return Color(hex: hex.hasPrefix("#") ? hex : "#\(hex)") ?? Color.white.opacity(0.18)
     }
 
+    /// The brand colour — unless the crest would vanish on it. Some clubs'
+    /// marks are one flat colour, and that colour IS the brand colour: a
+    /// black crest on a black tile, the Longhorns' burnt orange on burnt
+    /// orange. Those tiles are pushed lighter or darker, whichever lets the
+    /// crest read — see `LogoGlow.field`.
+    private var fill: Color {
+        _ = crestSampled
+        return LogoGlow.field(hex: color, forLogo: logo) ?? brandColor
+    }
+
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(brandColor)
+                .fill(fill)
             if let logo = logo, !logo.isEmpty {
-                // Some clubs' marks are one flat colour, and that colour IS
-                // the brand colour: a black crest on a black tile, the
-                // Longhorns' burnt orange on burnt orange. Those sit on a
-                // plate inside the tile — pale under a dark or saturated
-                // mark, near-black under a pale one — so the tile keeps the
-                // club's colour and the crest still reads. See
-                // `LogoGlow.blends`.
-                if LogoGlow.blends(logo: logo, on: color) {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(LogoGlow.plate(forLogo: logo))
-                        .padding(5)
-                    CachedAsyncImage(urlString: logo)
-                        .padding(9)
-                } else {
-                    CachedAsyncImage(urlString: logo)
-                        .padding(6)
-                }
+                CachedAsyncImage(urlString: logo)
+                    .padding(6)
             } else {
                 Text(String(abbreviation.prefix(3)))
                     .font(.system(size: 13, weight: .black))
@@ -1313,62 +1308,34 @@ struct FavoriteSquareLogo: View {
         }
         .frame(width: 56, height: 56)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .task(id: logo ?? "") {
-            // Only a crest on a brand tile can be lost; nothing to learn
-            // otherwise, and nothing to do once the sample is in.
-            guard let logo, !logo.isEmpty, color != nil, LogoGlow.mean(for: logo) == nil else { return }
-            await LogoGlow.sampleIfNeeded(logo)
-            sampled = true
+        // Only a crest on a brand tile can be lost; nothing to learn
+        // otherwise.
+        .samplesCrests(color == nil ? [] : [logo], flag: $crestSampled)
+    }
+}
+
+/// Samples the given crests once, so `LogoGlow.field` can answer for them,
+/// and flips `flag` when they all have been — the one state change that
+/// re-renders the view whose colours depend on the answer. Nothing happens
+/// for crests already sampled, which after the first look is all of them.
+private struct CrestSampling: ViewModifier {
+    let logos: [String]
+    @Binding var flag: Bool
+
+    func body(content: Content) -> some View {
+        content.task(id: logos) {
+            let pending = logos.filter { LogoGlow.mean(for: $0) == nil }
+            guard !pending.isEmpty else { return }
+            for logo in pending { await LogoGlow.sampleIfNeeded(logo) }
+            flag.toggle()
         }
     }
 }
 
-/// A club crest over a field of colour — a tile, a wash, one side of a split
-/// — with a soft backplate behind it whenever the crest would otherwise
-/// vanish into that field (see `LogoGlow.blends`). Light behind a crest on a
-/// dark field, dark on a light one; nothing at all for the crests that read
-/// on their own, which is nearly all of them.
-struct TeamCrest: View {
-    let logo: String
-    let size: CGFloat
-    /// The colour under the crest — the club's own, usually.
-    let fieldHex: String?
-    /// Shown in the crest's place once its fetch has definitively failed.
-    var failurePlaceholder: AnyView? = nil
-    @State private var sampled = false
-
-    var body: some View {
-        let lost = LogoGlow.blends(logo: logo, on: fieldHex)
-        ZStack {
-            if lost {
-                if size < 80 {
-                    // Small: a crisp plate, the same treatment the Favorites
-                    // tile gives its crest. A soft glow at this size is a
-                    // smudge.
-                    Circle()
-                        .fill(LogoGlow.plate(forLogo: logo))
-                        .frame(width: size * 1.02, height: size * 1.02)
-                } else {
-                    // Large: a soft pool of light (or shadow) behind the
-                    // crest, which reads as lit rather than badged.
-                    let dark = LogoGlow.isDark(hex: fieldHex)
-                    SoftGlow(color: dark ? .white : .black,
-                             opacity: dark ? 0.55 : 0.5,
-                             radius: size * 0.34,
-                             softness: size * 0.3)
-                }
-            }
-            // Inset on its plate; full size otherwise.
-            let crest = lost && size < 80 ? size * 0.8 : size
-            CachedAsyncImage(urlString: logo, size: CGSize(width: crest, height: crest),
-                             failurePlaceholder: failurePlaceholder)
-        }
-        .frame(width: size, height: size)
-        .task(id: logo) {
-            guard !logo.isEmpty, fieldHex != nil, LogoGlow.mean(for: logo) == nil else { return }
-            await LogoGlow.sampleIfNeeded(logo)
-            sampled = true
-        }
+extension View {
+    /// See `CrestSampling`.
+    func samplesCrests(_ logos: [String?], flag: Binding<Bool>) -> some View {
+        modifier(CrestSampling(logos: logos.compactMap { $0 }.filter { !$0.isEmpty }, flag: flag))
     }
 }
 

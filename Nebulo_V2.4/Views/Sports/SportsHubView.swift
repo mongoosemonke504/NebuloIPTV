@@ -1580,6 +1580,8 @@ struct ManualSelectionSheet: View {
 
 struct ScoreRow: View {
     let game: ESPNEvent; let sport: SportType; var isScoreHidden: Bool = false; var isReminderSet: Bool = false
+    /// Flipped once both crests have been sampled — see `teamColor`.
+    @State private var crestsSampled = false
     var body: some View { 
         ZStack(alignment: .topTrailing) {
             VStack(spacing: 0) {
@@ -1598,6 +1600,8 @@ struct ScoreRow: View {
             .background(teamColorBackdrop)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1)) 
+            .samplesCrests([game.awayCompetitor?.team?.logo, game.homeCompetitor?.team?.logo],
+                           flag: $crestsSampled)
             
             if isReminderSet {
                 Image(systemName: "bell.fill")
@@ -1619,14 +1623,14 @@ struct ScoreRow: View {
             ZStack {
                 Color.black.opacity(0.55)
                 LinearGradient(
-                    colors: [Self.teamColor(game.awayCompetitor).opacity(0.55),
-                             Self.teamColor(game.awayCompetitor).opacity(0.0)],
+                    colors: [teamColor(game.awayCompetitor).opacity(0.55),
+                             teamColor(game.awayCompetitor).opacity(0.0)],
                     startPoint: .leading,
                     endPoint: UnitPoint(x: 0.62, y: 0.5)
                 )
                 LinearGradient(
-                    colors: [Self.teamColor(game.homeCompetitor).opacity(0.55),
-                             Self.teamColor(game.homeCompetitor).opacity(0.0)],
+                    colors: [teamColor(game.homeCompetitor).opacity(0.55),
+                             teamColor(game.homeCompetitor).opacity(0.0)],
                     startPoint: .trailing,
                     endPoint: UnitPoint(x: 0.38, y: 0.5)
                 )
@@ -1634,7 +1638,11 @@ struct ScoreRow: View {
         }
     }
 
-    private static func teamColor(_ c: ESPNCompetitor?) -> Color {
+    /// The club's colour for its wash — pushed lighter or darker when its own
+    /// crest would vanish on it. See `LogoGlow.field`.
+    private func teamColor(_ c: ESPNCompetitor?) -> Color {
+        _ = crestsSampled
+        if let adjusted = LogoGlow.field(hex: c?.team?.color, forLogo: c?.team?.logo) { return adjusted }
         guard let hex = c?.team?.color, !hex.isEmpty,
               let col = Color(hex: hex.hasPrefix("#") ? hex : "#\(hex)") else {
             return Color(white: 0.22)

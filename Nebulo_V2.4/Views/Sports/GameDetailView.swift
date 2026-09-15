@@ -174,7 +174,11 @@ final class PlayerSheetHost: ObservableObject {
 private struct GameCardBackdrop: View {
     let request: GameDetailRequest
 
+    /// Adjusted the way the real card's washes are, so the stand-in and the
+    /// card it becomes are the same colour. No sampling of its own: by the
+    /// time a neighbour is peeking its crests have been sampled by the hub.
     private func teamColor(_ competitor: ESPNCompetitor?) -> Color {
+        if let adjusted = LogoGlow.field(hex: competitor?.team?.color, forLogo: competitor?.team?.logo) { return adjusted }
         guard let hex = competitor?.team?.color, !hex.isEmpty else { return Color(white: 0.22) }
         return Color(hex: hex.hasPrefix("#") ? hex : "#\(hex)") ?? Color(white: 0.22)
     }
@@ -921,8 +925,8 @@ struct GameDetailContentView: View, Equatable {
                         .frame(height: 0)
                         .overlay(alignment: .top) {
                             GameHeaderScrim(
-                                awayColor: detail.awaySide.color,
-                                homeColor: detail.homeSide.color
+                                awayColor: awayWash,
+                                homeColor: homeWash
                             )
                                 .padding(.horizontal, -9)
                                 .offset(y: -55)
@@ -1085,6 +1089,7 @@ struct GameDetailContentView: View, Equatable {
             }
         }
         .preferredColorScheme(.dark)
+        .samplesCrests([detail.awaySide.logo, detail.homeSide.logo], flag: $crestsSampled)
         .task(id: request.id) {
             // Racing and golf have no summary endpoint, so the usual refresh
             // loop has nothing to fetch — they load through FieldEventModel.
@@ -1493,17 +1498,33 @@ struct GameDetailContentView: View, Equatable {
             // fixture; the series' own colour for a field event, which has no
             // two sides to draw from.
             LinearGradient(
-                colors: [(isFieldEvent ? fieldTint : detail.awaySide.color).opacity(0.65), .clear],
+                colors: [(isFieldEvent ? fieldTint : awayWash).opacity(0.65), .clear],
                 startPoint: .topLeading,
                 endPoint: UnitPoint(x: 0.65, y: 0.75)
             )
             LinearGradient(
-                colors: [(isFieldEvent ? fieldTint : detail.homeSide.color).opacity(0.55), .clear],
+                colors: [(isFieldEvent ? fieldTint : homeWash).opacity(0.55), .clear],
                 startPoint: .topTrailing,
                 endPoint: UnitPoint(x: 0.35, y: 0.75)
             )
         }
         .ignoresSafeArea()
+    }
+
+    /// Flipped once both crests have been sampled — see `awayWash`.
+    @State private var crestsSampled = false
+
+    /// Each side's colour for the washes behind its crest — pushed lighter or
+    /// darker when the crest would vanish into it (see `LogoGlow.field`).
+    /// The washes only; the stat bars, chips and pitch keep the club's colour
+    /// as its identity.
+    private var awayWash: Color {
+        _ = crestsSampled
+        return LogoGlow.field(hex: detail.awaySide.colorHex, forLogo: detail.awaySide.logo) ?? detail.awaySide.color
+    }
+    private var homeWash: Color {
+        _ = crestsSampled
+        return LogoGlow.field(hex: detail.homeSide.colorHex, forLogo: detail.homeSide.logo) ?? detail.homeSide.color
     }
 
     /// Formula 1's red, the PGA TOUR's navy.

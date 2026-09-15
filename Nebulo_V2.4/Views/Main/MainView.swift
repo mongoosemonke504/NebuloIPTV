@@ -269,12 +269,20 @@ struct NowPlayingMatchupArt: View {
 
     private var isFieldEvent: Bool { game.isFieldEvent }
 
-    private func teamColor(_ c: ESPNCompetitor?) -> Color {
+    /// The club's colour for its half — pushed lighter or darker when the
+    /// crest drawn on it would vanish into it. The crest is in hand, so the
+    /// test is a synchronous 16x16 pass rather than the async cache the
+    /// on-screen crests go through. See `LogoGlow.field`.
+    private func teamColor(_ c: ESPNCompetitor?, crest: UIImage?) -> Color {
         guard let hex = c?.team?.color, !hex.isEmpty,
-              let col = Color(hex: hex.hasPrefix("#") ? hex : "#\(hex)") else {
-            return Color(white: 0.16)
+              let brand = LogoGlow.rgb(hex: hex) else { return Color(white: 0.16) }
+        if let crest, let sample = crest.brandSample() {
+            let mean = LogoGlow.LogoMean(r: sample.mean.r, g: sample.mean.g, b: sample.mean.b, lum: sample.meanLuminance)
+            if LogoGlow.blends(mean, on: brand) {
+                return Color(LogoGlow.adjustedField(brand, forMean: mean))
+            }
         }
-        return col
+        return Color(red: brand.r, green: brand.g, blue: brand.b)
     }
 
     var body: some View {
@@ -315,8 +323,8 @@ struct NowPlayingMatchupArt: View {
             // right, meeting on a steep edge across the middle.
             LinearGradient(
                 stops: [
-                    .init(color: teamColor(game.awayCompetitor), location: 0.5),
-                    .init(color: teamColor(game.homeCompetitor), location: 0.5)
+                    .init(color: teamColor(game.awayCompetitor, crest: awayCrest), location: 0.5),
+                    .init(color: teamColor(game.homeCompetitor, crest: homeCrest), location: 0.5)
                 ],
                 startPoint: UnitPoint(x: 0.02, y: 0),
                 endPoint: UnitPoint(x: 0.98, y: 1)
@@ -325,8 +333,8 @@ struct NowPlayingMatchupArt: View {
             // Each crest centred in its own half, so neither crosses the seam
             // onto the other club's colour.
             HStack(spacing: 0) {
-                crest(awayCrest, fieldHex: game.awayCompetitor?.team?.color)
-                crest(homeCrest, fieldHex: game.homeCompetitor?.team?.color)
+                crest(awayCrest)
+                crest(homeCrest)
             }
 
             // The same soft floor the card has, so a pale kit never leaves the
@@ -341,31 +349,13 @@ struct NowPlayingMatchupArt: View {
         }
     }
 
-    /// Whether this crest would vanish into its own half. The image is in
-    /// hand, so it is sampled right here (a 16x16 pass) rather than through
-    /// the async cache the on-screen crests use.
-    private func crestBlends(_ image: UIImage, on hex: String?) -> Bool {
-        guard let field = LogoGlow.rgb(hex: hex), let sample = image.brandSample() else { return false }
-        let mean = LogoGlow.LogoMean(r: sample.mean.r, g: sample.mean.g, b: sample.mean.b, lum: sample.meanLuminance)
-        return LogoGlow.blends(mean, on: field)
-    }
-
     @ViewBuilder
-    private func crest(_ image: UIImage?, fieldHex: String?) -> some View {
+    private func crest(_ image: UIImage?) -> some View {
         Group {
             if let image {
-                ZStack {
-                    if crestBlends(image, on: fieldHex) {
-                        let dark = LogoGlow.isDark(hex: fieldHex)
-                        SoftGlow(color: dark ? .white : .black,
-                                 opacity: dark ? 0.55 : 0.5,
-                                 radius: edge * 0.32 * 0.34,
-                                 softness: edge * 0.32 * 0.3)
-                    }
-                    Image(uiImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                }
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
             } else {
                 Color.clear
             }
@@ -3318,8 +3308,14 @@ struct MatchupHeroContent: View {
     var footerText: String? = nil
     let height: CGFloat
     let cornerRadius: CGFloat
+    /// Flipped once both crests have been sampled — see `teamColor`.
+    @State private var crestsSampled = false
 
+    /// The club's colour for its wash — pushed lighter or darker when its own
+    /// crest would vanish on it. See `LogoGlow.field`.
     private func teamColor(_ c: ESPNCompetitor?) -> Color {
+        _ = crestsSampled
+        if let adjusted = LogoGlow.field(hex: c?.team?.color, forLogo: c?.team?.logo) { return adjusted }
         guard let hex = c?.team?.color, !hex.isEmpty else { return Color(white: 0.22) }
         return Color(hex: hex.hasPrefix("#") ? hex : "#\(hex)") ?? Color(white: 0.22)
     }
@@ -3351,11 +3347,13 @@ struct MatchupHeroContent: View {
                 // they bleed slightly off each edge and everything else
                 // (score, names, pills) reads over them.
                 HStack {
-                    TeamCrest(logo: away?.team?.logo ?? "", size: 150, fieldHex: away?.team?.color)
+                    CachedAsyncImage(urlString: away?.team?.logo ?? "",
+                                     size: CGSize(width: 150, height: 150))
                         .opacity(0.55)
                         .offset(x: -18)
                     Spacer()
-                    TeamCrest(logo: home?.team?.logo ?? "", size: 150, fieldHex: home?.team?.color)
+                    CachedAsyncImage(urlString: home?.team?.logo ?? "",
+                                     size: CGSize(width: 150, height: 150))
                         .opacity(0.55)
                         .offset(x: 18)
                 }
@@ -3457,6 +3455,7 @@ struct MatchupHeroContent: View {
                     .stroke(Color.white.opacity(0.18), lineWidth: 0.5)
             )
             .shadow(color: .black.opacity(0.32), radius: 18, x: 0, y: 8)
+            .samplesCrests([away?.team?.logo, home?.team?.logo], flag: $crestsSampled)
     }
 
     private func teamName(_ c: ESPNCompetitor?) -> some View {
@@ -3719,8 +3718,16 @@ struct LiveGameCard: View {
     private var homeScore: String { game.homeCompetitor?.score ?? "0" }
     private var awayScore: String { game.awayCompetitor?.score ?? "0" }
     private var isLive: Bool { game.status.type.state == "in" }
+    /// Flipped once both crests have been sampled — see `teamColor`.
+    @State private var crestsSampled = false
 
+    /// The club's colour for its half of the split — pushed lighter or darker
+    /// when its own crest would vanish on it. Each crest sits on a solid
+    /// field of its club's colour here, so a one-colour mark had nothing to
+    /// show against. See `LogoGlow.field`.
     private func teamColor(_ c: ESPNCompetitor?) -> Color {
+        _ = crestsSampled
+        if let adjusted = LogoGlow.field(hex: c?.team?.color, forLogo: c?.team?.logo) { return adjusted }
         guard let hex = c?.team?.color, !hex.isEmpty,
               let col = Color(hex: hex.hasPrefix("#") ? hex : "#\(hex)") else {
             return Color(white: 0.16)
@@ -3755,12 +3762,12 @@ struct LiveGameCard: View {
             // the width, home at three quarters — so neither one crosses the
             // diagonal onto the other club's colour. Centring them as a pair
             // put the away crest right on the seam.
-            // Each crest sits on a solid field of ITS OWN club's colour here,
-            // so a one-colour mark gets a backplate — see `TeamCrest`.
             HStack(spacing: 0) {
-                TeamCrest(logo: awayLogo, size: 46, fieldHex: game.awayCompetitor?.team?.color)
+                CachedAsyncImage(urlString: awayLogo, size: CGSize(width: 46, height: 46))
+                    .frame(width: 46, height: 46)
                     .frame(maxWidth: .infinity)
-                TeamCrest(logo: homeLogo, size: 46, fieldHex: game.homeCompetitor?.team?.color)
+                CachedAsyncImage(urlString: homeLogo, size: CGSize(width: 46, height: 46))
+                    .frame(width: 46, height: 46)
                     .frame(maxWidth: .infinity)
             }
             .frame(width: Self.cardWidth, height: Self.cardHeight)
@@ -3830,6 +3837,8 @@ struct LiveGameCard: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(Color.white.opacity(0.10), lineWidth: 0.5)
         )
+        .samplesCrests([game.awayCompetitor?.team?.logo, game.homeCompetitor?.team?.logo],
+                       flag: $crestsSampled)
     }
 }
 
@@ -4628,7 +4637,14 @@ struct NuvioHeroBackdrop: View {
         return LogoGlow.cache[icon]
     }
 
+    /// Flipped once both crests have been sampled — see `teamColor`.
+    @State private var crestsSampled = false
+
+    /// The club's colour for its wash — pushed lighter or darker when its own
+    /// crest would vanish on it. See `LogoGlow.field`.
     private func teamColor(_ c: ESPNCompetitor?) -> Color {
+        _ = crestsSampled
+        if let adjusted = LogoGlow.field(hex: c?.team?.color, forLogo: c?.team?.logo) { return adjusted }
         guard let hex = c?.team?.color, !hex.isEmpty else { return Color(white: 0.22) }
         return Color(hex: hex.hasPrefix("#") ? hex : "#\(hex)") ?? Color(white: 0.22)
     }
@@ -4653,9 +4669,11 @@ struct NuvioHeroBackdrop: View {
                         endPoint: UnitPoint(x: 0.28, y: 0.5)
                     )
                     HStack(spacing: 0) {
-                        TeamCrest(logo: away?.team?.logo ?? "", size: 150, fieldHex: away?.team?.color)
+                        CachedAsyncImage(urlString: away?.team?.logo ?? "",
+                                         size: CGSize(width: 150, height: 150))
                             .frame(maxWidth: .infinity)
-                        TeamCrest(logo: home?.team?.logo ?? "", size: 150, fieldHex: home?.team?.color)
+                        CachedAsyncImage(urlString: home?.team?.logo ?? "",
+                                         size: CGSize(width: 150, height: 150))
                             .frame(maxWidth: .infinity)
                     }
                     .padding(.horizontal, 16)
@@ -4739,6 +4757,8 @@ struct NuvioHeroBackdrop: View {
                   (program?.image ?? "").isEmpty else { return }
             fetchedArt = await ProgramArtworkService.shared.artwork(for: title)
         }
+        .samplesCrests([game?.awayCompetitor?.team?.logo, game?.homeCompetitor?.team?.logo],
+                       flag: $crestsSampled)
     }
 }
 
