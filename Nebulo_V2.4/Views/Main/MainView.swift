@@ -1006,7 +1006,13 @@ extension MainView {
             viewModel.addToMultiView(channel)
             viewModel.multiViewModeActive = false
             withAnimation(MainView.multiViewSlide) { showMultiView = true } 
-        } else if !suppressSecondConnectionWarning, viewModel.secondConnectionRisk(for: channel) {
+        } else if !suppressSecondConnectionWarning,
+                  // A stream that is already up is the connection it has —
+                  // re-opening it (from the mini player, or a recording row
+                  // for the channel being watched) makes no new one.
+                  !(NebuloPlayerEngine.shared.activeBackendName != "None"
+                    && NebuloPlayerEngine.shared.currentURL?.absoluteString == channel.streamURL),
+                  viewModel.secondConnectionRisk(for: channel) {
             // A recording holds a connection, and this stream would be a
             // second one on a line that may allow only one — which is the
             // stream failing to connect, or the recording being cut off,

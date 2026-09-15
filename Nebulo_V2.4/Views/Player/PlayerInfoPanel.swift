@@ -607,7 +607,12 @@ struct PlayerInfoPanel: View {
                 VStack(spacing: 0) {
                     ForEach(Array(sorted.enumerated()), id: \.element.id) { idx, rec in
                         RecordingRow(recording: rec, recordingManager: recordingManager,
-                                     onPlay: { onPlayRecording?(rec) })
+                                     onPlay: { onPlayRecording?(rec) },
+                                     // A recording in progress: the row opens
+                                     // the channel it is recording, live.
+                                     onWatchLive: viewModel.liveChannel(for: rec).map { channel in
+                                         { onPlayChannel?(channel) }
+                                     })
                         if idx < sorted.count - 1 {
                             Divider().background(Color.white.opacity(0.07)).padding(.leading, 18)
                         }
@@ -989,8 +994,15 @@ private struct RecordingRow: View {
     @ObservedObject var recordingManager: RecordingManager
     /// Fired when a completed recording's row is tapped — plays it.
     var onPlay: (() -> Void)? = nil
+    /// Fired when a recording IN PROGRESS is tapped — switches the player to
+    /// the channel being recorded, live. Nil when that channel can't be
+    /// found in the playlist.
+    var onWatchLive: (() -> Void)? = nil
+    /// The stop confirmation for a recording in progress.
+    @State private var confirmStop = false
 
     private var isPlayable: Bool { recording.status == .completed }
+    private var isInProgress: Bool { recording.status == .recording }
 
     private var dateLabel: String {
         let f = DateFormatter(); f.dateStyle = .short; f.timeStyle = .short
@@ -1009,11 +1021,18 @@ private struct RecordingRow: View {
     var body: some View {
         HStack(spacing: 14) {
             // A completed recording shows a play glyph in place of the status
-            // dot so it reads as tappable; others keep the status dot.
+            // dot so it reads as tappable; one in progress pulses; others keep
+            // the status dot.
             if isPlayable {
                 Image(systemName: "play.circle.fill")
                     .font(.system(size: 18))
                     .foregroundStyle(.white)
+                    .padding(.leading, 14)
+            } else if isInProgress {
+                Image(systemName: "record.circle.fill")
+                    .font(.system(size: 18))
+                    .foregroundStyle(.red)
+                    .symbolEffect(.pulse)
                     .padding(.leading, 14)
             } else {
                 Circle()
@@ -1027,14 +1046,52 @@ private struct RecordingRow: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
-                Text("\(recording.channelName) · \(dateLabel)")
+                Text(isInProgress
+                     ? "Recording · \(recording.channelName)"
+                     : "\(recording.channelName) · \(dateLabel)")
                     .font(.caption)
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(isInProgress ? .red.opacity(0.85) : .white.opacity(0.5))
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            // Delete button
+            if isInProgress {
+                // Watch the channel live — the whole row does this too; the
+                // glyph is what says so.
+                if onWatchLive != nil {
+                    Image(systemName: "play.fill")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(width: 30, height: 36)
+                }
+                // Stop, keeping what has been recorded so far.
+                Button(action: {
+                    guard SwipeTapGuard.tapsAllowed else { return }
+                    ChannelViewModel.shared.triggerSelectionHaptic()
+                    confirmStop = true
+                }) {
+                    Image(systemName: "stop.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .frame(width: 36, height: 36)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Stop recording")
+                .confirmationDialog("Stop recording \(recording.displayName)?",
+                                    isPresented: $confirmStop, titleVisibility: .visible) {
+                    Button("Stop Recording", role: .destructive) {
+                        ChannelViewModel.shared.triggerHaptic(.medium)
+                        recordingManager.stopRecording(recording.id)
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("What has been recorded so far is kept.")
+                }
+            }
+
+            // Delete — for one in progress, this stops it AND discards the
+            // file, which is what the bin means.
             Button(action: {
                 guard SwipeTapGuard.tapsAllowed else { return }
                 ChannelViewModel.shared.triggerSelectionHaptic()
@@ -1050,13 +1107,19 @@ private struct RecordingRow: View {
             .padding(.trailing, 4)
         }
         .padding(.vertical, 10)
-        // Whole-row tap plays a completed recording. onTapGesture rather than a
-        // Button so it never swallows the delete button's own tap.
+        // Whole-row tap plays a completed recording, or switches to the
+        // channel a recording in progress is taken from. onTapGesture rather
+        // than a Button so it never swallows the buttons' own taps.
         .contentShape(Rectangle())
         .onTapGesture {
-            guard isPlayable, SwipeTapGuard.tapsAllowed else { return }
-            ChannelViewModel.shared.triggerSelectionHaptic()
-            onPlay?()
+            guard SwipeTapGuard.tapsAllowed else { return }
+            if isPlayable {
+                ChannelViewModel.shared.triggerSelectionHaptic()
+                onPlay?()
+            } else if isInProgress, let onWatchLive {
+                ChannelViewModel.shared.triggerSelectionHaptic()
+                onWatchLive()
+            }
         }
     }
 }

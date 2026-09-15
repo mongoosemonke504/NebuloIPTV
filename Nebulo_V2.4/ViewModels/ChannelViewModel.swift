@@ -678,6 +678,21 @@ class ChannelViewModel: ObservableObject {
     }
     
     
+    // MARK: - Recordings
+
+    /// The live channel a recording was made from. By stream URL first — the
+    /// one thing a recording carries that is unambiguous — then by name, the
+    /// way the recording player's info panel has always found it.
+    func liveChannel(for recording: Recording) -> StreamChannel? {
+        if let exact = channels.first(where: { $0.streamURL == recording.streamURL }) { return exact }
+        return channels.first {
+            $0.name.caseInsensitiveCompare(recording.channelName) == .orderedSame
+        } ?? channels.first {
+            $0.name.localizedCaseInsensitiveContains(recording.channelName) ||
+            recording.channelName.localizedCaseInsensitiveContains($0.name)
+        }
+    }
+
     // MARK: - Connection limit
 
     /// How many streams each line may hold open at once, when its provider

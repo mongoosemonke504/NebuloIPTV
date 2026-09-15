@@ -81,6 +81,8 @@ struct RecordingsView: View {
     @State private var newNameInput = ""
     @State private var showManageScheduled = false
     @State private var navigateToCategoryView = false
+    /// The recording whose red dot was tapped, awaiting the stop confirmation.
+    @State private var stopRequest: Recording?
     /// 0 at rest, 1 once the big "Recordings" title has fully scrolled past.
     /// Tracks live scroll offset directly (no withAnimation) so the compact
     /// overlay crossfades in lockstep with the scroll instead of snapping in.
@@ -302,6 +304,21 @@ struct RecordingsView: View {
         .sheet(isPresented: $showManageScheduled) {
             ManageScheduledView()
         }
+        // One tap on the dot asks; a stop can't be undone, and the dot sits
+        // where a thumb lands.
+        .confirmationDialog("Stop recording \(stopRequest?.displayName ?? "")?",
+                            isPresented: Binding(get: { stopRequest != nil },
+                                                 set: { if !$0 { stopRequest = nil } }),
+                            titleVisibility: .visible,
+                            presenting: stopRequest) { recording in
+            Button("Stop Recording", role: .destructive) {
+                ChannelViewModel.shared.triggerHaptic(.medium)
+                manager.stopRecording(recording.id)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("What has been recorded so far is kept.")
+        }
     }
 
     // MARK: - Header
@@ -417,14 +434,29 @@ struct RecordingsView: View {
 
                 VStack(spacing: 10) {
                     ForEach(nowRecording) { recording in
-                        NowRecordingRow(recording: recording)
-                            .contextMenu {
-                                Button(role: .destructive) {
-                                    manager.stopRecording(recording.id)
+                        let live = viewModel?.liveChannel(for: recording)
+                        NowRecordingRow(
+                            recording: recording,
+                            // The row is the channel: tap it to watch what
+                            // is being recorded, live.
+                            onWatch: live.map { channel in { playAction?(channel) } },
+                            // The dot is the recording: tap it to stop.
+                            onStop: { stopRequest = recording }
+                        )
+                        .contextMenu {
+                            if let live {
+                                Button {
+                                    playAction?(live)
                                 } label: {
-                                    Label("Stop Recording", systemImage: "stop.circle")
+                                    Label("Watch Live", systemImage: "play.fill")
                                 }
                             }
+                            Button(role: .destructive) {
+                                stopRequest = recording
+                            } label: {
+                                Label("Stop Recording", systemImage: "stop.circle")
+                            }
+                        }
                     }
                 }
             }
@@ -615,22 +647,37 @@ struct RecordingsView: View {
 
 struct NowRecordingRow: View {
     let recording: Recording
+    /// Watch the channel being recorded, live. Nil when the channel can't
+    /// be found in the playlist any more — the row then only shows.
+    var onWatch: (() -> Void)? = nil
+    /// Stop the recording — the red dot.
+    var onStop: () -> Void = {}
     // Tick every second so the elapsed timer is live.
     @State private var now: Date = Date()
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         HStack(spacing: 14) {
-            // Animated red record dot
-            ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.red.opacity(0.2))
-                    .frame(width: 52, height: 52)
-                Image(systemName: "record.circle.fill")
-                    .font(.system(size: 24))
-                    .foregroundStyle(.red)
-                    .symbolEffect(.pulse)
+            // The red dot IS the stop button. Its own Button so a tap here
+            // never reaches the row's own tap beneath it.
+            Button {
+                guard SwipeTapGuard.tapsAllowed else { return }
+                ChannelViewModel.shared.triggerSelectionHaptic()
+                onStop()
+            } label: {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.red.opacity(0.2))
+                        .frame(width: 52, height: 52)
+                    Image(systemName: "record.circle.fill")
+                        .font(.system(size: 24))
+                        .foregroundStyle(.red)
+                        .symbolEffect(.pulse)
+                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Stop recording")
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(recording.displayName)
@@ -645,13 +692,30 @@ struct NowRecordingRow: View {
 
             Spacer()
 
-            // Live elapsed indicator
-            Text(elapsedString)
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundStyle(.red.opacity(0.9))
+            // Live elapsed indicator, with a play glyph when the row can
+            // open the channel — so the row reads as somewhere to go.
+            HStack(spacing: 8) {
+                Text(elapsedString)
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.red.opacity(0.9))
+                if onWatch != nil {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+            }
         }
         .padding(14)
         .modifier(GlassEffect(cornerRadius: 14, isSelected: true, accentColor: .red))
+        // The row — everything but the dot — opens the channel live.
+        // onTapGesture rather than a Button around the row, so the dot's
+        // own Button keeps its tap.
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard let onWatch, SwipeTapGuard.tapsAllowed else { return }
+            ChannelViewModel.shared.triggerSelectionHaptic()
+            onWatch()
+        }
         .onReceive(ticker) { now = $0 }
     }
 
@@ -1136,13 +1200,7 @@ struct RecordingPlayerView: View {
     /// The real live channel that matches this recording's channel name.
     /// Passed as `infoChannel` so PlayerInfoPanel shows live EPG/schedule data.
     private var infoChannel: StreamChannel? {
-        guard let vm = viewModel else { return nil }
-        return vm.channels.first {
-            $0.name.caseInsensitiveCompare(currentRecording.channelName) == .orderedSame
-        } ?? vm.channels.first {
-            $0.name.localizedCaseInsensitiveContains(currentRecording.channelName) ||
-            currentRecording.channelName.localizedCaseInsensitiveContains($0.name)
-        }
+        viewModel?.liveChannel(for: currentRecording)
     }
 
     var body: some View {
