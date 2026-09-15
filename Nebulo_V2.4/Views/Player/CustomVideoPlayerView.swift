@@ -896,29 +896,13 @@ struct CustomVideoPlayerView: SwiftUI.View {
         let activeChannel = currentChannel ?? channel
         Task {
 
-            // Skip active-recording redirect when already in recording-playback mode
-            // (avoids an infinite loop where playing a completed .ts file would be
-            //  redirected back to the still-running live recorder for that channel).
-            //
-            // Also skipped when THIS channel is already streaming live: the
-            // redirect exists to spare a second connection on providers that
-            // allow one, and a stream that is already up is that connection.
-            // Coming back to a channel from the mini player while it recorded
-            // used to drop the live picture and restart from the top of the
-            // file being written.
-            let alreadyLive = playerManager.activeBackendName != "None"
-                && playerManager.currentURL?.absoluteString == activeChannel.streamURL
-            if !isRecordingPlayback, !alreadyLive,
-               let localURL = RecordingManager.shared.getActiveRecordingURL(for: activeChannel) {
-                print("⏺️ [Player] Playing from active recording file: \(localURL.lastPathComponent)")
-                await MainActor.run {
-                    self.currentStreamURL = localURL
-
-                    playerManager.play(url: localURL)
-                    updateMetadata()
-                }
-                return
-            }
+            // A channel that is being recorded plays LIVE, like any other.
+            // It used to be redirected to the file the recorder was writing,
+            // played from its first byte — a spare-the-connection measure for
+            // providers that allow one stream, and the recorder has had its
+            // own connection since the "stream stops on record" fix. Opening
+            // a game you were recording showed you its kickoff instead of the
+            // match.
 
             let resolvedURLString = activeChannel.streamURL
             guard let targetURL = URL(string: resolvedURLString) else { return }

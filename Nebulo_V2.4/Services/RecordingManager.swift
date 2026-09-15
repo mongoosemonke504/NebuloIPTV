@@ -347,19 +347,6 @@ class RecordingManager: NSObject, ObservableObject {
         recordings.contains(where: { $0.channelName == channelName && $0.status == .recording })
     }
     
-    func getActiveRecordingURL(for channel: StreamChannel) -> URL? {
-        
-        if let rec = recordings.first(where: { $0.channelName == channel.name && $0.status == .recording }) {
-            let filename = "\(rec.id.uuidString).ts"
-            let url = getDocumentsDirectory().appendingPathComponent(filename)
-            if FileManager.default.fileExists(atPath: url.path) {
-                return url
-            }
-        }
-        return nil
-    }
-    
-    
     private func loadRecordings() {
         if let data = UserDefaults.standard.data(forKey: recordingsKey),
            let decoded = try? JSONDecoder().decode([Recording].self, from: data) {
