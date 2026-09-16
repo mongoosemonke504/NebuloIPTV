@@ -234,7 +234,7 @@ struct MainView: SwiftUI.View {
             if shouldUseSidebar(isLandscape: isL) { 
                 SidebarLayout(viewModel: viewModel, scoreViewModel: scoreViewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $viewModel.searchText, isLandscape: isL, accentColor: accentColor, playAction: playChannel, showMultiView: $showMultiView, showSettings: $showSettings, zoomNS: zoomNS)
             } else { 
-                StandardLayout(viewModel: viewModel, scoreViewModel: scoreViewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $viewModel.searchText, accentColor: accentColor, playAction: playChannel, showMultiView: $showMultiView, showSettings: $showSettings, selectedRecording: $selectedRecording, zoomNS: zoomNS, searchOverlayOpen: showSearch)
+                StandardLayout(viewModel: viewModel, scoreViewModel: scoreViewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $viewModel.searchText, accentColor: accentColor, playAction: playChannel, showMultiView: $showMultiView, showSettings: $showSettings, selectedRecording: $selectedRecording, zoomNS: zoomNS)
             }
         }
         .zIndex(1)
@@ -1054,12 +1054,20 @@ struct StandardLayout: SwiftUI.View {
     let accentColor: Color; let playAction: (StreamChannel) -> Void; @Binding var showMultiView: Bool; @Binding var showSettings: Bool
     @Binding var selectedRecording: Recording?
     var zoomNS: Namespace.ID? = nil
-    /// True while the Search section is showing over this layout. The results
-    /// list below (`searchView`) predates that section and is what the SIDEBAR
-    /// layout still uses; under the overlay it was being built and drawn for
-    /// nothing — glass cards and blurred thumbnails for every hit, behind an
-    /// opaque page — on every keystroke.
-    var searchOverlayOpen: Bool = false
+    /// Whether a non-empty `searchText` shows the results list below
+    /// (`searchView`). That list predates the Search section and is what
+    /// the SIDEBAR layout still uses; the standard layout has the section
+    /// and never shows it — the sidebar passes true, MainView leaves it off.
+    ///
+    /// It used to be gated on the Search section being open instead, which
+    /// still let the old list appear whenever the search text was set while
+    /// the section was NOT open — and it was, by a keystroke's debounced
+    /// hand-off landing after the section had closed. Closing a player then
+    /// revealed the old results page over whatever was there before.
+    var legacySearchResults: Bool = false
+
+    /// The one condition the old results list shows under.
+    private var showsLegacyResults: Bool { legacySearchResults && !searchText.isEmpty }
 
     /// Push/pop tempo for DRILL-DOWNS (open a category, Recently Watched,
     /// Recordings, and the way back). Tab switches deliberately don't use it —
@@ -1073,7 +1081,7 @@ struct StandardLayout: SwiftUI.View {
     /// Automatically reset to `true` whenever a new category is selected.
     @State private var isDetailInteractive: Bool = true
     /// Home is the visible screen: no section open and not showing results.
-    private var homeVisible: Bool { searchText.isEmpty && selectedCategory == nil }
+    private var homeVisible: Bool { !showsLegacyResults && selectedCategory == nil }
 
     // groupedCategories is cheap (O(categories) ≈ few hundred) but still
     // cached so the ForEach never re-evaluates on every viewModel publish.
@@ -1237,7 +1245,7 @@ struct StandardLayout: SwiftUI.View {
     /// The hub the dock is currently on, or nil. Search hides a hub exactly as
     /// it hides home: the old chain put `searchView` ahead of the section, so
     /// opening search destroyed it.
-    private var activeHubID: Int? { searchText.isEmpty ? selectedCategory?.id : nil }
+    private var activeHubID: Int? { showsLegacyResults ? nil : selectedCategory?.id }
 
     /// Tab sections that are built once and then kept alive, hidden, rather
     /// than rebuilt on every visit.
@@ -1625,7 +1633,7 @@ struct StandardLayout: SwiftUI.View {
         ZStack(alignment: .bottom) {
             if viewModel.isLoading {
                 homeSkeleton
-            } else if !searchText.isEmpty, !searchOverlayOpen {
+            } else if showsLegacyResults {
                 searchView
                     .modifier(SwipeBackModifier(
                         onBack: {
@@ -2692,7 +2700,7 @@ struct SidebarLayout: SwiftUI.View {
                     
                     
                     
-                    StandardLayout(viewModel: viewModel, scoreViewModel: scoreViewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $searchText, accentColor: accentColor, playAction: playAction, showMultiView: $showMultiView, showSettings: $showSettings, selectedRecording: .constant(nil), zoomNS: zoomNS)
+                    StandardLayout(viewModel: viewModel, scoreViewModel: scoreViewModel, selectedCategory: $selectedCategory, selectedChannel: $selectedChannel, searchText: $searchText, accentColor: accentColor, playAction: playAction, showMultiView: $showMultiView, showSettings: $showSettings, selectedRecording: .constant(nil), zoomNS: zoomNS, legacySearchResults: true)
                         .id("SearchOverride") 
                 } else if selectedCategory?.id == -3 { SportsHubView(viewModel: viewModel, accentColor: accentColor, playAction: playAction, onBack: nil, scoreViewModel: scoreViewModel).transition(.opacity) }
                 else if selectedCategory?.id == -5 { RecordingsView(viewModel: viewModel, playAction: playAction, onBack: { withAnimation { selectedCategory = nil } }).transition(.opacity) }

@@ -200,7 +200,11 @@ struct SearchView: View {
         pushPending = true
         pushTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 250_000_000)
-            guard !Task.isCancelled else { return }
+            // Only if this is still what the field says. A result tapped
+            // within the debounce closed the section and cleared the field,
+            // and the hand-off then landed anyway — setting the app-wide
+            // search text with no Search section open to own it.
+            guard !Task.isCancelled, queryText == text else { return }
             viewModel.searchText = text
             pushPending = false
         }
@@ -405,6 +409,8 @@ struct SearchView: View {
         .onChangeCompat(of: queryText) { newValue in
             scheduleSearchPush(newValue)
         }
+        // The section is gone; nothing it scheduled may land after it.
+        .onDisappear { pushTask?.cancel() }
         // Teams and leagues come from the already-loaded catalog, so they are
         // ranked straight off the keystroke — no need to wait out the 250 ms
         // debounce that the channel search needs.
