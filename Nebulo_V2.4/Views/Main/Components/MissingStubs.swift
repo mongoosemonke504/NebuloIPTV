@@ -516,7 +516,7 @@ struct SearchView: View {
                                         let a = game.awayCompetitor?.team?.shortDisplayName ?? game.awayCompetitor?.athlete?.shortName ?? ""
                                         hideKeyboard()
                                         onDismiss()
-                                        viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: svm.sportType(for: game), network: game.streamNetworkHint)
+                                        viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: svm.sportType(for: game), network: game.streamNetworkHint, event: game)
                                     }
                                     .liveGameContextMenu(game: game, viewModel: viewModel, scoreViewModel: svm, beforeNavigate: {
                                         hideKeyboard()

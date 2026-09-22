@@ -3660,7 +3660,7 @@ struct LiveGameContextMenuModifier: ViewModifier {
 
             Button {
                 beforeNavigate?()
-                viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.streamNetworkHint)
+                viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.streamNetworkHint, event: game)
             } label: {
                 Label("Watch Stream", systemImage: "play.fill")
             }

@@ -319,7 +319,8 @@ struct MMADetailContentView: View {
                     home: terms.home,
                     away: terms.away,
                     sport: .mma,
-                    network: game.streamNetworkHint
+                    network: game.streamNetworkHint,
+                    event: game
                 )
             } label: {
                 HStack(spacing: 8) {

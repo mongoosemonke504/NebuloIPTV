@@ -680,6 +680,6 @@ struct DriverDetailPage: View {
         let (home, away) = race.searchTerms
         DetailRouter.shared.close()
         viewModel.runSmartSearch(gameID: race.id, home: home, away: away,
-                                 sport: .f1, network: race.streamNetworkHint)
+                                 sport: .f1, network: race.streamNetworkHint, event: race)
     }
 }

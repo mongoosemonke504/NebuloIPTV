@@ -1060,7 +1060,7 @@ private struct GameScoreButton: View {
         .buttonStyle(.plain)
         .contextMenu(menuItems: {
             Button {
-                viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.streamNetworkHint)
+                viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.streamNetworkHint, event: game)
             } label: {
                 Label("Watch Stream", systemImage: "play.fill")
             }
@@ -1526,7 +1526,7 @@ struct AllLiveSportsView: View {
 
     private func playGame(_ game: ESPNEvent, sport: SportType) {
         let (h, a) = game.searchTerms
-        viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.streamNetworkHint)
+        viewModel.runSmartSearch(gameID: game.id, home: h, away: a, sport: sport, network: game.streamNetworkHint, event: game)
     }
 }
 

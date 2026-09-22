@@ -564,7 +564,8 @@ struct TeamNextGamesSheet: View {
             home: terms.home,
             away: terms.away,
             sport: sport,
-            network: game.streamNetworkHint
+            network: game.streamNetworkHint,
+            event: game
         )
         dismiss()
     }
@@ -878,7 +879,8 @@ struct LeagueGamesSheet: View {
             home: terms.home,
             away: terms.away,
             sport: sport,
-            network: game.streamNetworkHint
+            network: game.streamNetworkHint,
+            event: game
         )
         dismiss()
     }

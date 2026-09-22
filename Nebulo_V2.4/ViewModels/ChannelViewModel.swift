@@ -1751,7 +1751,26 @@ class ChannelViewModel: ObservableObject {
         return winner
     }
 
-    func runSmartSearch(gameID: String? = nil, home: String, away: String, sport: SportType, network: String? = nil) {
+    /// Finds the stream for a game.
+    ///
+    /// `event` is the game itself when the caller has it. From it the search
+    /// takes every spelling of both teams (see `SmartSearchLogic.SideNames`)
+    /// and the game's start time; without it, `home` and `away` are the only
+    /// names it has, and "now" is the only time.
+    ///
+    /// What it looks for, in order of what it's worth: BOTH teams named in
+    /// one guide entry that airs around the game's start — that is the game,
+    /// and it plays without asking. One team in a guide entry, or the
+    /// broadcaster's name on the channel, is a lead; either alone goes to
+    /// the pick-a-stream sheet, the two together play.
+    ///
+    /// The guide is read around the GAME's time, not just whatever is on at
+    /// the moment of the tap: the entry for a 7:30 tip-off is what a 7:10
+    /// search needs to find, and the entry still running at 9:40 is the same
+    /// game. Both words of the guide entry count — the title, and the
+    /// description, where many guides put the matchup ("Coverage of the
+    /// Lakers' visit to Boston") under a generic title ("NBA Basketball").
+    func runSmartSearch(gameID: String? = nil, home: String, away: String, sport: SportType, network: String? = nil, event: ESPNEvent? = nil) {
         // Golf has its own search, and it goes FIRST — ahead of the resolved
         // cache, which the generic resolver may have filled with a channel
         // picked for carrying the right broadcaster rather than the right
@@ -1776,30 +1795,105 @@ class ChannelViewModel: ObservableObject {
         let manualOrder = self.manualChannelOrder
         let pLang = self.preferredLanguage
         let pQual = self.preferredQuality
+        // The game's start, when known and sane; nil leaves "now" as the
+        // only time the guide is read at.
+        let gameStart: Date? = {
+            guard let event, event.gameDate != .distantFuture else { return nil }
+            return event.gameDate
+        }()
+        // Every spelling of each side. A team from the feed brings its full
+        // name, short name, place, nickname and abbreviation; a side given
+        // as text (a surname, a race weekend) brings that text.
+        let homeSide: SmartSearchLogic.SideNames = {
+            if let team = event?.homeCompetitor?.team, !(event?.isFieldEvent ?? false) {
+                return .team(team)
+            }
+            return .text(home)
+        }()
+        let awaySide: SmartSearchLogic.SideNames = {
+            if let team = event?.awayCompetitor?.team, !(event?.isFieldEvent ?? false) {
+                return .team(team)
+            }
+            return .text(away)
+        }()
+        let awayIsEmpty = away.trimmingCharacters(in: .whitespaces).isEmpty && event?.awayCompetitor?.team == nil
         
         self.isSearchingGame = true; self.suggestedChannels = []; self.channelToAutoPlay = nil
         
-        Task.detached(priority: .userInitiated) { [weak self, inputChannels, inputHidden, hiddenCatIDs, currentEPG, now, manualOrder, pLang, pQual] in
+        Task.detached(priority: .userInitiated) { [weak self, inputChannels, inputHidden, hiddenCatIDs, currentEPG, now, manualOrder, pLang, pQual, homeSide, awaySide, gameStart, awayIsEmpty] in
             guard let self = self else { return }
-            let homeTokens = SmartSearchLogic.tokenize(home)
-            let awayTokens = SmartSearchLogic.tokenize(away)
+            let networkWords = Set(SmartSearchLogic.words(network ?? ""))
             let targetNetwork = (network ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             
             var orderMap: [Int: Int] = [:]
             for (index, id) in manualOrder.enumerated() { orderMap[id] = index }
             
-            func matchCount(_ text: String, tokens: [String]) -> Int {
-                let lower = text.lowercased()
-                return tokens.filter { lower.contains($0) }.count
-            }
-            
             struct ChannelScore {
                 let channel: StreamChannel
+                /// Everything, for ranking — including the language and
+                /// quality preferences.
                 let score: Int
+                /// What the channel actually matched — the matchup and the
+                /// broadcaster — for deciding whether to play without asking.
+                /// The language bonus used to be counted here too, and it is
+                /// +2000 for every language-neutral channel, so any channel
+                /// with a single stray word in common with a team name ("man"
+                /// in "Germany") cleared the bar and played itself.
+                let confidence: Int
                 let isNetworkMatch: Bool
                 let isContentMatch: Bool
             }
-            
+
+            typealias SideMatch = SmartSearchLogic.SideMatch
+
+            /// What one text — a title, a description, a channel name — is
+            /// worth for the matchup. Both sides in it is the signal; one
+            /// side is a lead. `weight` scales the whole thing: a title is
+            /// worth more than a description, a channel name more than a
+            /// description but less than a title.
+            func matchupScore(_ text: String, weight: Double) -> (score: Int, matched: Bool, both: Bool) {
+                let words = SmartSearchLogic.words(text)
+                guard !words.isEmpty else { return (0, false, false) }
+                let h = SmartSearchLogic.sideMatch(words, homeSide)
+                let a = awayIsEmpty ? .none : SmartSearchLogic.sideMatch(words, awaySide)
+                var score = 0.0
+                var both = false
+                if h != .none && a != .none {
+                    both = true
+                    // Two sides, one entry. Two whole spellings, or one whole
+                    // and a partial ("Lakers at BOS"), is the game. Two
+                    // partials ("LAL @ BOS", or two places with no nickname)
+                    // is a strong lead but not proof — kept under the bar on
+                    // its own, since two half-names can also be two other
+                    // teams from the same two towns.
+                    score = (h == .full || a == .full) ? 2500 : 900
+                    if h == .full && a == .full { score += 200 }
+                } else if h == .full || a == .full {
+                    score = 700
+                } else if h == .partial || a == .partial {
+                    score = 350
+                }
+                return (Int(score * weight), score > 0, both)
+            }
+
+            /// The guide entries worth reading for this game on a channel:
+            /// what is on now, and anything airing around the game's start.
+            func candidatePrograms(_ schedule: [EPGProgram]) -> [EPGProgram] {
+                var out: [EPGProgram] = []
+                if let current = schedule.first(where: { now >= $0.start && now <= $0.stop }) { out.append(current) }
+                if let gameStart {
+                    // From a little before tip-off (pre-game shows carry the
+                    // matchup) to well after (a game runs three hours, and
+                    // some run longer).
+                    let windowStart = gameStart.addingTimeInterval(-45 * 60)
+                    let windowEnd = gameStart.addingTimeInterval(4 * 3600)
+                    for program in schedule where program.stop > windowStart && program.start < windowEnd {
+                        if !out.contains(where: { $0.id == program.id }) { out.append(program) }
+                    }
+                }
+                return out
+            }
+
             var scoredChannels: [ChannelScore] = []
             
             for channel in inputChannels {
@@ -1810,73 +1904,66 @@ class ChannelViewModel: ObservableObject {
                 var isNetMatch = false 
                 var isContMatch = false
                 
-                
-                if !targetNetwork.isEmpty && channel.name.localizedCaseInsensitiveContains(targetNetwork) {
-                    score += 1000
-                    isNetMatch = true 
-                }
-                
-                
-                var epgTitle = ""
-                var epgDesc = ""
-                
-                if let eID = channel.epgID, let schedule = currentEPG[eID],
-                   let program = schedule.first(where: { now >= $0.start && now <= $0.stop }) {
-                    epgTitle = program.title
-                    epgDesc = program.description ?? ""
-                }
-                
-                let nameH = matchCount(channel.name, tokens: homeTokens)
-                let nameA = matchCount(channel.name, tokens: awayTokens)
-                
-                let titleH = matchCount(epgTitle, tokens: homeTokens)
-                let titleA = matchCount(epgTitle, tokens: awayTokens)
-                
-                let descH = matchCount(epgDesc, tokens: homeTokens)
-                let descA = matchCount(epgDesc, tokens: awayTokens)
-                
-                
-                
-                // Weighted by how MANY of the query's words the guide entry
-                // carries, not merely whether one did. A golf search is the
-                // tournament's name plus the sport, and every golf channel
-                // matches "golf" — so a flat bonus left the channel actually
-                // showing the tournament level with one showing anything else.
-                // The per-word bonus is what separates them.
-                if titleH > 0 { score += 500 + 120 * min(titleH - 1, 3); isContMatch = true }
-                if titleA > 0 { score += 500; isContMatch = true }
-                
-                
-                if descH > 0 { score += 300 + 90 * min(descH - 1, 3); isContMatch = true }
-                if descA > 0 { score += 300; isContMatch = true }
-                
-                
-                if nameH > 0 { score += 200; isContMatch = true }
-                if nameA > 0 { score += 200; isContMatch = true }
-                
-                
-                let totalH = nameH + titleH + descH
-                let totalA = nameA + titleA + descA
-                if totalH > 0 && totalA > 0 { score += 300 }
-                
-                
-                
-
-                // EVERY word of the event's name found somewhere on this
-                // channel — its name, its guide title, its description — is the
-                // one signal that says "this is the thing", and it is what a
-                // person does when they type the tournament into search and
-                // pick the obvious hit. Without it a golf search topped out at
-                // the generic +1000 network match plus a single +200 name hit,
-                // which is under the confidence threshold, so it never played
-                // anything by itself.
-                let haystack = "\(channel.name) \(epgTitle) \(epgDesc)".lowercased()
-                if !homeTokens.isEmpty, homeTokens.allSatisfy({ haystack.contains($0) }) {
-                    score += 800
-                    isContMatch = true
+                // The broadcaster's name on the channel. As a whole word
+                // ("ESPN" on "US: ESPN HD") it is the channel; inside another
+                // word ("ESPN" on "ESPN2", "ESPNU") it is a cousin.
+                if !targetNetwork.isEmpty {
+                    let nameWords = Set(SmartSearchLogic.words(channel.name))
+                    if !networkWords.isEmpty, networkWords.isSubset(of: nameWords) {
+                        score += 1000
+                        isNetMatch = true
+                    } else if channel.name.localizedCaseInsensitiveContains(targetNetwork) {
+                        score += 500
+                        isNetMatch = true
+                    }
                 }
 
-                let fullInfo = "\(channel.name) \(epgTitle) \(epgDesc)"
+                // The best guide entry for the game on this channel — its
+                // title and its description each read for both sides, the
+                // better of the two kept, plus a little for airing at the
+                // game's own time.
+                var bestGuide = 0
+                var guideTitle = ""
+                var guideDesc = ""
+                if let eID = channel.epgID, let schedule = currentEPG[eID] {
+                    for program in candidatePrograms(schedule) {
+                        let title = matchupScore(program.title, weight: 1.0)
+                        let desc = matchupScore(program.description ?? "", weight: 0.72)
+                        var entry = max(title.score, desc.score)
+                        if entry > 0 {
+                            if let gameStart, abs(program.start.timeIntervalSince(gameStart)) <= 30 * 60 {
+                                entry += 300
+                            } else if now >= program.start && now <= program.stop {
+                                entry += 100
+                            }
+                        }
+                        if entry > bestGuide {
+                            bestGuide = entry
+                            guideTitle = program.title
+                            guideDesc = program.description ?? ""
+                        }
+                    }
+                }
+                if bestGuide > 0 { score += bestGuide; isContMatch = true }
+
+                // The channel's own name — event channels are named for the
+                // matchup ("NBA 03: Lakers @ Celtics").
+                let named = matchupScore(channel.name, weight: 0.85)
+                if named.matched { score += named.score; isContMatch = true }
+
+                // A single-sided event — a race weekend, a fighter, a
+                // tournament given as text — is identified by its one name
+                // turning up anywhere on the channel at all.
+                if awayIsEmpty {
+                    let everything = SmartSearchLogic.words("\(channel.name) \(guideTitle) \(guideDesc)")
+                    if SmartSearchLogic.sideMatch(everything, homeSide) == .full {
+                        score += 800
+                        isContMatch = true
+                    }
+                }
+
+                let fullInfo = "\(channel.name) \(guideTitle) \(guideDesc)"
+                let confidence = score
                 
                 if score > 0 {
                     if SmartSearchLogic.checkLanguageMatch(fullInfo, preference: pLang) {
@@ -1915,7 +2002,8 @@ class ChannelViewModel: ObservableObject {
                 score += channel.qualityScore
                 
                 if score > 0 || isNetMatch {
-                    scoredChannels.append(ChannelScore(channel: channel, score: score, isNetworkMatch: isNetMatch, isContentMatch: isContMatch))
+                    scoredChannels.append(ChannelScore(channel: channel, score: score, confidence: confidence,
+                                                       isNetworkMatch: isNetMatch, isContentMatch: isContMatch))
                 }
             }
             
@@ -1926,7 +2014,10 @@ class ChannelViewModel: ObservableObject {
             
             
             
-            if let best = scoredChannels.first, best.score >= 1300 {
+            // Plays without asking only on what it MATCHED: both sides in one
+            // guide entry, or one side with the broadcaster's name — never on
+            // the preference bonuses, which every neutral channel collects.
+            if let best = scoredChannels.first, best.confidence >= 1300 {
                 let winner = best.channel
                 await MainActor.run {
                     self.isSearchingGame = false

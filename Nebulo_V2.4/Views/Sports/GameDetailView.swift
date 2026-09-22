@@ -1683,7 +1683,8 @@ struct GameDetailContentView: View, Equatable {
                     home: terms.home,
                     away: terms.away,
                     sport: request.sport,
-                    network: request.game.streamNetworkHint
+                    network: request.game.streamNetworkHint,
+                    event: request.game
                 )
             } label: {
                 HStack(spacing: 8) {

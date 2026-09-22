@@ -450,9 +450,15 @@ nonisolated struct ESPNTeam: Codable, Hashable, Sendable {
     let shortDisplayName: String?
     let logo: String?
     let color: String?
+    /// "Los Angeles" / "Lakers" — the two halves of the display name, as the
+    /// feed splits them. Guides name a side by either half as often as by
+    /// both, so the stream search wants each on its own. Nil for teams the
+    /// catalog built before these were kept.
+    let location: String?
+    let name: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, abbreviation, displayName, shortDisplayName, logo, color, logos
+        case id, abbreviation, displayName, shortDisplayName, logo, color, logos, location, name
     }
 
     nonisolated struct Logo: Codable, Hashable, Sendable { let href: String? }
@@ -467,6 +473,8 @@ nonisolated struct ESPNTeam: Codable, Hashable, Sendable {
         self.displayName = try c.decodeIfPresent(String.self, forKey: .displayName)
         self.shortDisplayName = try c.decodeIfPresent(String.self, forKey: .shortDisplayName)
         self.color = try c.decodeIfPresent(String.self, forKey: .color)
+        self.location = try c.decodeIfPresent(String.self, forKey: .location)
+        self.name = try c.decodeIfPresent(String.self, forKey: .name)
         if let flat = try c.decodeIfPresent(String.self, forKey: .logo), !flat.isEmpty {
             self.logo = flat
         } else {
@@ -476,13 +484,16 @@ nonisolated struct ESPNTeam: Codable, Hashable, Sendable {
     }
 
     nonisolated init(id: String, abbreviation: String?, displayName: String?,
-                     shortDisplayName: String?, logo: String?, color: String?) {
+                     shortDisplayName: String?, logo: String?, color: String?,
+                     location: String? = nil, name: String? = nil) {
         self.id = id
         self.abbreviation = abbreviation
         self.displayName = displayName
         self.shortDisplayName = shortDisplayName
         self.logo = logo
         self.color = color
+        self.location = location
+        self.name = name
     }
 
     /// Written out in the scoreboard's flat shape — this is what the persisted
@@ -495,6 +506,8 @@ nonisolated struct ESPNTeam: Codable, Hashable, Sendable {
         try c.encodeIfPresent(shortDisplayName, forKey: .shortDisplayName)
         try c.encodeIfPresent(logo, forKey: .logo)
         try c.encodeIfPresent(color, forKey: .color)
+        try c.encodeIfPresent(location, forKey: .location)
+        try c.encodeIfPresent(name, forKey: .name)
     }
 }
 struct ESPNLeader: Codable, Hashable, Sendable { let name: String?; let displayName: String?; let leaders: [ESPNLeaderEntry]? }

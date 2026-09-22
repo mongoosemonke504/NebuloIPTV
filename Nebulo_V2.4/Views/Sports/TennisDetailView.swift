@@ -400,7 +400,8 @@ struct TennisDetailContentView: View {
                     home: home,
                     away: away,
                     sport: .tennis,
-                    network: game.streamNetworkHint
+                    network: game.streamNetworkHint,
+                    event: game
                 )
             } label: {
                 HStack(spacing: 8) {
