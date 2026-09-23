@@ -8,7 +8,7 @@
 		<string>com.nebulo.epgQuickRefresh</string>
 	</array>
 	<key>CFBundleDisplayName</key>
-	<string>Nebulo</string>
+	<string>Onside TV</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIcons</key>
@@ -92,7 +92,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Nebulo</string>
+	<string>Onside TV</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

@@ -191,7 +191,7 @@ actor PlayerPhotoService {
 
         var request = URLRequest(url: url)
         // Wikipedia throttles callers that don't identify themselves.
-        request.setValue("Nebulo/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
+        request.setValue("OnsideTV/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
 
         guard let (data, response) = try? await URLSession.shared.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200,

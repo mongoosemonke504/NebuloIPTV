@@ -76,7 +76,7 @@ actor ProgramArtworkService {
         else { return nil }
         var request = URLRequest(url: url)
         // Wikimedia asks API clients to identify themselves.
-        request.setValue("Nebulo/3.0 (iOS TV app)", forHTTPHeaderField: "User-Agent")
+        request.setValue("OnsideTV/3.0 (iOS TV app)", forHTTPHeaderField: "User-Agent")
         guard let (data, response) = try? await URLSession.shared.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200,
               let summary = try? JSONDecoder().decode(WikiSummary.self, from: data)

@@ -55,9 +55,11 @@ struct LoginView: View {
                             }
                             
                             VStack(spacing: 4) {
-                                Text("Nebulo")
+                                Text("Onside TV")
                                     .font(.system(size: 42, weight: .black, design: .rounded))
                                     .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.7)
                                 
                                 Text("STREAMING REIMAGINED")
                                     .font(.system(size: 10, weight: .bold))
