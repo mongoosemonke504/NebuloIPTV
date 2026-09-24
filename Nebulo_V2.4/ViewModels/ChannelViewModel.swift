@@ -2665,6 +2665,17 @@ class ChannelViewModel: ObservableObject {
     func loadNewlySignedInAccount(_ account: Account) async -> Bool {
         reset()
         await loadActiveAccounts(silent: false, force: true, performEpgCheck: true)
+        // Saving the account set off a load of its own (the `$accounts`
+        // observer in init) a moment after this one began, and every load
+        // cancels the one before it — so the load above ends early, cancelled,
+        // with nothing in, and judging by it turned every correct login into
+        // "Login Incorrect". The verdict belongs to the load that finishes
+        // last: follow each replacement until the newest one is done.
+        var awaited: Task<Void, Never>?
+        while let latest = currentLoadTask, latest != awaited {
+            awaited = latest
+            await latest.value
+        }
         return channels.contains { $0.accountID == account.id }
     }
 

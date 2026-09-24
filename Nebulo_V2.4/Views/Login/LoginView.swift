@@ -235,6 +235,12 @@ struct LoginView: View {
             return ("Can't Reach Server", PlaylistValidator.Failure.unreachable.errorDescription ?? "")
         case .badURL?:
             return ("Invalid Address", PlaylistValidator.Failure.badURL.errorDescription ?? "")
+        case nil:
+            // The server took the login and answered with channels, so the
+            // details are right and it was the load that fell over — a timeout,
+            // a dropped connection. "Login Incorrect" here sends someone off
+            // re-typing a password that was never wrong.
+            return ("Couldn't Load Channels", "Your login worked, but the channel list didn't finish loading. Try again.")
         default:
             return ("Login Incorrect", type == .xtream
                 ? "No channels loaded for that username and password. Check them, and that your subscription is still active."
