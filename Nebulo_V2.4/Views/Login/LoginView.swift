@@ -22,7 +22,11 @@ struct LoginView: View {
     @State private var passwordInput = ""
     @State private var playlistNameInput = ""
     @State private var showError = false
+    @State private var errorTitle = "Connection Error"
     @State private var errorMessage = ""
+    /// Between the tap and the verdict: the playlist is loading, and the
+    /// login screen holds until it knows whether it worked.
+    @State private var isConnecting = false
     @State private var selectedLoginType: LoginType = .xtream
 
     var body: some View {
@@ -121,15 +125,21 @@ struct LoginView: View {
                             
                             
                             Button(action: login) {
-                                Text("Connect to Server")
-                                    .font(.headline)
-                                    .foregroundColor(.black)
-                                    .frame(maxWidth: .infinity)
-                                    .frame(height: 54)
-                                    .background(Color.white)
-                                    .cornerRadius(16)
-                                    .shadow(color: .white.opacity(0.2), radius: 15)
+                                HStack(spacing: 10) {
+                                    if isConnecting {
+                                        ProgressView().tint(.black)
+                                    }
+                                    Text(isConnecting ? "Connecting…" : "Connect to Server")
+                                }
+                                .font(.headline)
+                                .foregroundColor(.black)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 54)
+                                .background(Color.white.opacity(isConnecting ? 0.8 : 1))
+                                .cornerRadius(16)
+                                .shadow(color: .white.opacity(0.2), radius: 15)
                             }
+                            .disabled(isConnecting)
                             .padding(.top, 8)
                         }
                         .padding(24)
@@ -143,7 +153,7 @@ struct LoginView: View {
                     .padding(.bottom, 50)
                 }
             }
-            .alert("Connection Error", isPresented: $showError) {
+            .alert(errorTitle, isPresented: $showError) {
                 Button("Got it", role: .cancel) {}
             } message: {
                 Text(errorMessage)
@@ -168,10 +178,12 @@ struct LoginView: View {
         var safe = cl
         if safe.hasSuffix("/") { safe = String(safe.dropLast()) }
         
+        guard !isConnecting else { return }
+
         if selectedLoginType == .xtream {
-            guard !usernameInput.isEmpty, !passwordInput.isEmpty, !safe.isEmpty else { errorMessage = "Please enter your server URL, username, and password."; showError = true; return }
+            guard !usernameInput.isEmpty, !passwordInput.isEmpty, !safe.isEmpty else { errorTitle = "Missing Details"; errorMessage = "Please enter your server URL, username, and password."; showError = true; return }
         } else {
-            guard !safe.isEmpty else { errorMessage = "Please enter a valid Playlist URL."; showError = true; return }
+            guard !safe.isEmpty else { errorTitle = "Missing Details"; errorMessage = "Please enter a valid Playlist URL."; showError = true; return }
         }
         
         
@@ -182,9 +194,52 @@ struct LoginView: View {
             username: usernameInput,
             password: passwordInput
         )
-        
-        AccountManager.shared.saveAccount(newAccount, makeActive: true)
-        withAnimation(.easeInOut(duration: 0.5)) { isLoggedIn = true }
+        let type = selectedLoginType
+        let user = usernameInput
+        let pass = passwordInput
+
+        isConnecting = true
+        Task { @MainActor in
+            // Saved, but NOT made current. The app leaves the login screen
+            // the moment an account becomes current, and it mustn't until
+            // this one has proven it works — a wrong password used to land
+            // on an empty home screen with nothing to say why.
+            AccountManager.shared.saveAccount(newAccount, makeActive: false)
+            let loaded = await ChannelViewModel.shared.loadNewlySignedInAccount(newAccount)
+
+            if loaded {
+                isLoggedIn = true
+                // The saved copy, not the local one: saving can assign it a
+                // different stable ID.
+                let saved = AccountManager.shared.accounts.first { $0.id == newAccount.id } ?? newAccount
+                withAnimation(.easeInOut(duration: 0.5)) { AccountManager.shared.switchToAccount(saved) }
+            } else {
+                AccountManager.shared.removeAccount(newAccount)
+                // Only now ask the server why — on this path alone, so a good
+                // login never pays for the extra request.
+                let failure = await PlaylistValidator.validate(type: type, url: safe, username: user, password: pass)
+                (errorTitle, errorMessage) = Self.explanation(for: failure, type: type)
+                showError = true
+            }
+            isConnecting = false
+        }
+    }
+
+    /// What a login that loaded nothing tells the user. "Login incorrect" is
+    /// what it nearly always is, so that is the default — but a server that
+    /// never answered is not a wrong password, and saying it was would send
+    /// someone off re-typing a password that was right.
+    private static func explanation(for failure: PlaylistValidator.Failure?, type: LoginType) -> (title: String, message: String) {
+        switch failure {
+        case .unreachable?:
+            return ("Can't Reach Server", PlaylistValidator.Failure.unreachable.errorDescription ?? "")
+        case .badURL?:
+            return ("Invalid Address", PlaylistValidator.Failure.badURL.errorDescription ?? "")
+        default:
+            return ("Login Incorrect", type == .xtream
+                ? "No channels loaded for that username and password. Check them, and that your subscription is still active."
+                : "No channels loaded from that playlist link. Check the link with your provider.")
+        }
     }
 }
 

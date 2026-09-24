@@ -593,7 +593,18 @@ class ChannelViewModel: ObservableObject {
             let silentEpg = silent || (hadCachedChannels && !force && !shouldUpdateEPG)
             
             
-            if shouldUpdateEPG {
+            if shouldUpdateEPG && allChannels.isEmpty {
+                // Nothing loaded — a rejected login, a dead server. There is
+                // no guide worth fetching for no channels, and a fetch left in
+                // flight here makes the NEXT attempt's fetch stand down (see
+                // `epgFetchInFlight`): fix the password, sign in again, and the
+                // guide never arrived.
+                await MainActor.run {
+                    guard self.currentLoadID == loadID else { return }
+                    self.isUpdatingEPG = false
+                    self.stopSmoothingTimer()
+                }
+            } else if shouldUpdateEPG {
                 print("🔄 [ChannelViewModel] Starting Full EPG Update...")
                 // NOT awaited before the home screen is released. A full guide
                 // download and parse is the ten seconds people were staring at
@@ -2622,7 +2633,11 @@ class ChannelViewModel: ObservableObject {
     func loadData(url: String, user: String, pass: String, type: LoginType, silent: Bool = false) async {
         
         if !AccountManager.shared.accounts.isEmpty {
-            await loadActiveAccounts(silent: silent)
+            // With the guide check. Without it this load never fetched the
+            // guide at all — and it races `handleAppActivation` at launch, so
+            // whichever of the two ran second decided whether the guide was
+            // refreshed.
+            await loadActiveAccounts(silent: silent, performEpgCheck: true)
             return
         }
         
@@ -2633,6 +2648,24 @@ class ChannelViewModel: ObservableObject {
         await MainActor.run {
             AccountManager.shared.saveAccount(tempAccount, makeActive: true)
         }
+    }
+
+    /// The first load of a playlist the user has just signed in with, run
+    /// from the login screen before it lets them in.
+    ///
+    /// Forced, and with the guide: the channels load from nothing, and the
+    /// guide starts downloading the moment they're in rather than on the next
+    /// return to the app. `lastEPGUpdate` is one app-wide timestamp, so after
+    /// signing out of one provider and into another it vouched for the old
+    /// provider's guide, and a new login opened with no programme information.
+    ///
+    /// Returns whether THIS account produced channels — judged by the
+    /// channels' own account, so anything else in the account list can't make
+    /// a failed login look like a good one.
+    func loadNewlySignedInAccount(_ account: Account) async -> Bool {
+        reset()
+        await loadActiveAccounts(silent: false, force: true, performEpgCheck: true)
+        return channels.contains { $0.accountID == account.id }
     }
 
     func updateEPG(baseURL: URL, user: String, pass: String, force: Bool = false, silent: Bool = false) async {
