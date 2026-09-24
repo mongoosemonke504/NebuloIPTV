@@ -62,6 +62,14 @@ Onside TV is free and open-source. If you enjoy using it, consider buying me a c
 
 Come say hi on [Discord](https://discord.gg/msq2tcd5Rg).
 
+## License
+
+The code is released under the [MIT License](LICENSE).
+
+The **Onside TV** name and the app icon aren't covered by that license. If you publish a fork, please give it its own name and icon.
+
+Onside TV plays video with [VLCKit](https://code.videolan.org/videolan/VLCKit), which is licensed separately under the [LGPL-2.1](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html).
+
 ---
 
 *Found a bug? [Open an issue](https://github.com/mongoosemonke504/NebuloIPTV/issues).*
