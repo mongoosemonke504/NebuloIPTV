@@ -28,6 +28,7 @@ struct SettingsView: View {
     @AppStorage("showSupportPopup") private var showSupportPopup = true
 
     @ObservedObject var accountManager = AccountManager.shared
+    @ObservedObject var updateService = UpdateService.shared
     
     /// 0 at rest, 1 once the big title has scrolled away — drives the compact
     /// header's blur and dark wash, the same recipe the hubs use. A leaf, so a
@@ -88,8 +89,8 @@ struct SettingsView: View {
                         SportsPreferencesCard(viewModel: viewModel)
 
                         
-                        SettingsSectionHeader(title: "About")
-                        AboutCard()
+                        SettingsSectionHeader(title: "Updates")
+                        UpdatesCard(updateService: updateService)
                         
                         
                         SettingsSectionHeader(title: "Support")
@@ -449,32 +450,102 @@ struct SupportCard: View {
     }
 }
 
-/// The app's version, read from the bundle so it can never disagree with
-/// what was built. This used to be an update checker that sent people to
-/// GitHub for new builds; App Store apps update through the App Store, and
-/// App Review rejects apps that point anywhere else for updates.
-struct AboutCard: View {
-    private var version: String {
-        let info = Bundle.main.infoDictionary
-        let short = info?["CFBundleShortVersionString"] as? String ?? "–"
-        let build = info?["CFBundleVersion"] as? String ?? "–"
-        return "\(short) (\(build))"
-    }
-
+struct UpdatesCard: View {
+    @ObservedObject var updateService: UpdateService
+    @State private var showReleaseNotes = false
+    
     var body: some View {
         SettingsCard {
-            HStack {
-                Image(systemName: "app.badge.fill")
-                    .foregroundStyle(.primary)
-                Text("Version")
-                    .font(.body)
-                    .foregroundStyle(.primary)
-                Spacer()
-                Text(version)
-                    .font(.body.monospacedDigit())
-                    .foregroundStyle(.secondary)
+            VStack(spacing: 0) {
+                HStack {
+                    Image(systemName: "app.badge.fill")
+                        .foregroundStyle(.primary)
+                    Text("Current Version: \(updateService.currentVersion)")
+                        .font(.body)
+                        .foregroundStyle(.primary)
+                    Spacer()
+                }
+                .padding()
+                
+                Divider().background(Color.white.opacity(0.1))
+                
+                if updateService.checkingForUpdate {
+                    HStack {
+                        CustomSpinner(color: .white, lineWidth: 3, size: 20)
+                        Text("Checking...")
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding()
+                } else if updateService.isUpdateAvailable, let release = updateService.latestRelease {
+                    Button(action: { showReleaseNotes = true }) {
+                        HStack {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .foregroundColor(.green)
+                                .font(.title3)
+                            
+                            VStack(alignment: .leading) {
+                                Text("Update Available: \(release.tagName)")
+                                    .font(.headline)
+                                    .foregroundColor(.green)
+                                Text("Tap to view release notes")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding()
+                    }
+                    .buttonStyle(.plain)
+                    .sheet(isPresented: $showReleaseNotes) {
+                        NavigationStack {
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 16) {
+                                    Text("What's New")
+                                        .font(.title2.bold())
+                                    
+                                    Text(release.body)
+                                        .font(.body)
+                                        .foregroundColor(.secondary)
+                                    
+                                    Button(action: { UIApplication.shared.open(URL(string: release.htmlUrl)!) }) {
+                                        Text("Download Update")
+                                            .font(.headline)
+                                            .foregroundStyle(.primary)
+                                            .frame(maxWidth: .infinity)
+                                            .frame(height: 50)
+                                            .background(Material.ultraThin)
+                                            .cornerRadius(12)
+                                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.2), lineWidth: 1))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .padding(.top, 20)
+                                }
+                                .padding()
+                            }
+                            .navigationTitle(release.tagName)
+                            .toolbar {
+                                Button("Close") { showReleaseNotes = false }
+                            }
+                        }
+                        .presentationDetents([.medium, .large])
+                    }
+                } else {
+                    Button(action: {
+                        Task { await updateService.checkForUpdates(manual: true) }
+                    }) {
+                        SettingsRow(
+                            icon: updateService.showUpToDate ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath",
+                            title: updateService.showUpToDate ? "System Up to Date" : "Check for Updates",
+                            subtitle: updateService.errorMessage,
+                            iconColor: updateService.showUpToDate ? .green : .blue,
+                            showChevron: false
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
             }
-            .padding()
         }
     }
 }
