@@ -37,7 +37,7 @@
 
 /* Begin PBXFileReference section */
 		A1B2C3D40000000000000001 /* NebuloWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = NebuloWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
-		E1F2B43F2F0B9631004D9D5D /* Nebulo_V2.4.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nebulo_V2.4.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E1F2B43F2F0B9631004D9D5D /* Nebulo_V2.4.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = Nebulo_V2.4.app; path = Nebulo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
