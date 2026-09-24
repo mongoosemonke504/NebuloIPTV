@@ -65,7 +65,7 @@ struct GameActivityAttributes: ActivityAttributes {
 }
 
 extension GameActivityAttributes {
-    static let appGroupID = "group.Nebulo"
+    static let appGroupID = "group.tv.onside.app"
 
     /// Resolves a stored logo filename to its file URL in the shared
     /// container. Nil when the app group isn't provisioned.
