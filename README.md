@@ -43,7 +43,7 @@ When you tap a game, the app looks through your channels for it. It matches both
 - Rename, hide and reorder channels
 
 ### Look and feel
-Made for iOS 26 with Liquid Glass all through the app. You can also change the colors of the nebula backgrounds.
+Made for iOS 26 with Liquid Glass all through the app.
 
 ## Requirements
 - An iPhone on iOS 26 or newer
