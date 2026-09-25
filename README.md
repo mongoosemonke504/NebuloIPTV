@@ -1,56 +1,56 @@
 # Onside TV
 
-**The IPTV player for iPhone built around the games you care about.**
+A clean IPTV app for iPhone with a sports score center built in. It used to be called Nebulo, same app with a new name.
 
-Onside TV — formerly **Nebulo** — plays the IPTV subscription you already have and puts your teams first: live scores, what's on next, and one tap from a game to the channel showing it.
+Check the scores, tap a game, and it finds the channel that's showing it on your own IPTV service.
 
-> Onside TV does not include any channels or content. You need your own subscription from an IPTV provider.
+Heads up: Onside TV doesn't come with any channels. You need your own subscription from an IPTV provider.
 
 ## Installation
 
 1. Download the latest IPA from the [Releases page](https://github.com/mongoosemonke504/NebuloIPTV/releases)
 2. Sideload it onto your iPhone
-3. Run and enjoy!
+3. Log in with your provider info and enjoy!
 
-If the main IPA won't verify, try the backup IPA — it works with signing apps. Releases up to V2.3 are named Nebulo.
+Releases from before the name change are still called Nebulo.
 
 ## Features
 
-### Follow your teams
-- Live scores, schedules and standings for the NFL, college football, the NBA, WNBA, college basketball, MLB, the NHL, soccer leagues and cups worldwide, Formula 1, golf, tennis, MMA and more
-- Favorite teams, leagues, drivers and golfers, with their next game and live score on the home screen
-- Team, league and driver pages with fixtures, results, tables, squads and season stats
-- Match cards with lineups, team stats, momentum, shot maps and box scores
-- Live Activities put the score on your Lock Screen and in the Dynamic Island
+### Sports
+- Live scores, schedules and standings for the NFL, college football, NBA, WNBA, college basketball, MLB, NHL, soccer from all over, F1, golf, tennis, MMA and more
+- Favorite your teams, leagues, drivers and golfers so their next game or live score shows up on the home screen
+- Team, league and driver pages with schedules, results, standings, rosters and stats
+- Game cards with lineups, team stats, momentum, shot maps and box scores
+- Live Activities so you can follow the score from your Lock Screen and Dynamic Island
 - Reminders before a game starts
 
-### One tap from a game to the channel
-Tap a game and Onside TV searches your playlist for the channel showing it, matching both teams against your TV guide around the game's start time.
+### Finding the game
+When you tap a game, the app looks through your channels for it. It matches both team names against your TV guide around the start time. If it's sure it found the right channel it just starts playing, and if not it shows you the best matches to pick from.
 
-### Watch your way
-- TV guide with what's on now and next, and each channel's full schedule
-- Multi-view: up to four streams at once
-- Picture in Picture, AirPlay, and audio that keeps playing in the Dynamic Island when you leave the app
-- Record programmes — pick one from the guide or set a time
-- Catch-up on providers that support it
-- Swipe up for a quick channel switcher; swipe left or right to change channel
-- Subtitles and closed captions, audio-track selection and aspect-ratio modes
+### Watching
+- TV guide with what's on now and next, plus the full schedule for each channel
+- Multi-view to watch up to 4 streams at once
+- Picture in Picture and AirPlay, and the audio keeps playing when you leave the app
+- Record shows from the guide or set your own time
+- Catch-up if your provider supports it
+- Swipe up for a quick channel switcher, or swipe left and right to change channels
+- Subtitles, closed captions, audio tracks and aspect ratio options
 
-### Your playlists
-- Xtream Codes logins and M3U playlists — more than one at once
-- Extra XMLTV guide sources
-- Search across channels, programmes and teams to follow
+### Playlists
+- Xtream Codes logins and M3U playlists, and you can use more than one at a time
+- Add extra XMLTV guide links
+- Search channels, shows and teams
 - Rename, hide and reorder channels
 
-### Designed for iOS 26
-Liquid Glass throughout, a black canvas that lets the artwork lead, and nebula backgrounds you can recolor.
+### Look and feel
+Made for iOS 26 with Liquid Glass all through the app. You can also change the colors of the nebula backgrounds.
 
 ## Requirements
-- iPhone running iOS 26 or later
-- A subscription from an IPTV provider (Xtream Codes or M3U)
+- An iPhone on iOS 26 or newer
+- An IPTV subscription (Xtream Codes or M3U)
 
 ## Privacy
-Onside TV has no accounts, no analytics, no ads and no tracking — it collects nothing. Your playlist login stays on your iPhone and goes only to your provider. Read the full [privacy policy](AppStore/PRIVACY.md).
+No accounts, no ads, no analytics and no tracking. Your login stays on your phone and only gets sent to your provider.
 
 ## ❤️ Support the project
 
@@ -60,16 +60,14 @@ Onside TV is free and open-source. If you enjoy using it, consider buying me a c
   <img src="https://camo.githubusercontent.com/2103f6f19430c25368a3350117da5b736b008d776858e772b226e642398555e0/68747470733a2f2f63646e2e6275796d6561636f666665652e636f6d2f627574746f6e732f76322f64656661756c742d79656c6c6f772e706e67" alt="Buy Me A Coffee" width="160">
 </a>
 
-Come say hi on [Discord](https://discord.gg/msq2tcd5Rg).
+Come hang out in the [Discord](https://discord.gg/msq2tcd5Rg) too.
 
 ## License
 
-The code is released under the [MIT License](LICENSE).
+The code is under the [MIT License](LICENSE). That doesn't cover the Onside TV name or the app icon, so if you publish your own version, please give it a different name and icon.
 
-The **Onside TV** name and the app icon aren't covered by that license. If you publish a fork, please give it its own name and icon.
-
-Onside TV plays video with [VLCKit](https://code.videolan.org/videolan/VLCKit), which is licensed separately under the [LGPL-2.1](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html).
+Video playback uses [VLCKit](https://code.videolan.org/videolan/VLCKit), which has its own license ([LGPL-2.1](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html)).
 
 ---
 
-*Found a bug? [Open an issue](https://github.com/mongoosemonke504/NebuloIPTV/issues).*
+*Found a bug? [Open an issue!](https://github.com/mongoosemonke504/NebuloIPTV/issues)*
