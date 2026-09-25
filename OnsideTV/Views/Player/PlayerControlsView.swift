@@ -2,7 +2,7 @@ import SwiftUI
 import AVKit
 
 struct PlayerControlsView: View {
-    @ObservedObject var playerManager: NebuloPlayerEngine
+    @ObservedObject var playerManager: PlayerEngine
     @ObservedObject var recordingManager = RecordingManager.shared
     let channel: StreamChannel
     var viewModel: ChannelViewModel?

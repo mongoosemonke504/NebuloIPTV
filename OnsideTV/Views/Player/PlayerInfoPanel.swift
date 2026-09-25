@@ -30,7 +30,7 @@ struct PlayerInfoPanel: View {
     /// minimising the recording drops back onto it, not home.
     var onPlayRecording: ((Recording) -> Void)? = nil
     @ObservedObject var viewModel: ChannelViewModel
-    @ObservedObject var playerManager: NebuloPlayerEngine
+    @ObservedObject var playerManager: PlayerEngine
     @ObservedObject var recordingManager = RecordingManager.shared
 
     /// When true (recording playback), hides the record button in the header

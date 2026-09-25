@@ -125,7 +125,7 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
             // its NON-mixable session is what keeps the app as the system's
             // Now Playing app, and flipping it to mixable mid-playback
             // knocked the lock-screen media card out.
-            if !NebuloPlayerEngine.shared.isPlaying {
+            if !PlayerEngine.shared.isPlaying {
                 try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers, .allowAirPlay])
                 try AVAudioSession.sharedInstance().setActive(true, options: .notifyOthersOnDeactivation)
             }
@@ -164,7 +164,7 @@ class StreamRecorder: NSObject, URLSessionDataDelegate {
         do {
             // Same rule as setupSilentAudio: never demote the player's
             // non-mixable session to mixable while a stream is playing.
-            if !NebuloPlayerEngine.shared.isPlaying {
+            if !PlayerEngine.shared.isPlaying {
                 try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers, .allowAirPlay])
                 try AVAudioSession.sharedInstance().setActive(true, options: .notifyOthersOnDeactivation)
             }

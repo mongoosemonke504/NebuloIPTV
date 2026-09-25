@@ -65,7 +65,7 @@ class RecordingManager: NSObject, ObservableObject {
             // system's Now Playing app (lock-screen media card), and it
             // already holds the process open. The mixable category is only
             // for the recording-with-nothing-playing case.
-            if !NebuloPlayerEngine.shared.isPlaying {
+            if !PlayerEngine.shared.isPlaying {
                 try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
                 try AVAudioSession.sharedInstance().setActive(true)
             }

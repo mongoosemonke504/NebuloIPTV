@@ -871,7 +871,7 @@ class ChannelViewModel: ObservableObject {
     
     func prewarmChannel(_ channel: StreamChannel) {
         if let url = URL(string: channel.streamURL) {
-            NebuloPlayerEngine.shared.prepareNextChannel(url: url)
+            PlayerEngine.shared.prepareNextChannel(url: url)
         }
     }
 

@@ -27,7 +27,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
     @Binding var showQuickSwitcher: Bool
 
 
-    @ObservedObject var playerManager = NebuloPlayerEngine.shared
+    @ObservedObject var playerManager = PlayerEngine.shared
 
     @State private var currentChannel: StreamChannel?
     @State private var showControls = true
@@ -174,7 +174,7 @@ struct CustomVideoPlayerView: SwiftUI.View {
                 if showAspectRatioPanel {
                     settingsPanelOverlay {
                         SettingsList(
-                            items: NebuloPlayerEngine.VideoAspectRatio.allCases,
+                            items: PlayerEngine.VideoAspectRatio.allCases,
                             selectedItem: playerManager.currentAspectRatio,
                             title: "Aspect Ratio",
                             onSelect: { ratio in

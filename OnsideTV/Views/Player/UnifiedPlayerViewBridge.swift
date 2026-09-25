@@ -7,7 +7,7 @@ struct UnifiedPlayerViewBridge: UIViewRepresentable {
         let container = UIView()
         container.backgroundColor = .black
         
-        let view = NebuloPlayerEngine.shared.renderView
+        let view = PlayerEngine.shared.renderView
         view.backgroundColor = .clear
         view.translatesAutoresizingMaskIntoConstraints = false
         

@@ -7,8 +7,8 @@ import AVFoundation
 import AVKit
 import MediaPlayer
 
-public class NebuloPlayerEngine: NSObject, ObservableObject {
-    public static let shared = NebuloPlayerEngine()
+public class PlayerEngine: NSObject, ObservableObject {
+    public static let shared = PlayerEngine()
     
     @Published public var isBuffering = false {
         didSet {
@@ -1079,7 +1079,7 @@ public class NebuloPlayerEngine: NSObject, ObservableObject {
     }
 }
 
-extension NebuloPlayerEngine: VLCMediaPlayerDelegate {
+extension PlayerEngine: VLCMediaPlayerDelegate {
     public func mediaPlayerStateChanged(_ aNotification: Notification) {
         guard let player = aNotification.object as? VLCMediaPlayer,
               currentBackend == .vlc else { return }
@@ -1108,7 +1108,7 @@ extension NebuloPlayerEngine: VLCMediaPlayerDelegate {
     }
 }
 
-extension NebuloPlayerEngine: AVPictureInPictureControllerDelegate {
+extension PlayerEngine: AVPictureInPictureControllerDelegate {
     public func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
         print("📱 [NebuloEngine] PiP started")
         isPiPSessionActive = true

@@ -849,7 +849,7 @@ struct MainViewModifiers: ViewModifier {
                         selectedChannel = nil
                         showQuickSwitcher = false
                         if viewModel.miniPlayerChannel == nil {
-                            NebuloPlayerEngine.shared.stop()
+                            PlayerEngine.shared.stop()
                         }
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                             viewModel.scrollRestoreTrigger = UUID()
@@ -862,7 +862,7 @@ struct MainViewModifiers: ViewModifier {
                         selectedChannel = nil
                         showQuickSwitcher = false
                         if viewModel.miniPlayerChannel == nil {
-                            NebuloPlayerEngine.shared.stop()
+                            PlayerEngine.shared.stop()
                         }
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                             selectedRecording = rec
@@ -887,7 +887,7 @@ struct MainViewModifiers: ViewModifier {
                     selectedChannel = nil
                     showQuickSwitcher = false
                     if viewModel.miniPlayerChannel == nil {
-                        NebuloPlayerEngine.shared.stop()
+                        PlayerEngine.shared.stop()
                     }
                 }
                 selectedRecording = nil
@@ -1010,8 +1010,8 @@ extension MainView {
                   // A stream that is already up is the connection it has —
                   // re-opening it (from the mini player, or a recording row
                   // for the channel being watched) makes no new one.
-                  !(NebuloPlayerEngine.shared.activeBackendName != "None"
-                    && NebuloPlayerEngine.shared.currentURL?.absoluteString == channel.streamURL),
+                  !(PlayerEngine.shared.activeBackendName != "None"
+                    && PlayerEngine.shared.currentURL?.absoluteString == channel.streamURL),
                   viewModel.secondConnectionRisk(for: channel) {
             // A recording holds a connection, and this stream would be a
             // second one on a line that may allow only one — which is the
@@ -2946,7 +2946,7 @@ struct MiniPlayerView: SwiftUI.View {
     let onExpand: () -> Void
     let onClose: () -> Void
     
-    @ObservedObject var playerManager = NebuloPlayerEngine.shared
+    @ObservedObject var playerManager = PlayerEngine.shared
     
     @State private var showControls = false
     @State private var pipOffset: CGSize = .zero
@@ -2992,7 +2992,7 @@ struct MiniPlayerView: SwiftUI.View {
                         HStack {
                             Button(action: {
                                 onClose()
-                                NebuloPlayerEngine.shared.stop()
+                                PlayerEngine.shared.stop()
                             }) {
                                 Image(systemName: "xmark")
                                     .font(.subheadline.weight(.bold))

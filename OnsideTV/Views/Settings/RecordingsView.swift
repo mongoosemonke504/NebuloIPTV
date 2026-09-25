@@ -1274,7 +1274,7 @@ struct RecordingPlayerView: View {
             let knownDuration = currentRecording.duration
             guard knownDuration > 0 else { return }
             await MainActor.run {
-                let engine = NebuloPlayerEngine.shared
+                let engine = PlayerEngine.shared
                 engine.externalTimeManagement = true
                 engine.duration = knownDuration
                 if engine.currentTime > knownDuration || engine.currentTime < 0 {
@@ -1291,10 +1291,10 @@ struct RecordingPlayerView: View {
         // position from before the swap so the user doesn't lose their place.
         .onChangeCompat(of: currentRecording.localFileName ?? "") { newFile in
             guard newFile.hasSuffix(".mp4") else { return }
-            let savedTime = NebuloPlayerEngine.shared.currentTime
+            let savedTime = PlayerEngine.shared.currentTime
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
                 if savedTime > 0 {
-                    NebuloPlayerEngine.shared.seek(to: savedTime)
+                    PlayerEngine.shared.seek(to: savedTime)
                 }
             }
         }
