@@ -4,7 +4,7 @@ import ActivityKit
 /// Extension-side copy of the app's GameActivityAttributes. ActivityKit
 /// matches the running activity to the widget UI by the attributes type
 /// name and its encoded fields, so this must stay byte-for-byte identical
-/// to Nebulo_V2.4/Models/GameActivityAttributes.swift.
+/// to OnsideTV/Models/GameActivityAttributes.swift.
 struct GameActivityAttributes: ActivityAttributes {
     public struct ContentState: Codable, Hashable {
         var homeScore: String

@@ -94,7 +94,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
 }
 
 @main
-struct Nebulo_V2_4App: App {
+struct OnsideTVApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     @StateObject private var channelViewModel = ChannelViewModel.shared

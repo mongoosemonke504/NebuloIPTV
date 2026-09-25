@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A1B2C3D4000000000000000C /* NebuloWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000001 /* NebuloWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		A1B2C3D4000000000000000C /* OnsideTVWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000001 /* OnsideTVWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		E165D43E2F1070EA00037231 /* VLCKitSPM in Frameworks */ = {isa = PBXBuildFile; productRef = E165D43D2F1070EA00037231 /* VLCKitSPM */; };
 /* End PBXBuildFile section */
 
@@ -17,7 +17,7 @@
 			containerPortal = E1F2B4372F0B9631004D9D5D /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = A1B2C3D40000000000000003;
-			remoteInfo = NebuloWidgetExtension;
+			remoteInfo = OnsideTVWidget;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -28,7 +28,7 @@
 			dstPath = "";
 			dstSubfolderSpec = 13;
 			files = (
-				A1B2C3D4000000000000000C /* NebuloWidgetExtension.appex in Embed Foundation Extensions */,
+				A1B2C3D4000000000000000C /* OnsideTVWidget.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -36,32 +36,32 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		A1B2C3D40000000000000001 /* NebuloWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = NebuloWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
-		E1F2B43F2F0B9631004D9D5D /* Nebulo_V2.4.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = Nebulo_V2.4.app; path = Nebulo.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1B2C3D40000000000000001 /* OnsideTVWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = OnsideTVWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		E1F2B43F2F0B9631004D9D5D /* OnsideTV.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = OnsideTV.app; path = Nebulo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		A1B2C3D4000000000000000E /* Exceptions for "NebuloWidgetExtension" folder in "NebuloWidgetExtension" target */ = {
+		A1B2C3D4000000000000000E /* Exceptions for "OnsideTVWidget" folder in "OnsideTVWidget" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
 			);
-			target = A1B2C3D40000000000000003 /* NebuloWidgetExtension */;
+			target = A1B2C3D40000000000000003 /* OnsideTVWidget */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		A1B2C3D40000000000000002 /* NebuloWidgetExtension */ = {
+		A1B2C3D40000000000000002 /* OnsideTVWidget */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				A1B2C3D4000000000000000E /* Exceptions for "NebuloWidgetExtension" folder in "NebuloWidgetExtension" target */,
+				A1B2C3D4000000000000000E /* Exceptions for "OnsideTVWidget" folder in "OnsideTVWidget" target */,
 			);
-			path = NebuloWidgetExtension;
+			path = OnsideTVWidget;
 			sourceTree = "<group>";
 		};
-		E1F2B4412F0B9631004D9D5D /* Nebulo_V2.4 */ = {
+		E1F2B4412F0B9631004D9D5D /* OnsideTV */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = Nebulo_V2.4;
+			path = OnsideTV;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -88,8 +88,8 @@
 		E1F2B4362F0B9631004D9D5D = {
 			isa = PBXGroup;
 			children = (
-				E1F2B4412F0B9631004D9D5D /* Nebulo_V2.4 */,
-				A1B2C3D40000000000000002 /* NebuloWidgetExtension */,
+				E1F2B4412F0B9631004D9D5D /* OnsideTV */,
+				A1B2C3D40000000000000002 /* OnsideTVWidget */,
 				E1F2B4402F0B9631004D9D5D /* Products */,
 			);
 			sourceTree = "<group>";
@@ -97,8 +97,8 @@
 		E1F2B4402F0B9631004D9D5D /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				E1F2B43F2F0B9631004D9D5D /* Nebulo_V2.4.app */,
-				A1B2C3D40000000000000001 /* NebuloWidgetExtension.appex */,
+				E1F2B43F2F0B9631004D9D5D /* OnsideTV.app */,
+				A1B2C3D40000000000000001 /* OnsideTVWidget.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -106,9 +106,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		A1B2C3D40000000000000003 /* NebuloWidgetExtension */ = {
+		A1B2C3D40000000000000003 /* OnsideTVWidget */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = A1B2C3D40000000000000007 /* Build configuration list for PBXNativeTarget "NebuloWidgetExtension" */;
+			buildConfigurationList = A1B2C3D40000000000000007 /* Build configuration list for PBXNativeTarget "OnsideTVWidget" */;
 			buildPhases = (
 				A1B2C3D40000000000000004 /* Sources */,
 				A1B2C3D40000000000000005 /* Frameworks */,
@@ -119,18 +119,18 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				A1B2C3D40000000000000002 /* NebuloWidgetExtension */,
+				A1B2C3D40000000000000002 /* OnsideTVWidget */,
 			);
-			name = NebuloWidgetExtension;
+			name = OnsideTVWidget;
 			packageProductDependencies = (
 			);
-			productName = NebuloWidgetExtension;
-			productReference = A1B2C3D40000000000000001 /* NebuloWidgetExtension.appex */;
+			productName = OnsideTVWidget;
+			productReference = A1B2C3D40000000000000001 /* OnsideTVWidget.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
-		E1F2B43E2F0B9631004D9D5D /* Nebulo_V2.4 */ = {
+		E1F2B43E2F0B9631004D9D5D /* OnsideTV */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = E1F2B44A2F0B9633004D9D5D /* Build configuration list for PBXNativeTarget "Nebulo_V2.4" */;
+			buildConfigurationList = E1F2B44A2F0B9633004D9D5D /* Build configuration list for PBXNativeTarget "OnsideTV" */;
 			buildPhases = (
 				E1F2B43B2F0B9631004D9D5D /* Sources */,
 				E1F2B43C2F0B9631004D9D5D /* Frameworks */,
@@ -144,14 +144,14 @@
 				A1B2C3D4000000000000000B /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				E1F2B4412F0B9631004D9D5D /* Nebulo_V2.4 */,
+				E1F2B4412F0B9631004D9D5D /* OnsideTV */,
 			);
-			name = Nebulo_V2.4;
+			name = OnsideTV;
 			packageProductDependencies = (
 				E165D43D2F1070EA00037231 /* VLCKitSPM */,
 			);
-			productName = Nebulo_V2.4;
-			productReference = E1F2B43F2F0B9631004D9D5D /* Nebulo_V2.4.app */;
+			productName = OnsideTV;
+			productReference = E1F2B43F2F0B9631004D9D5D /* OnsideTV.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -176,7 +176,7 @@
 					};
 				};
 			};
-			buildConfigurationList = E1F2B43A2F0B9631004D9D5D /* Build configuration list for PBXProject "Nebulo_V2.4" */;
+			buildConfigurationList = E1F2B43A2F0B9631004D9D5D /* Build configuration list for PBXProject "OnsideTV" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -193,8 +193,8 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				E1F2B43E2F0B9631004D9D5D /* Nebulo_V2.4 */,
-				A1B2C3D40000000000000003 /* NebuloWidgetExtension */,
+				E1F2B43E2F0B9631004D9D5D /* OnsideTV */,
+				A1B2C3D40000000000000003 /* OnsideTVWidget */,
 			);
 		};
 /* End PBXProject section */
@@ -258,7 +258,7 @@
 /* Begin PBXTargetDependency section */
 		A1B2C3D4000000000000000B /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = A1B2C3D40000000000000003 /* NebuloWidgetExtension */;
+			target = A1B2C3D40000000000000003 /* OnsideTVWidget */;
 			targetProxy = A1B2C3D4000000000000000A /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -267,12 +267,12 @@
 		A1B2C3D40000000000000008 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = NebuloWidgetExtension/NebuloWidgetExtension.entitlements;
+				CODE_SIGN_ENTITLEMENTS = OnsideTVWidget/OnsideTVWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = EL9V67G3NB;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = NebuloWidgetExtension/Info.plist;
+				INFOPLIST_FILE = OnsideTVWidget/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Onside TV";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -292,12 +292,12 @@
 		A1B2C3D40000000000000009 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = NebuloWidgetExtension/NebuloWidgetExtension.entitlements;
+				CODE_SIGN_ENTITLEMENTS = OnsideTVWidget/OnsideTVWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = EL9V67G3NB;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = NebuloWidgetExtension/Info.plist;
+				INFOPLIST_FILE = OnsideTVWidget/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Onside TV";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -443,13 +443,13 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_MODULE_VERIFIER_KIND = none;
-				CODE_SIGN_ENTITLEMENTS = Nebulo_V2.4/Nebulo_V2.4.entitlements;
+				CODE_SIGN_ENTITLEMENTS = OnsideTV/OnsideTV.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = EL9V67G3NB;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = "Nebulo-V2-4-Info.plist";
+				INFOPLIST_FILE = "OnsideTV-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Onside TV";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -479,13 +479,13 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_MODULE_VERIFIER_KIND = none;
-				CODE_SIGN_ENTITLEMENTS = Nebulo_V2.4/Nebulo_V2.4.entitlements;
+				CODE_SIGN_ENTITLEMENTS = OnsideTV/OnsideTV.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = EL9V67G3NB;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = "Nebulo-V2-4-Info.plist";
+				INFOPLIST_FILE = "OnsideTV-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Onside TV";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -512,7 +512,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		A1B2C3D40000000000000007 /* Build configuration list for PBXNativeTarget "NebuloWidgetExtension" */ = {
+		A1B2C3D40000000000000007 /* Build configuration list for PBXNativeTarget "OnsideTVWidget" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A1B2C3D40000000000000008 /* Debug */,
@@ -521,7 +521,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		E1F2B43A2F0B9631004D9D5D /* Build configuration list for PBXProject "Nebulo_V2.4" */ = {
+		E1F2B43A2F0B9631004D9D5D /* Build configuration list for PBXProject "OnsideTV" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				E1F2B4482F0B9633004D9D5D /* Debug */,
@@ -530,7 +530,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		E1F2B44A2F0B9633004D9D5D /* Build configuration list for PBXNativeTarget "Nebulo_V2.4" */ = {
+		E1F2B44A2F0B9633004D9D5D /* Build configuration list for PBXNativeTarget "OnsideTV" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				E1F2B44B2F0B9633004D9D5D /* Debug */,
