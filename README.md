@@ -8,7 +8,7 @@ Heads up: Onside TV doesn't come with any channels. You need your own subscripti
 
 ## Installation
 
-1. Download the latest IPA from the [Releases page](https://github.com/mongoosemonke504/NebuloIPTV/releases)
+1. Download the latest IPA from the [Releases page](https://github.com/mongoosemonke504/OnsideTV/releases)
 2. Sideload it onto your iPhone
 3. Log in with your provider info and enjoy!
 
@@ -70,4 +70,4 @@ Video playback uses [VLCKit](https://code.videolan.org/videolan/VLCKit), which h
 
 ---
 
-*Found a bug? [Open an issue!](https://github.com/mongoosemonke504/NebuloIPTV/issues)*
+*Found a bug? [Open an issue!](https://github.com/mongoosemonke504/OnsideTV/issues)*
